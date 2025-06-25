@@ -1,2 +1,6 @@
 .cpcache
 target/
+metabase.db.mv.db
+metabase.db.trace.db
+metabase.jar
+plugins/
