@@ -16,6 +16,42 @@
 ;; This registration makes the driver available to Metabase for database connections
 (driver/register! :sparql)
 
+;; Private function to execute SPARQL queries against an endpoint
+;;
+;; Parameters:
+;;   endpoint - URL of the SPARQL endpoint
+;;   query - SPARQL query string to execute
+;;   options - Map of additional options:
+;;     :default-graph - URI of the default graph to query (optional)
+;;     :insecure - Boolean flag to ignore SSL certificate validation (optional)
+;;
+;; Returns:
+;;   On success: [true, response-body] where response-body is the parsed JSON response
+;;   On failure: [false, error-message] with the error message as string
+;;
+;; This function handles all HTTP communication with the SPARQL endpoint,
+;; including error handling, logging, and response parsing.
+(defn- execute-sparql-query
+  [endpoint query {:keys [default-graph insecure?] :as options}]
+  (try
+    (let [params (cond-> {:query query}
+                   default-graph (assoc :default-graph-uri default-graph))
+          http-options (cond-> {:query-params params
+                               :headers {"Accept" "application/json"}
+                               :throw-exceptions false}
+                        insecure? (assoc :insecure? true))]
+      (when insecure?
+        (log/warn "Using insecure connection (ignoring SSL certificate validation)"))
+      
+      (let [response (http/get endpoint http-options)]
+        (if (= 200 (:status response))
+          (let [body (json/parse-string (:body response) true)]
+            [true body])
+          [false (str "SPARQL endpoint returned status: " (:status response))])))    
+    (catch Exception e
+      (log/error "Error executing SPARQL query:" (.getMessage e))
+      [false (.getMessage e)])))
+
 ;; Method to test connection to SPARQL endpoint
 ;; This method verifies if Metabase can successfully connect to the specified SPARQL endpoint
 ;;
@@ -35,28 +71,14 @@
 ;;   3. Returns false and logs error on any exception
 (defmethod driver/can-connect? :sparql
   [_ details]
-  (try
-    (log/info "Attempting to connect to SPARQL endpoint:" (:endpoint details))
-    
-    (let [endpoint (:endpoint details)
-          default-graph (:default-graph details)
-          insecure? (:insecure details)
-          query "SELECT ?noop WHERE {BIND('noop' as ?noop)}"
-          params (cond-> {:query query}
-                   default-graph (assoc :default-graph-uri default-graph))
-          http-options (cond-> {:query-params params
-                               :headers {"Accept" "application/json"}
-                               :throw-exceptions false}
-                        insecure? (assoc :insecure? true))
-          _ (when insecure?
-              (log/warn "Using insecure connection (ignoring SSL certificate validation)"))
-          response (http/get endpoint http-options)]
-      
-      (= 200 (:status response)))
-    
-    (catch Exception e
-      (log/error "Error connecting to SPARQL endpoint:" (.getMessage e))
-      false)))
+  (log/info "Attempting to connect to SPARQL endpoint:" (:endpoint details))
+  
+  (let [endpoint (:endpoint details)
+        query "SELECT ?noop WHERE {BIND('noop' as ?noop)}"
+        options {:default-graph (:default-graph details)
+                 :insecure? (:insecure details)}
+        [success _] (execute-sparql-query endpoint query options)]
+    success))
 
 ;; Implementation of describe-database method for SPARQL driver
 ;; This method discovers the available "tables" (RDF classes) in the SPARQL endpoint
@@ -77,24 +99,18 @@
 ;;   4. Returns empty table set and logs error on any exception
 (defmethod driver/describe-database :sparql
   [_ database]
-  (try
-    (let [endpoint (-> database :details :endpoint)
-          insecure? (-> database :details :insecure)
-          ;; SPARQL query to get all distinct classes in the endpoint
-          query "SELECT DISTINCT ?class WHERE { ?s a ?class } LIMIT 100"
-          http-options (cond-> {:query-params {:query query}
-                               :headers {"Accept" "application/json"}
-                               :throw-exceptions false}
-                        insecure? (assoc :insecure? true))
-          _ (when insecure?
-              (log/warn "Using insecure connection (ignoring SSL certificate validation)"))
-          response (http/get endpoint http-options)
-          body (json/parse-string (:body response) true)
-          ;; Extract class URIs from the SPARQL JSON response
-          ;; Each binding contains a :class key with a :value that holds the class URI
-          classes (map (fn [binding] 
-                         (get-in binding [:class :value]))
-                       (get-in body [:results :bindings]))]
+  (let [endpoint (-> database :details :endpoint)
+        ;; SPARQL query to get all distinct classes in the endpoint
+        query "SELECT DISTINCT ?class WHERE { ?s a ?class } LIMIT 100"
+        options {:insecure? (-> database :details :insecure)}
+        [success result] (execute-sparql-query endpoint query options)]
+    
+    (if success
+      (let [;; Extract class URIs from the SPARQL JSON response
+            ;; Each binding contains a :class key with a :value that holds the class URI
+            classes (map (fn [binding] 
+                           (get-in binding [:class :value]))
+                         (get-in result [:results :bindings]))]
       {:tables
        (set
         (for [class-uri classes
@@ -102,6 +118,6 @@
           {:name   class-name
            :schema nil
            :display_name class-name}))})
-    (catch Exception e
-      (log/error "Error describing SPARQL database:" (.getMessage e))
-      {:tables #{}})))
+      (do
+        (log/error "Error describing SPARQL database:" result)
+        {:tables #{}}))))
