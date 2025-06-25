@@ -17,6 +17,11 @@ driver:
       type: string
       placeholder: http://dbpedia.org
       required: false
+    - name: insecure
+      display-name: Ignore SSL certificate validation
+      type: boolean
+      default: false
+      required: false
 init:
   - step: load-namespace
     namespace: metabase.driver.sparql
