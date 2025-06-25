@@ -1,6 +1,16 @@
-{:paths
- ["src" "resources"]
-
- :deps
- {clj-http/clj-http {:mvn/version "3.13.0"}
-  cheshire/cheshire {:mvn/version "6.0.0"}}}
+{:paths ["src" "resources"]
+ 
+ :deps {clj-http/clj-http {:mvn/version "3.13.0"}
+        cheshire/cheshire {:mvn/version "6.0.0"}}
+        
+ :aliases
+ {:dev
+  {:extra-deps
+   {clj-kondo/clj-kondo {:mvn/version "2023.05.18"}
+    cljfmt/cljfmt {:mvn/version "0.9.2"}}}
+  
+  :lint
+  {:main-opts ["-m" "clj-kondo.main" "--lint" "src"]}
+  
+  :format
+  {:main-opts ["-m" "cljfmt.main" "fix"]}}}
