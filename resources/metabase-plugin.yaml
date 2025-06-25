@@ -1,0 +1,22 @@
+info:
+  name: Metabase SPARQL Driver
+  version: 0.0.1
+  description: Driver for connecting to SPARQL endpoints
+driver:
+  name: sparql
+  display-name: SPARQL
+  lazy-load: true
+  connection-properties:
+    - name: endpoint
+      display-name: Endpoint URL
+      type: string
+      placeholder: http://dbpedia.org/sparql
+      required: true
+    - name: default-graph
+      display-name: Default Graph
+      type: string
+      placeholder: http://dbpedia.org
+      required: false
+init:
+  - step: load-namespace
+    namespace: metabase.driver.sparql
