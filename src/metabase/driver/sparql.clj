@@ -32,22 +32,22 @@
 ;; This function handles all HTTP communication with the SPARQL endpoint,
 ;; including error handling, logging, and response parsing.
 (defn- execute-sparql-query
-  [endpoint query {:keys [default-graph insecure?] :as options}]
+  [endpoint query {:keys [default-graph insecure?]}]
   (try
     (let [params (cond-> {:query query}
                    default-graph (assoc :default-graph-uri default-graph))
           http-options (cond-> {:query-params params
-                               :headers {"Accept" "application/json"}
-                               :throw-exceptions false}
-                        insecure? (assoc :insecure? true))]
+                                :headers {"Accept" "application/json"}
+                                :throw-exceptions false}
+                         insecure? (assoc :insecure? true))]
       (when insecure?
         (log/warn "Using insecure connection (ignoring SSL certificate validation)"))
-      
+
       (let [response (http/get endpoint http-options)]
         (if (= 200 (:status response))
           (let [body (json/parse-string (:body response) true)]
             [true body])
-          [false (str "SPARQL endpoint returned status: " (:status response))])))    
+          [false (str "SPARQL endpoint returned status: " (:status response))])))
     (catch Exception e
       (log/error "Error executing SPARQL query:" (.getMessage e))
       [false (.getMessage e)])))
@@ -72,9 +72,9 @@
 (defmethod driver/can-connect? :sparql
   [_ details]
   (log/info "Attempting to connect to SPARQL endpoint:" (:endpoint details))
-  
+
   (let [endpoint (:endpoint details)
-        query "SELECT ?noop WHERE {BIND('noop' as ?noop)}"
+        query "SELECT ?ping WHERE { BIND('pong' AS ?ping) }"
         options {:default-graph (:default-graph details)
                  :insecure? (:insecure details)}
         [success _] (execute-sparql-query endpoint query options)]
@@ -101,23 +101,25 @@
   [_ database]
   (let [endpoint (-> database :details :endpoint)
         ;; SPARQL query to get all distinct classes in the endpoint
-        query "SELECT DISTINCT ?class WHERE { ?s a ?class } LIMIT 100"
+        query "SELECT ?class (COUNT(?s) AS ?count) WHERE { ?s a ?class } GROUP BY ?class ORDER BY DESC(?count) LIMIT 100"
         options {:insecure? (-> database :details :insecure)}
         [success result] (execute-sparql-query endpoint query options)]
-    
+
     (if success
-      (let [;; Extract class URIs from the SPARQL JSON response
-            ;; Each binding contains a :class key with a :value that holds the class URI
-            classes (map (fn [binding] 
-                           (get-in binding [:class :value]))
-                         (get-in result [:results :bindings]))]
-      {:tables
-       (set
-        (for [class-uri classes
-              :let [class-name (last (str/split class-uri #"[/#]"))]]
-          {:name   class-name
-           :schema nil
-           :display_name class-name}))})
+      (let [;; Extract class URIs and instance counts from the SPARQL JSON response
+            ;; Each binding contains :class and :count keys with their respective values
+            classes-with-counts (map (fn [binding]
+                                       {:uri (get-in binding [:class :value])
+                                        :count (Integer/parseInt (get-in binding [:count :value]))})
+                                     (get-in result [:results :bindings]))]
+        {:tables
+         (set
+          (for [{:keys [uri count]} classes-with-counts
+                :let [class-name (last (str/split uri #"[/#]"))]]
+            {:name         class-name
+             :schema       nil
+             :display_name class-name
+             :description  (str "Class with " count " instances")}))})
       (do
         (log/error "Error describing SPARQL database:" result)
         {:tables #{}}))))
