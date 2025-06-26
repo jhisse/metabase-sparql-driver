@@ -32,22 +32,22 @@
 ;; This function handles all HTTP communication with the SPARQL endpoint,
 ;; including error handling, logging, and response parsing.
 (defn- execute-sparql-query
-  [endpoint query {:keys [default-graph insecure?]}]
+  [endpoint query options]
   (try
     (let [params (cond-> {:query query}
-                   default-graph (assoc :default-graph-uri default-graph))
+                   (:default-graph options) (assoc :default-graph-uri (:default-graph options)))
           http-options (cond-> {:query-params params
                                 :headers {"Accept" "application/json"}
                                 :throw-exceptions false}
-                         insecure? (assoc :insecure? true))]
-      (when insecure?
-        (log/warn "Using insecure connection (ignoring SSL certificate validation)"))
-
+                         (:insecure? options) (assoc :insecure? true))]
+      (log/debug "Executing SPARQL query:" query)
+      (log/debug "Endpoint:" endpoint)
+      (log/debug "Options:" options)
       (let [response (http/get endpoint http-options)]
         (if (= 200 (:status response))
           (let [body (json/parse-string (:body response) true)]
             [true body])
-          [false (str "SPARQL endpoint returned status: " (:status response))])))
+          [false (str "SPARQL endpoint returned status: " (:status response) "\nBody: " (:body response))])))
     (catch Exception e
       (log/error "Error executing SPARQL query:" (.getMessage e))
       [false (.getMessage e)])))
