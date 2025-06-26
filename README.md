@@ -4,7 +4,7 @@
 
 A driver for connecting Metabase to SPARQL endpoints for querying RDF data.
 
-## Overview
+## :mag: Overview
 
 This driver enables Metabase to connect to SPARQL endpoints using HTTP requests to query RDF data. It supports both secure and insecure connections with optional default graph specification.
 
