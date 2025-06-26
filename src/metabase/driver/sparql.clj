@@ -160,20 +160,139 @@
       (let [;; Extract variable names from the response header
             vars (get-in result [:head :vars])
 
-            ;; Create column metadata based on the variables in the query result
+            ;; Define mappings for SPARQL types to Metabase base types
+            sparql-type->base-type (fn [sparql-type datatype]
+                                     (cond
+                                       ;; URIs are represented as text
+                                       (= sparql-type "uri") :type/URL
+
+                                       ;; Handle blank nodes
+                                       (= sparql-type "bnode") :type/Text
+
+                                       ;; Handle typed literals (common in DBpedia and other endpoints)
+                                       (and (= sparql-type "typed-literal") datatype)
+                                       (cond
+                                         (str/includes? datatype "integer") :type/Integer
+                                         (str/includes? datatype "decimal") :type/Float
+                                         (str/includes? datatype "float") :type/Float
+                                         (str/includes? datatype "double") :type/Float
+                                         (str/includes? datatype "boolean") :type/Boolean
+                                         (str/includes? datatype "date") :type/Date
+                                         (str/includes? datatype "dateTime") :type/DateTime
+                                         (str/includes? datatype "time") :type/Time
+                                         :else :type/Text)
+
+                                       ;; Handle regular literals with explicit datatypes
+                                       (and (= sparql-type "literal") datatype)
+                                       (cond
+                                         (str/includes? datatype "integer") :type/Integer
+                                         (str/includes? datatype "decimal") :type/Float
+                                         (str/includes? datatype "float") :type/Float
+                                         (str/includes? datatype "double") :type/Float
+                                         (str/includes? datatype "boolean") :type/Boolean
+                                         (str/includes? datatype "date") :type/Date
+                                         (str/includes? datatype "dateTime") :type/DateTime
+                                         (str/includes? datatype "time") :type/Time
+                                         (str/includes? datatype "XMLLiteral") :type/Text
+                                         :else :type/Text)
+
+                                       ;; Literals with language tags are text
+                                       :else :type/Text))
+
+            ;; Extract column types and convert values based on the first row of results
+            bindings (get-in result [:results :bindings])
+            first-row (first bindings)
+
+            ;; Determine column types from the first row or default to Text if no data
+            col-types (if first-row
+                        (reduce (fn [types var-name]
+                                  (let [binding (get first-row (keyword var-name))
+                                        sparql-type (:type binding)
+                                        datatype (:datatype binding)
+                                        base-type (sparql-type->base-type sparql-type datatype)]
+                                    (assoc types var-name base-type)))
+                                {}
+                                vars)
+                        (reduce #(assoc %1 %2 :type/Text) {} vars))
+
+            ;; Create column metadata with appropriate types
             metadata {:cols (mapv (fn [var-name]
                                     {:name var-name
                                      :display_name (str/capitalize var-name)
-                                     :base_type :type/Text})
+                                     :base_type (get col-types var-name :type/Text)})
                                   vars)}
 
-            ;; Transform the SPARQL JSON response bindings to rows
+            ;; Function to convert value based on SPARQL type and datatype
+            convert-value (fn [binding]
+                            (let [value (:value binding)
+                                  type-key (:type binding)
+                                  datatype (:datatype binding)]
+                              (cond
+                               ;; Handle typed-literal integers (common in DBpedia)
+                                (and (= type-key "typed-literal")
+                                     datatype
+                                     (str/includes? datatype "integer"))
+                                (try (Long/parseLong value)
+                                     (catch Exception e
+                                       (log/warn "Failed to parse integer:" value "Error:" (.getMessage e))
+                                       value))
+
+                               ;; Handle typed-literal decimals/floats
+                                (and (= type-key "typed-literal")
+                                     datatype
+                                     (or (str/includes? datatype "decimal")
+                                         (str/includes? datatype "float")
+                                         (str/includes? datatype "double")))
+                                (try (Double/parseDouble value)
+                                     (catch Exception e
+                                       (log/warn "Failed to parse float:" value "Error:" (.getMessage e))
+                                       value))
+
+                               ;; Handle typed-literal booleans
+                                (and (= type-key "typed-literal")
+                                     datatype
+                                     (str/includes? datatype "boolean"))
+                                (Boolean/parseBoolean value)
+
+                               ;; Handle regular literal integers
+                                (and (= type-key "literal")
+                                     datatype
+                                     (str/includes? datatype "integer"))
+                                (try (Long/parseLong value)
+                                     (catch Exception e
+                                       (log/warn "Failed to parse integer:" value "Error:" (.getMessage e))
+                                       value))
+
+                               ;; Handle regular literal decimals/floats
+                                (and (= type-key "literal")
+                                     datatype
+                                     (or (str/includes? datatype "decimal")
+                                         (str/includes? datatype "float")
+                                         (str/includes? datatype "double")))
+                                (try (Double/parseDouble value)
+                                     (catch Exception e
+                                       (log/warn "Failed to parse float:" value "Error:" (.getMessage e))
+                                       value))
+
+                               ;; Handle regular literal booleans
+                                (and (= type-key "literal")
+                                     datatype
+                                     (str/includes? datatype "boolean"))
+                                (Boolean/parseBoolean value)
+
+                               ;; Default: return the string value
+                                :else value)))
+
+            ;; Transform the SPARQL JSON response bindings to rows with converted values
             rows (map (fn [binding]
-            ;; Convert each binding to a vector of values in the same order as vars
+                        ;; Convert each binding to a vector of values in the same order as vars
                         (mapv (fn [var-name]
-                                (get-in binding [(keyword var-name) :value]))
+                                (let [var-binding (get binding (keyword var-name))]
+                                  (if var-binding
+                                    (convert-value var-binding)
+                                    nil)))
                               vars))
-                      (get-in result [:results :bindings]))]
+                      bindings)]
 
         ;; Call the respond function with metadata and rows
         (respond metadata rows))
