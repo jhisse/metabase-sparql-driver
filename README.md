@@ -21,13 +21,42 @@ This driver follow the [SPARQL 1.1 Query Results JSON Format](https://www.w3.org
 
 - Endpoint URL: `https://dbpedia.org/sparql`
 - Default Graph: `http://dbpedia.org`
-- Query:
-
-    ```sparql
-    SELECT ?city ?population WHERE { ?city a dbo:City ; dbo:populationTotal ?population } LIMIT 10
-    ```
 
 ![DBpedia Connection](./images/sparql-connection.png)
+
+#### Select Query Example
+
+```sparql
+PREFIX dbr: <http://dbpedia.org/resource/>
+PREFIX dbo: <http://dbpedia.org/ontology/>
+PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
+
+SELECT DISTINCT ?scientist ?name ?birthDate ?deathDate 
+WHERE {
+  ?scientist a dbo:Scientist ;
+             dbo:nationality dbr:Brazil ;
+             rdfs:label ?name .
+  OPTIONAL { ?scientist dbo:birthDate ?birthDate }
+  OPTIONAL { ?scientist dbo:deathDate ?deathDate }
+  FILTER(LANG(?name) = "pt")
+}
+ORDER BY DESC(?birthDate) (LANG(?name) = "pt")
+LIMIT 30
+```
+
+![DBpedia Select Query](./images/select-query-example.png)
+
+#### Ask Query Example
+
+```sparql
+PREFIX dbr: <http://dbpedia.org/resource/>
+PREFIX dbo: <http://dbpedia.org/ontology/>
+PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
+
+ASK { dbr:Albert_Einstein a dbo:Scientist }
+```
+
+![DBpedia Ask Query](./images/ask-query-example.png)
 
 ## :wrench: Configuration
 
