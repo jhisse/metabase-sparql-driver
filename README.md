@@ -26,6 +26,7 @@ This driver follow the [SPARQL 1.1 Query Results JSON Format](https://www.w3.org
     ```sparql
     SELECT ?city ?population WHERE { ?city a dbo:City ; dbo:populationTotal ?population } LIMIT 10
     ```
+
 ![DBpedia Connection](./images/sparql-connection.png)
 
 ## :wrench: Configuration
