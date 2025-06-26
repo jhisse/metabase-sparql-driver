@@ -6,6 +6,8 @@ A driver for connecting Metabase to SPARQL endpoints for querying RDF data.
 
 This driver enables Metabase to connect to SPARQL endpoints using HTTP requests to query RDF data. It supports both secure and insecure connections with optional default graph specification.
 
+This driver follow the (SPARQL 1.1 Query Results JSON Format)[https://www.w3.org/TR/2013/REC-sparql11-results-json-20130321/] specification.
+
 ## Build Instructions
 
 ### Prerequisites
