@@ -9,52 +9,14 @@
             [metabase.driver :as driver]
             [metabase.query-processor.store :as qp.store]
             [metabase.lib.metadata :as lib.metadata]
-            [clj-http.client :as http]
-            [cheshire.core :as json]
             [clojure.string :as str]
-            [metabase.driver.sparql.sparql-templates :as sparql-templates]))
-
-(def ^:private default-accept-header "application/json")
+            [metabase.driver.sparql.sparql-templates :as sparql-templates]
+            [metabase.driver.sparql.execute :as execute]))
 
 ;; Register SPARQL driver with Metabase's driver system
 ;; No parent sql or sql-jdbc because it is a custom driver using clj-http
 ;; This registration makes the driver available to Metabase for database connections
 (driver/register! :sparql)
-
-;; Private function to execute SPARQL queries against an endpoint
-;;
-;; Parameters:
-;;   endpoint - URL of the SPARQL endpoint
-;;   query - SPARQL query string to execute
-;;   options - Map of additional options:
-;;     :default-graph - URI of the default graph to query (optional)
-;;     :insecure - Boolean flag to ignore SSL certificate validation (optional)
-;;     :use-default-prefixes - Boolean flag to use default prefixes (optional)
-;;     :prefixes - String of default prefixes to use (optional)
-;;
-;; Returns:
-;;   On success: [true, response-body] where response-body is the parsed JSON response
-;;   On failure: [false, error-message] with the error message as string
-;;
-;; This function handles all HTTP communication with the SPARQL endpoint,
-;; including error handling, logging, and response parsing.
-(defn- execute-sparql-query
-  [endpoint query options]
-  (try
-    (let [params (cond-> {:query query}
-                   (:default-graph options) (assoc :default-graph-uri (:default-graph options)))
-          http-options (cond-> {:query-params params
-                                :headers {"Accept" "application/json"}
-                                :throw-exceptions false}
-                         (:insecure? options) (assoc :insecure? true))]
-      (let [response (http/get endpoint http-options)]
-        (if (= 200 (:status response))
-          (let [body (json/parse-string (:body response) true)]
-            [true body])
-          [false (str "SPARQL endpoint returned status: " (:status response) "\nBody: " (:body response))])))
-    (catch Exception e
-      (log/error "Error executing SPARQL query:" (.getMessage e))
-      [false (.getMessage e)])))
 
 ;; Method to test connection to SPARQL endpoint
 ;; This method verifies if Metabase can successfully connect to the specified SPARQL endpoint
@@ -80,7 +42,7 @@
   (let [endpoint (:endpoint details)
         options {:default-graph (:default-graph details)
                  :insecure? (:insecure details)}
-        [success _] (execute-sparql-query endpoint (sparql-templates/connection-test-query) options)]
+        [success _] (execute/execute-sparql-query endpoint (sparql-templates/connection-test-query) options)]
     success))
 
 ;; Implementation of describe-database method for SPARQL driver
@@ -105,7 +67,7 @@
   (let [endpoint (-> database :details :endpoint)
         ;; SPARQL query to get all distinct classes in the endpoint
         options {:insecure? (-> database :details :insecure)}
-        [success result] (execute-sparql-query endpoint (sparql-templates/classes-discovery-query) options)]
+        [success result] (execute/execute-sparql-query endpoint (sparql-templates/classes-discovery-query) options)]
 
     (if success
       (let [;; Extract class URIs and instance counts from the SPARQL JSON response
@@ -154,7 +116,7 @@
                  :insecure? (-> database :details :insecure)}
 
         ;; Execute the SPARQL query
-        [success result] (execute-sparql-query endpoint sparql-query options)]
+        [success result] (execute/execute-sparql-query endpoint sparql-query options)]
 
     (if success
       (let [;; Extract variable names from the response header
