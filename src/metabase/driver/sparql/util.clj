@@ -1,16 +1,16 @@
 ;; SPARQL Utilities for Metabase SPARQL Driver
 ;;
-;; Este namespace fornece funções utilitárias para o driver SPARQL.
-;; Inclui funções para extrair detalhes de conexão e outras operações auxiliares.
+;; This namespace provides utility functions for the SPARQL driver.
+;; Includes functions to extract connection details and other helper operations.
 (ns metabase.driver.sparql.util)
 
 (defn extract-endpoint-details
-  "Extrai os detalhes do endpoint SPARQL de um objeto de banco de dados ou consulta.
+  "Extracts SPARQL endpoint details from a database or query object.
    
-   Parâmetros:
-     database-or-query - Objeto de banco de dados ou consulta
-   Retorna:
-     Mapa contendo :endpoint, :default-graph e :use-insecure?"
+   Parameters:
+     database-or-query - Database or query object
+   Returns:
+     Map containing :endpoint, :default-graph, and :use-insecure?"
   [database-or-query]
   (let [details (or (:details database-or-query)
                     (get-in database-or-query [:database :details]))]

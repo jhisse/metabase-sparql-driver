@@ -1,28 +1,28 @@
 ;; SPARQL Query Processor for Metabase SPARQL Driver
 ;;
-;; Este namespace lida com o processamento de consultas SPARQL e transformação de resultados.
-;; Fornece funções para extrair metadados e converter resultados para o formato esperado pelo Metabase.
+;; This namespace handles SPARQL query processing and result transformation.
+;; Provides functions to extract metadata and convert results to the format expected by Metabase.
 (ns metabase.driver.sparql.query-processor
   (:require [metabase.driver.sparql.conversion :as conversion]))
 
 (defn process-query-results
-  "Processa os resultados de uma consulta SPARQL.
+  "Processes the results of a SPARQL query.
    
-   Parâmetros:
-     result - Resultado da consulta SPARQL em formato JSON
-     respond - Função para chamar com os metadados e linhas
+   Parameters:
+     result - SPARQL query result in JSON format
+     respond - Function to call with metadata and rows
    
-   Retorna:
-     Resultado da chamada à função respond"
+   Returns:
+     Result of the call to the respond function"
   [result respond]
-  (let [;; Extrai nomes de variáveis do cabeçalho da resposta
+  (let [;; Extracts variable names from the response header
         vars (get-in result [:head :vars])
 
-        ;; Extrai bindings da resposta
+        ;; Extracts bindings from the response
         bindings (get-in result [:results :bindings])
         first-row (first bindings)
 
-        ;; Determina tipos de colunas baseado na primeira linha
+        ;; Determines column types based on the first row
         col-types (reduce (fn [types var-name]
                             (let [binding (get first-row (keyword var-name))]
                               (assoc types var-name
@@ -32,16 +32,16 @@
                           {}
                           vars)
 
-        ;; Cria metadados para o conjunto de resultados
+        ;; Creates metadata for the result set
         metadata {:cols (map (fn [var-name]
                                {:name var-name
                                 :display_name var-name
                                 :base_type (get col-types var-name :type/Text)})
                              vars)}
 
-        ;; Transforma os bindings da resposta SPARQL JSON em linhas com valores convertidos
+        ;; Transforms the SPARQL JSON bindings into rows with converted values
         rows (map (fn [binding]
-                    ;; Converte cada binding para um vetor de valores na mesma ordem que vars
+                    ;; Converts each binding into a vector of values in the same order as vars
                     (mapv (fn [var-name]
                             (let [var-binding (get binding (keyword var-name))]
                               (if var-binding
@@ -50,5 +50,5 @@
                           vars))
                   bindings)]
 
-    ;; Chama a função respond com metadados e linhas
+    ;; Calls the respond function with metadata and rows
     (respond metadata rows)))

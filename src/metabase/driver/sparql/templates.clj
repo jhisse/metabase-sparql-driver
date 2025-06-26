@@ -1,34 +1,34 @@
 ;; SPARQL Queries for Metabase SPARQL Driver
 ;;
-;; Este namespace contém consultas SPARQL predefinidas usadas pelo driver
-;; para várias operações como teste de conexão e descoberta de tabelas.
-;; Cada consulta é otimizada para casos de uso específicos.
+;; This namespace contains predefined SPARQL queries used by the driver
+;; for various operations such as connection testing and table discovery.
+;; Each query is optimized for specific use cases.
 (ns metabase.driver.sparql.templates)
 
-;; Consulta simples para testar conectividade com um endpoint SPARQL
+;; Simple query to test connectivity with a SPARQL endpoint
 ;;
-;; Retorna:
-;;   Uma única linha com uma única coluna chamada ?ping contendo o valor 'pong'
+;; Returns:
+;;   A single row with a single column named ?ping containing the value 'pong'
 ;;
-;; Uso:
-;;   Usada pelo método driver/can-connect? para verificar a disponibilidade do endpoint
-;;   Uma execução bem-sucedida desta consulta indica que o endpoint está acessível
+;; Usage:
+;;   Used by the driver/can-connect? method to check endpoint availability
+;;   A successful execution of this query indicates the endpoint is accessible
 (defn connection-test-query []
   "SELECT ?ping 
    WHERE { 
      BIND('pong' AS ?ping) 
    }")
 
-;; Consulta para descobrir classes RDF no endpoint
+;; Query to discover RDF classes in the endpoint
 ;;
-;; Retorna:
-;;   Uma lista de classes RDF (?class) com suas contagens de instâncias (?count)
-;;   Limitada às 100 principais classes por contagem de instâncias
+;; Returns:
+;;   A list of RDF classes (?class) with their instance counts (?count)
+;;   Limited to the top 100 classes by instance count
 ;;
-;; Uso:
-;;   Usada pelo método driver/describe-database para descobrir "tabelas" disponíveis
-;;   Cada classe RDF é tratada como uma tabela no modelo de dados do Metabase
-;;   A contagem ajuda a identificar as classes mais significativas no conjunto de dados
+;; Usage:
+;;   Used by the driver/describe-database method to discover available "tables"
+;;   Each RDF class is treated as a table in Metabase's data model
+;;   The count helps identify the most significant classes in the dataset
 (defn classes-discovery-query []
   "SELECT ?class (COUNT(?s) AS ?count) 
    WHERE { 
