@@ -2,7 +2,7 @@
 ;;
 ;; This namespace provides functions to execute SPARQL queries via HTTP, handle responses, and process errors.
 (ns metabase.driver.sparql.execute
-  (:require [clojure.tools.logging :as log]
+  (:require [metabase.util.log :as log]
             [clj-http.client :as http]
             [metabase.util.json :as json]
             [metabase.query-processor.store :as qp.store]
@@ -54,12 +54,11 @@
   
   Arguments:
     - native-query: map containing at least :query and optionally :endpoint under :native
-    - context: the execution context (unused)
     - respond: callback function to handle the processed results
 
   This function retrieves database details, executes the SPARQL query, and processes the response.
   On failure, it logs the error and returns an empty columns result."
-  [native-query context respond]
+  [native-query _context respond]
   (log/info "Executing SPARQL query:" (pr-str (select-keys native-query [:native])))
   (let [database (lib.metadata/database (qp.store/metadata-provider))
         endpoint (or (get-in native-query [:native :endpoint]) (-> database :details :endpoint))

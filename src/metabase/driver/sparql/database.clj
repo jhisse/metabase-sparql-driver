@@ -18,9 +18,9 @@
      Class name extracted from the last part of the URI (after the last '/' or '#')."
   [class-uri]
   (let [last-part (last (or (re-seq #"[^/#]+$" class-uri)
-                             (re-seq #"[^/]+$" class-uri)
-                             (re-seq #"[^#]+$" class-uri)
-                             [class-uri]))]
+                            (re-seq #"[^/]+$" class-uri)
+                            (re-seq #"[^#]+$" class-uri)
+                            [class-uri]))]
     (if (str/blank? last-part)
       class-uri
       last-part)))

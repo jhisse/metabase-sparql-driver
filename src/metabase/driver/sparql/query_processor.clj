@@ -3,8 +3,7 @@
 ;; Este namespace lida com o processamento de consultas SPARQL e transformação de resultados.
 ;; Fornece funções para extrair metadados e converter resultados para o formato esperado pelo Metabase.
 (ns metabase.driver.sparql.query-processor
-  (:require [clojure.tools.logging :as log]
-            [metabase.driver.sparql.conversion :as conversion]))
+  (:require [metabase.driver.sparql.conversion :as conversion]))
 
 (defn process-query-results
   "Processa os resultados de uma consulta SPARQL.

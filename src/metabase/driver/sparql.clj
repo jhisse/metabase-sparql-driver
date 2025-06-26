@@ -5,15 +5,10 @@
 ;; to communicate with SPARQL endpoints. The driver supports secure and insecure
 ;; connections with optional default graph specification.
 (ns metabase.driver.sparql
-  (:require [clojure.tools.logging :as log]
-            [metabase.driver :as driver]
-            [metabase.query-processor.store :as qp.store]
-            [metabase.lib.metadata :as lib.metadata]
+  (:require [metabase.driver :as driver]
             [metabase.driver.sparql.connection :as connection]
             [metabase.driver.sparql.database :as database]
             [metabase.driver.sparql.execute :as execute]
-            [metabase.driver.sparql.query-processor :as query-processor]
-            [metabase.driver.sparql.util :as util]
             [metabase.driver.sparql.parameters]))
 
 ;; Register the SPARQL driver in Metabase's driver system
@@ -28,8 +23,8 @@
 (defmethod driver/can-connect? :sparql
   [_ details]
   (connection/can-connect? (:endpoint details)
-                          {:default-graph (:default-graph details)
-                           :insecure? (:use-insecure details)}))
+                           {:default-graph (:default-graph details)
+                            :insecure? (:use-insecure details)}))
 
 ;; Implements describe-database multimethod to discover RDF classes as tables.
 (defmethod driver/describe-database :sparql
@@ -41,4 +36,4 @@
 ;; Implements execute-reducible-query multimethod to execute a SPARQL query and process the results for Metabase.
 (defmethod driver/execute-reducible-query :sparql
   [_driver native-query _context respond]
-  (execute/execute-reducible-query native-query nil respond))
+  (execute/execute-reducible-query native-query _context respond))
