@@ -13,6 +13,9 @@
             [cheshire.core :as json]
             [clojure.string :as str]))
 
+(def ^:private default-accept-header "application/json")
+(def ^:private connection-test-query "SELECT ?ping WHERE { BIND('pong' AS ?ping) }")
+
 ;; Register SPARQL driver with Metabase's driver system
 ;; No parent sql or sql-jdbc because it is a custom driver using clj-http
 ;; This registration makes the driver available to Metabase for database connections
@@ -26,6 +29,8 @@
 ;;   options - Map of additional options:
 ;;     :default-graph - URI of the default graph to query (optional)
 ;;     :insecure - Boolean flag to ignore SSL certificate validation (optional)
+;;     :use-default-prefixes - Boolean flag to use default prefixes (optional)
+;;     :prefixes - String of default prefixes to use (optional)
 ;;
 ;; Returns:
 ;;   On success: [true, response-body] where response-body is the parsed JSON response
@@ -42,9 +47,6 @@
                                 :headers {"Accept" "application/json"}
                                 :throw-exceptions false}
                          (:insecure? options) (assoc :insecure? true))]
-      (log/debug "Executing SPARQL query:" query)
-      (log/debug "Endpoint:" endpoint)
-      (log/debug "Options:" options)
       (let [response (http/get endpoint http-options)]
         (if (= 200 (:status response))
           (let [body (json/parse-string (:body response) true)]
@@ -76,10 +78,9 @@
   (log/info "Attempting to connect to SPARQL endpoint:" (:endpoint details))
 
   (let [endpoint (:endpoint details)
-        query "SELECT ?ping WHERE { BIND('pong' AS ?ping) }"
         options {:default-graph (:default-graph details)
                  :insecure? (:insecure details)}
-        [success _] (execute-sparql-query endpoint query options)]
+        [success _] (execute-sparql-query endpoint connection-test-query options)]
     success))
 
 ;; Implementation of describe-database method for SPARQL driver
