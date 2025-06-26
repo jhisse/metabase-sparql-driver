@@ -11,12 +11,16 @@
             [metabase.lib.metadata :as lib.metadata]
             [clojure.string :as str]
             [metabase.driver.sparql.sparql-templates :as sparql-templates]
-            [metabase.driver.sparql.execute :as execute]))
+            [metabase.driver.sparql.execute :as execute]
+            [metabase.driver.sparql.parameters]))
 
 ;; Register SPARQL driver with Metabase's driver system
 ;; No parent sql or sql-jdbc because it is a custom driver using clj-http
 ;; This registration makes the driver available to Metabase for database connections
 (driver/register! :sparql)
+
+(doseq [[feature supported?] {:native-parameters true}]
+  (defmethod driver/database-supports? [:sparql feature] [_driver _feature _db] supported?))
 
 ;; Method to test connection to SPARQL endpoint
 ;; This method verifies if Metabase can successfully connect to the specified SPARQL endpoint
