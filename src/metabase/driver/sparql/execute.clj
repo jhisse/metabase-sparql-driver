@@ -1,12 +1,13 @@
 ;; SPARQL Query Execution for Metabase SPARQL Driver
 ;;
-;; This namespace handles the execution of SPARQL queries against endpoints.
-;; It provides functions for sending HTTP requests, handling responses,
-;; and processing errors when communicating with SPARQL endpoints.
+;; This namespace provides functions to execute SPARQL queries via HTTP, handle responses, and process errors.
 (ns metabase.driver.sparql.execute
   (:require [clojure.tools.logging :as log]
             [clj-http.client :as http]
-            [metabase.util.json :as json]))
+            [metabase.util.json :as json]
+            [metabase.query-processor.store :as qp.store]
+            [metabase.lib.metadata :as lib.metadata]
+            [metabase.driver.sparql.query-processor :as query-processor]))
 
 (def ^:private default-accept-header "application/json")
 
@@ -28,13 +29,12 @@
 (defn execute-sparql-query
   [endpoint query options]
   (try
-    (let [;; Options for the POST request
-          http-options (cond-> {:headers          {"Accept" default-accept-header}
+    (let [http-options (cond-> {:headers          {"Accept" default-accept-header}
                                 :throw-exceptions false
                                 :form-params      {:query query}}
                          (:insecure? options) (assoc :insecure? true))
 
-          ;; The default-graph-uri is sent as a query parameter, even in a POST request
+          ;; Send default-graph-uri as a query parameter if provided
           http-options (if-let [dg (:default-graph options)]
                          (assoc http-options :query-params {:default-graph-uri dg})
                          http-options)
@@ -48,3 +48,28 @@
     (catch Exception e
       (log/error "Error executing SPARQL query:" (.getMessage e))
       [false (.getMessage e)])))
+
+(defn execute-reducible-query
+  "Executes a SPARQL query and processes the results for Metabase.
+  
+  Arguments:
+    - native-query: map containing at least :query and optionally :endpoint under :native
+    - context: the execution context (unused)
+    - respond: callback function to handle the processed results
+
+  This function retrieves database details, executes the SPARQL query, and processes the response.
+  On failure, it logs the error and returns an empty columns result."
+  [native-query context respond]
+  (log/info "Executing SPARQL query:" (pr-str (select-keys native-query [:native])))
+  (let [database (lib.metadata/database (qp.store/metadata-provider))
+        endpoint (or (get-in native-query [:native :endpoint]) (-> database :details :endpoint))
+        sparql-query (get-in native-query [:native :query])
+        options {:default-graph (-> database :details :default-graph)
+                 :insecure? (-> database :details :use-insecure)}
+        [success result] (execute-sparql-query endpoint sparql-query options)]
+    (if success
+      (query-processor/process-query-results result respond)
+      (do
+        (log/error "Error executing SPARQL query:" result)
+        (respond {:cols []} [])))))
+
