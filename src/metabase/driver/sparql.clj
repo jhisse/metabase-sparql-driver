@@ -7,6 +7,8 @@
 (ns metabase.driver.sparql
   (:require [clojure.tools.logging :as log]
             [metabase.driver :as driver]
+            [metabase.query-processor.store :as qp.store]
+            [metabase.lib.metadata :as lib.metadata]
             [clj-http.client :as http]
             [cheshire.core :as json]
             [clojure.string :as str]))
@@ -123,3 +125,60 @@
       (do
         (log/error "Error describing SPARQL database:" result)
         {:tables #{}}))))
+
+;; Implementation of execute-reducible-query method for SPARQL driver
+;; This method executes a SPARQL query and returns the results in a reducible format
+;;
+;; Parameters:
+;;   _driver - Driver instance (ignored)
+;;   query - Query map containing the native SPARQL query
+;;   _context - Query context (ignored)
+;;   respond - Function to call with results metadata and rows
+;;
+;; Returns:
+;;   The result of calling the respond function with metadata and rows
+;;
+;; Behavior:
+;;   1. Extracts the SPARQL query and endpoint from the input
+;;   2. Executes the query against the SPARQL endpoint
+;;   3. Extracts column metadata from the response headers
+;;   4. Transforms the response bindings to rows
+;;   5. Calls the respond function with the metadata and rows
+(defmethod driver/execute-reducible-query :sparql
+  [_driver {{sparql-query :query endpoint :endpoint} :native, :as native-query} _context respond]
+  (log/info "Executing SPARQL query:" (pr-str (select-keys native-query [:native])))
+
+  (let [database (lib.metadata/database (qp.store/metadata-provider))
+        endpoint (or endpoint (-> database :details :endpoint))
+        options {:default-graph (-> database :details :default-graph)
+                 :insecure? (-> database :details :insecure)}
+
+        ;; Execute the SPARQL query
+        [success result] (execute-sparql-query endpoint sparql-query options)]
+
+    (if success
+      (let [;; Extract variable names from the response header
+            vars (get-in result [:head :vars])
+
+            ;; Create column metadata based on the variables in the query result
+            metadata {:cols (mapv (fn [var-name]
+                                    {:name var-name
+                                     :display_name (str/capitalize var-name)
+                                     :base_type :type/Text :type/URL})
+                                  vars)}
+
+            ;; Transform the SPARQL JSON response bindings to rows
+            rows (map (fn [binding]
+            ;; Convert each binding to a vector of values in the same order as vars
+                        (mapv (fn [var-name]
+                                (get-in binding [(keyword var-name) :value]))
+                              vars))
+                      (get-in result [:results :bindings]))]
+
+        ;; Call the respond function with metadata and rows
+        (respond metadata rows))
+
+      ;; If query execution failed, log the error and return empty results
+      (do
+        (log/error "Error executing SPARQL query:" result)
+        (respond {:cols []} [])))))
