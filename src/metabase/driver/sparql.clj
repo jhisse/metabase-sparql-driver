@@ -11,10 +11,10 @@
             [metabase.lib.metadata :as lib.metadata]
             [clj-http.client :as http]
             [cheshire.core :as json]
-            [clojure.string :as str]))
+            [clojure.string :as str]
+            [metabase.driver.sparql.queries :as queries]))
 
 (def ^:private default-accept-header "application/json")
-(def ^:private connection-test-query "SELECT ?ping WHERE { BIND('pong' AS ?ping) }")
 
 ;; Register SPARQL driver with Metabase's driver system
 ;; No parent sql or sql-jdbc because it is a custom driver using clj-http
@@ -80,7 +80,7 @@
   (let [endpoint (:endpoint details)
         options {:default-graph (:default-graph details)
                  :insecure? (:insecure details)}
-        [success _] (execute-sparql-query endpoint connection-test-query options)]
+        [success _] (execute-sparql-query endpoint (queries/connection-test-query) options)]
     success))
 
 ;; Implementation of describe-database method for SPARQL driver
@@ -104,9 +104,8 @@
   [_ database]
   (let [endpoint (-> database :details :endpoint)
         ;; SPARQL query to get all distinct classes in the endpoint
-        query "SELECT ?class (COUNT(?s) AS ?count) WHERE { ?s a ?class } GROUP BY ?class ORDER BY DESC(?count) LIMIT 100"
         options {:insecure? (-> database :details :insecure)}
-        [success result] (execute-sparql-query endpoint query options)]
+        [success result] (execute-sparql-query endpoint (queries/classes-discovery-query) options)]
 
     (if success
       (let [;; Extract class URIs and instance counts from the SPARQL JSON response
