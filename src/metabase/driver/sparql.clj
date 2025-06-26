@@ -164,7 +164,7 @@
             metadata {:cols (mapv (fn [var-name]
                                     {:name var-name
                                      :display_name (str/capitalize var-name)
-                                     :base_type :type/Text :type/URL})
+                                     :base_type :type/Text})
                                   vars)}
 
             ;; Transform the SPARQL JSON response bindings to rows
