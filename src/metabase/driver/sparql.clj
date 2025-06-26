@@ -12,7 +12,7 @@
             [clj-http.client :as http]
             [cheshire.core :as json]
             [clojure.string :as str]
-            [metabase.driver.sparql.queries :as queries]))
+            [metabase.driver.sparql.sparql-templates :as sparql-templates]))
 
 (def ^:private default-accept-header "application/json")
 
@@ -80,7 +80,7 @@
   (let [endpoint (:endpoint details)
         options {:default-graph (:default-graph details)
                  :insecure? (:insecure details)}
-        [success _] (execute-sparql-query endpoint (queries/connection-test-query) options)]
+        [success _] (execute-sparql-query endpoint (sparql-templates/connection-test-query) options)]
     success))
 
 ;; Implementation of describe-database method for SPARQL driver
@@ -105,7 +105,7 @@
   (let [endpoint (-> database :details :endpoint)
         ;; SPARQL query to get all distinct classes in the endpoint
         options {:insecure? (-> database :details :insecure)}
-        [success result] (execute-sparql-query endpoint (queries/classes-discovery-query) options)]
+        [success result] (execute-sparql-query endpoint (sparql-templates/classes-discovery-query) options)]
 
     (if success
       (let [;; Extract class URIs and instance counts from the SPARQL JSON response

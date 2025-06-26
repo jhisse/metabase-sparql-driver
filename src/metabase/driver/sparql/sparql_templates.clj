@@ -3,7 +3,7 @@
 ;; This namespace contains predefined SPARQL queries used by the driver
 ;; for various operations such as connection testing and table discovery.
 ;; Each query is optimized for specific use cases.
-(ns metabase.driver.sparql.queries)
+(ns metabase.driver.sparql.sparql-templates)
 
 ;; Simple query to test connectivity to a SPARQL endpoint
 ;;
