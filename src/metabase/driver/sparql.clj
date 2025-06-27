@@ -103,19 +103,22 @@
 
 ;; Implements can-connect? multimethod to test SPARQL endpoint connectivity.
 (defmethod driver/can-connect? :sparql
-  [_ details]
+  [_driver details]
   (connection/can-connect? (:endpoint details)
                            {:default-graph (:default-graph details)
                             :insecure? (:use-insecure details)}))
 
 ;; Implements describe-database multimethod to discover RDF classes as tables.
 (defmethod driver/describe-database :sparql
-  [_ database]
-  (let [endpoint (-> database :details :endpoint)
-        options {:insecure? (-> database :details :use-insecure)}]
-    (database/describe-database endpoint options)))
+  [_driver database]
+  (database/describe-database _driver database))
 
 ;; Implements execute-reducible-query multimethod to execute a SPARQL query and process the results for Metabase.
 (defmethod driver/execute-reducible-query :sparql
   [_driver native-query _context respond]
   (execute/execute-reducible-query native-query _context respond))
+
+;; Implements describe-table multimethod to describe a table getting properties from class URI.
+(defmethod driver/describe-table :sparql
+  [_driver database table]
+  (database/describe-table _driver database table))

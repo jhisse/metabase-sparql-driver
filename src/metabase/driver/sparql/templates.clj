@@ -23,17 +23,19 @@
 ;;
 ;; Returns:
 ;;   A list of RDF classes (?class) with their instance counts (?count)
-;;   Limited to the top 100 classes by instance count
+;;   Limited to the top 1000 classes by instance count
 ;;
 ;; Usage:
 ;;   Used by the driver/describe-database method to discover available "tables"
 ;;   Each RDF class is treated as a table in Metabase's data model
 ;;   The count helps identify the most significant classes in the dataset
-(defn classes-discovery-query []
-  "SELECT ?class (COUNT(?s) AS ?count) 
-   WHERE { 
-     ?s a ?class 
-   } 
-   GROUP BY ?class 
-   ORDER BY DESC(?count) 
-   LIMIT 100")
+(defn classes-discovery-query
+  "Retorna a query SPARQL para descobrir classes RDF, com limite opcional."
+  ([]
+   (classes-discovery-query 1000))
+  ([limit]
+   (str "SELECT ?class (COUNT(?s) AS ?count) "
+        "WHERE { ?s a ?class } "
+        "GROUP BY ?class "
+        "ORDER BY DESC(?count) "
+        "LIMIT " limit)))

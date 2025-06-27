@@ -25,17 +25,52 @@
       class-uri
       last-part)))
 
+(defn describe-table
+  "Descreve os campos (propriedades) de uma classe RDF (tabela SPARQL)."
+  [_ database table]
+  (let [endpoint (-> database :details :endpoint)
+        options {:insecure? (-> database :details :use-insecure)
+                 :default-graph (-> database :details :default-graph)}
+        class-uri (:name table)
+        query (str "SELECT DISTINCT ?property ?type WHERE { "
+                   "?instance a <" class-uri "> ; "
+                   "?property ?value . "
+                   "OPTIONAL { ?value a ?type } } LIMIT 100")
+        [success result] (execute/execute-sparql-query endpoint query options)]
+    (if success
+      (let [bindings (get-in result [:results :bindings])
+            fields (set
+                    (for [binding bindings
+                          :let [property-uri (get-in binding [:property :value])
+                                type-uri (get-in binding [:type :value])]]
+                      {:name          property-uri
+                       :database-type "string"
+                       :base-type     "string"
+                       :pk?           false}))]
+        ;; Adiciona o campo do identificador do recurso como PK
+        {:fields (conj fields
+                       {:name          "id"
+                        :database-type "uri"
+                        :base-type     "string"
+                        :pk?           true})})
+      (do
+        (log/error "Error describing SPARQL table:" result)
+        {:fields #{}}))))
+
 (defn describe-database
   "Discovers the available 'tables' (RDF classes) in the SPARQL endpoint.
-   
+
    Parameters:
-     endpoint - SPARQL endpoint URL
-     options - Map of additional options including :insecure? (derived from :use-insecure)
-   
+     _ - driver (não utilizado)
+     database - instância do Database do Metabase
+
    Returns:
-     Map with key :tables containing a set of table definitions."
-  [endpoint options]
-  (let [[success result] (execute/execute-sparql-query endpoint (templates/classes-discovery-query) options)]
+     Map com a chave :tables contendo um conjunto de definições de tabelas."
+  [_ database]
+  (let [endpoint (-> database :details :endpoint)
+        options {:insecure? (-> database :details :use-insecure)
+                 :default-graph (-> database :details :default-graph)}
+        [success result] (execute/execute-sparql-query endpoint (templates/classes-discovery-query 10) options)]
     (if success
       (let [classes-with-counts (map (fn [binding]
                                        {:uri (get-in binding [:class :value])
@@ -44,11 +79,11 @@
         {:tables
          (set
           (for [{:keys [uri count]} classes-with-counts]
-            {:name (extract-class-name uri)
+            {:name uri
              :schema nil
              :display-name (extract-class-name uri)
              :description (str "RDF Class: " uri " (Instances: " count ")")
-             :fields nil}))})
+             :fields (describe-table nil database {:name uri})}))})
       (do
         (log/error "Error describing SPARQL database:" result)
         {:tables #{}}))))
