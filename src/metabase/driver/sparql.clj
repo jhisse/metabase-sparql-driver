@@ -36,13 +36,10 @@
                               :nested-fields false
                               :nested-field-columns false
                               :set-timezone false
-                              :basic-aggregations true ;; Only in SPARQL 1.1
                               :standard-deviation-aggregations false
                               :expressions true
                               :native-parameters    true
-                              :expression-aggregations true ;; Only in SPARQL 1.1
                               :expression-literals true
-                              :nested-queries true ;; Only in SPARQL 1.1
                               :native-parameter-card-reference false ;; Can be possible in the future if careful implementation
                               :persist-models false
                               :persist-models-enabled false
@@ -55,9 +52,6 @@
                               :regex true
                               :advanced-math-expressions false
                               :percentile-aggregations false
-                              :temporal-extract true ;; Only in SPARQL 1.1
-                              :date-arithmetics true ;; Only in SPARQL 1.1
-                              :now true ;; Only in SPARQL 1.1
                               :convert-timezone false
                               :datetime-diff false
                               :actions false ;; Will not support writeback actions by now
