@@ -82,8 +82,7 @@
             {:name uri
              :schema nil
              :display-name (extract-class-name uri)
-             :description (str "RDF Class: " uri " (Instances: " count ")")
-             :fields (describe-table nil database {:name uri})}))})
+             :description (str "RDF Class: " uri " (Instances: " count ")")}))})
       (do
         (log/error "Error describing SPARQL database:" result)
         {:tables #{}}))))
