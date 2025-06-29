@@ -57,7 +57,7 @@
                               :actions false ;; Will not support writeback actions by now
                               :table-privileges false
                               :uploads false
-                              :schemas true ;; SPARQL does not have schemas but we can use it to group RDF graphs
+                              :schemas false ;; SPARQL does not have schemas but we can use it to group RDF graphs
                               :multi-level-schema false
                               :actions/custom false ;; Will not support writeback actions by now
                               :test/jvm-timezone-setting false
