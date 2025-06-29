@@ -9,7 +9,8 @@
             [metabase.driver.sparql.connection :as connection]
             [metabase.driver.sparql.database :as database]
             [metabase.driver.sparql.execute :as execute]
-            [metabase.driver.sparql.parameters]))
+            [metabase.driver.sparql.parameters]
+            [metabase.util.log :as log]))
 
 ;; Register the SPARQL driver in Metabase's driver system
 ;; No sql or sql-jdbc parent because it's a custom driver using clj-http
@@ -18,12 +19,14 @@
 ;; Implements humanize-connection-error-message multimethod to provide user-friendly error messages.
 (defmethod driver/humanize-connection-error-message :sparql
   [_ message]
+  (log/debugf "[humanize-connection-error-message] - Received message: %s" message)
   ;; TODO: add humanized error messages for SPARQL driver.
   message)
 
 ;; Implements dbms-version multimethod to define the version of the SPARQL endpoint.
 (defmethod driver/dbms-version :sparql
-  [_ _]
+  [driver database]
+  (log/debugf "[dbms-version] - Checking version for database: %s" (:name database))
   ;; TODO: add dbms-version for SPARQL driver.
   ;; This methos can discovery the version of the SPARQL endpoint by sending a SPARQL query to the endpoint.
   ;; Check service description in https://www.w3.org/TR/2013/REC-sparql11-service-description-20130321/ 
@@ -89,7 +92,9 @@
                               :test/cannot-destroy-db true
                               :test/uuids-in-create-table-statements false
                               :database-routing false}]
-  (defmethod driver/database-supports? [:sparql feature] [_driver _feature _db] supported?))
+  (defmethod driver/database-supports? [:sparql feature] [_driver _feature _db]
+    (log/debugf "[database-supports?] - Checking feature: %s, Supported: %s" feature supported?)
+    supported?))
 
 ;; Implements database-supports? multimethod to check if a feature is supported by SPARQL endpoint version.
 (doseq [[feature supported?] {:basic-aggregations true
@@ -99,11 +104,14 @@
                               :date-arithmetics true
                               :now true}]
   ;; TODO: implement when driver/dbms-version is implemented
-  (defmethod driver/database-supports? [:sparql feature] [_driver _feature _db] supported?))
+  (defmethod driver/database-supports? [:sparql feature] [_driver _feature _db]
+    (log/debugf "[database-supports?] - Checking feature: %s, Supported: %s" feature supported?)
+    supported?))
 
 ;; Implements can-connect? multimethod to test SPARQL endpoint connectivity.
 (defmethod driver/can-connect? :sparql
   [_driver details]
+  (log/debugf "[can-connect?] - Testing connection for endpoint: %s" (:endpoint details))
   (connection/can-connect? (:endpoint details)
                            {:default-graph (:default-graph details)
                             :insecure? (:use-insecure details)}))
@@ -111,14 +119,17 @@
 ;; Implements describe-database multimethod to discover RDF classes as tables.
 (defmethod driver/describe-database :sparql
   [_driver database]
+  (log/debugf "[describe-database] - Describing database: %s" (:name database))
   (database/describe-database _driver database))
 
 ;; Implements execute-reducible-query multimethod to execute a SPARQL query and process the results for Metabase.
 (defmethod driver/execute-reducible-query :sparql
   [_driver native-query _context respond]
+  (log/debugf "[execute-reducible-query] - Executing query: %s" native-query)
   (execute/execute-reducible-query native-query _context respond))
 
 ;; Implements describe-table multimethod to describe a table getting properties from class URI.
 (defmethod driver/describe-table :sparql
   [_driver database table]
+  (log/debugf "[describe-table] - Describing table. Database: %s, Table: %s" (:name database) (:name table))
   (database/describe-table _driver database table))
