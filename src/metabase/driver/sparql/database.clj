@@ -32,27 +32,26 @@
         options {:insecure? (-> database :details :use-insecure)
                  :default-graph (-> database :details :default-graph)}
         class-uri (:name table)
-        query (str "SELECT DISTINCT ?property ?type WHERE { "
+        query (str "SELECT DISTINCT ?property WHERE { "
                    "?instance a <" class-uri "> ; "
                    "?property ?value . "
-                   "OPTIONAL { ?value a ?type } } LIMIT 100")
+                   "} LIMIT 100")
         [success result] (execute/execute-sparql-query endpoint query options)]
     (if success
       (let [bindings (get-in result [:results :bindings])
-            fields (set
-                    (for [binding bindings
-                          :let [property-uri (get-in binding [:property :value])
-                                type-uri (get-in binding [:type :value])]]
-                      {:name          property-uri
-                       :database-type "string"
-                       :base-type     "string"
-                       :pk?           false}))]
-        ;; Adiciona o campo do identificador do recurso como PK
-        {:fields (conj fields
-                       {:name          "id"
-                        :database-type "uri"
-                        :base-type     "string"
-                        :pk?           true})})
+            pk-field {:name "id", :database-type "uri", :base-type :type/Text, :pk? true, :database-position 0}
+            other-fields (map-indexed
+                           (fn [idx binding]
+                             (let [property-uri (get-in binding [:property :value])]
+                               {:name property-uri
+                                :database-type "string"
+                                :base-type :type/Text
+                                :pk? false
+                                :database-position (inc idx)}))
+                           bindings)]
+        {:name   (:name table)
+         :schema nil
+         :fields (set (cons pk-field other-fields))})
       (do
         (log/error "Error describing SPARQL table:" result)
         {:fields #{}}))))
