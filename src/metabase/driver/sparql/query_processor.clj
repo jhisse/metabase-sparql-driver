@@ -1,8 +1,8 @@
-;; SPARQL Query Processor for Metabase SPARQL Driver
-;;
-;; This namespace handles SPARQL query processing and result transformation.
-;; Provides functions to extract metadata and convert results to the format expected by Metabase.
 (ns metabase.driver.sparql.query-processor
+  "SPARQL Query Processor for Metabase SPARQL Driver
+
+   This namespace handles SPARQL query processing and result transformation.
+   Provides functions to extract metadata and convert results to the format expected by Metabase."
   (:require [metabase.driver.sparql.conversion :as conversion]))
 
 (defn process-query-results

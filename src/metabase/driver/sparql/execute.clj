@@ -1,7 +1,7 @@
-;; SPARQL Query Execution for Metabase SPARQL Driver
-;;
-;; This namespace provides functions to execute SPARQL queries via HTTP, handle responses, and process errors.
 (ns metabase.driver.sparql.execute
+  "SPARQL Query Execution for Metabase SPARQL Driver
+
+   This namespace provides functions to execute SPARQL queries via HTTP, handle responses, and process errors."
   (:require [metabase.util.log :as log]
             [clj-http.client :as http]
             [metabase.util.json :as json]
@@ -11,22 +11,22 @@
 
 (def ^:private default-accept-header "application/json")
 
-;; Execute SPARQL queries against an endpoint using POST
-;;
-;; Parameters:
-;;   endpoint - URL of the SPARQL endpoint
-;;   query - SPARQL query string to execute
-;;   options - Map of additional options:
-;;     :default-graph - URI of the default graph to query (optional)
-;;     :insecure? - Boolean flag to ignore SSL certificate validation (optional)
-;;
-;; Returns:
-;;   On success: [true, response-body] where response-body is the parsed JSON response
-;;   On failure: [false, error-message] with the error message as string
-;;
-;; This function handles all HTTP communication with the SPARQL endpoint
-;; using the POST method, which is robust for queries of any length.
 (defn execute-sparql-query
+  "Execute SPARQL queries against an endpoint using POST.
+
+   Parameters:
+     endpoint - URL of the SPARQL endpoint
+     query - SPARQL query string to execute
+     options - Map of additional options:
+       :default-graph - URI of the default graph to query (optional)
+       :insecure? - Boolean flag to ignore SSL certificate validation (optional)
+
+   Returns:
+     On success: [true, response-body] where response-body is the parsed JSON response
+     On failure: [false, error-message] with the error message as string
+
+   This function handles all HTTP communication with the SPARQL endpoint
+   using the POST method, which is robust for queries of any length."
   [endpoint query options]
   (try
     (let [http-options (cond-> {:headers          {"Accept" default-accept-header}

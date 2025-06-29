@@ -1,8 +1,8 @@
-;; SPARQL Database for Metabase SPARQL Driver
-;;
-;; This namespace handles the discovery and description of "tables" (RDF classes)
-;; in SPARQL endpoints for Metabase.
 (ns metabase.driver.sparql.database
+  "SPARQL Database for Metabase SPARQL Driver
+
+   This namespace handles the discovery and description of \"tables\" (RDF classes)
+   in SPARQL endpoints for Metabase."
   (:require [clojure.tools.logging :as log]
             [clojure.string :as str]
             [metabase.driver.sparql.execute :as execute]
@@ -26,7 +26,15 @@
       last-part)))
 
 (defn describe-table
-  "Describes the fields (properties) of an RDF class (SPARQL table)."
+  "Describes the fields (properties) of an RDF class (SPARQL table).
+
+   Parameters:
+     _ - driver (not used)
+     database - Metabase Database instance
+     table - Table definition with :name containing the RDF class URI
+   
+   Returns:
+     Map with :name, :schema, and :fields keys describing the table structure"
   [_ database table]
   (let [endpoint (-> database :details :endpoint)
         options {:insecure? (-> database :details :use-insecure)

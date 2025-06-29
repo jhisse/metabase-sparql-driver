@@ -1,8 +1,8 @@
-;; SPARQL Type Conversion for Metabase SPARQL Driver
-;;
-;; This namespace handles conversion of SPARQL data types to Metabase types.
-;; Provides functions to map SPARQL types to Metabase base types and convert values.
 (ns metabase.driver.sparql.conversion
+  "SPARQL Type Conversion for Metabase SPARQL Driver
+
+   This namespace handles conversion of SPARQL data types to Metabase types.
+   Provides functions to map SPARQL types to Metabase base types and convert values."
   (:require [metabase.util.log :as log]
             [clojure.string :as str]))
 

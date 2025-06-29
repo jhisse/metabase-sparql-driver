@@ -1,10 +1,10 @@
-;; SPARQL Driver for Metabase
-;;
-;; This driver allows Metabase to connect to SPARQL endpoints to query RDF data.
-;; It implements a custom approach (not SQL/JDBC based) using HTTP requests
-;; to communicate with SPARQL endpoints. The driver supports secure and insecure
-;; connections with optional default graph specification.
 (ns metabase.driver.sparql
+  "SPARQL Driver for Metabase
+
+   This driver allows Metabase to connect to SPARQL endpoints to query RDF data.
+   It implements a custom approach (not SQL/JDBC based) using HTTP requests
+   to communicate with SPARQL endpoints. The driver supports secure and insecure
+   connections with optional default graph specification."
   (:require [metabase.driver :as driver]
             [metabase.driver.sparql.connection :as connection]
             [metabase.driver.sparql.database :as database]

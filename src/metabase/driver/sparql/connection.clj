@@ -1,8 +1,8 @@
-;; SPARQL Connection for Metabase SPARQL Driver
-;;
-;; This namespace manages connections to SPARQL endpoints.
-;; Provides functions to test connectivity and manage connection details.
 (ns metabase.driver.sparql.connection
+  "SPARQL Connection for Metabase SPARQL Driver
+
+   This namespace manages connections to SPARQL endpoints.
+   Provides functions to test connectivity and manage connection details."
   (:require [metabase.util.log :as log]
             [metabase.driver.sparql.execute :as execute]
             [metabase.driver.sparql.templates :as templates]))

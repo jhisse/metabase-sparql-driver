@@ -1,8 +1,8 @@
-;; SPARQL Utilities for Metabase SPARQL Driver
-;;
-;; This namespace provides utility functions for the SPARQL driver.
-;; Includes functions to extract connection details and other helper operations.
-(ns metabase.driver.sparql.util)
+(ns metabase.driver.sparql.util
+  "SPARQL Utilities for Metabase SPARQL Driver
+
+   This namespace provides utility functions for the SPARQL driver.
+   Includes functions to extract connection details and other helper operations.")
 
 (defn extract-endpoint-details
   "Extracts SPARQL endpoint details from a database or query object.
