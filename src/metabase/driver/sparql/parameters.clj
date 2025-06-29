@@ -5,7 +5,6 @@
    allowing for dynamic query generation with user-provided values."
   (:require
    [clojure.string :as str]
-   [metabase.driver :as driver]
    [metabase.driver.common.parameters.values :as params.values]))
 
 (defn substitute-native-parameters

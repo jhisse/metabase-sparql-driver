@@ -25,7 +25,7 @@
 
 ;; Implements dbms-version multimethod to define the version of the SPARQL endpoint.
 (defmethod driver/dbms-version :sparql
-  [driver database]
+  [_driver database]
   (log/debugf "[dbms-version] - Checking version for database: %s" (:name database))
   ;; TODO: add dbms-version for SPARQL driver.
   ;; This methos can discovery the version of the SPARQL endpoint by sending a SPARQL query to the endpoint.
@@ -40,19 +40,19 @@
                               :nested-field-columns false
                               :set-timezone false
                               :standard-deviation-aggregations false
-                              :expressions true
+                              :expressions false ;; ToDo: set true when be able to implement
                               :native-parameters    true
-                              :expression-literals true
+                              :expression-literals false  ;; ToDo: set true when be able to implement
                               :native-parameter-card-reference false ;; Can be possible in the future if careful implementation
                               :persist-models false
                               :persist-models-enabled false
                               :binning false
                               :case-sensitivity-string-filter-options true
-                              :left-join true
+                              :left-join false
                               :right-join false
-                              :inner-join true
+                              :inner-join false
                               :full-join false
-                              :regex true
+                              :regex false ;; ToDo: set true when be able to implement
                               :advanced-math-expressions false
                               :percentile-aggregations false
                               :convert-timezone false
@@ -97,12 +97,13 @@
     supported?))
 
 ;; Implements database-supports? multimethod to check if a feature is supported by SPARQL endpoint version.
-(doseq [[feature supported?] {:basic-aggregations true
-                              :expression-aggregations true
-                              :nested-queries true
-                              :temporal-extract true
-                              :date-arithmetics true
-                              :now true}]
+(doseq [[feature supported?] {:basic-aggregations false ;; ToDo: set true when be able to implement true
+                              :expression-aggregations false ;; ToDo: set true when be able to implement true
+                              :nested-queries false ;; ToDo: set true when be able to implement true
+                              :temporal-extract false ;; ToDo: set true when be able to implement true
+                              :date-arithmetics false ;; ToDo: set true when be able to implement true
+                              :now false ;; ToDo: set true when be able to implement true
+                              }]
   ;; TODO: implement when driver/dbms-version is implemented
   (defmethod driver/database-supports? [:sparql feature] [_driver _feature _db]
     (log/debugf "[database-supports?] - Checking feature: %s, Supported: %s" feature supported?)
