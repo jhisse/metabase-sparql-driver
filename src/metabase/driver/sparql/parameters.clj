@@ -4,7 +4,8 @@
    [metabase.driver :as driver]
    [metabase.driver.common.parameters.values :as params.values]))
 
-(defmethod driver/substitute-native-parameters :sparql
+(defn substitute-native-parameters
+  "Substitutes native parameters in the SPARQL query."
   [_driver {:keys [query] :as inner-query}]
   (let [param->value (params.values/query->params-map inner-query)
         substituted-query (reduce (fn [q [k v]]

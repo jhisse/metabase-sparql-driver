@@ -9,7 +9,7 @@
             [metabase.driver.sparql.connection :as connection]
             [metabase.driver.sparql.database :as database]
             [metabase.driver.sparql.execute :as execute]
-            [metabase.driver.sparql.parameters]
+            [metabase.driver.sparql.parameters :as parameters]
             [metabase.util.log :as log]))
 
 ;; Register the SPARQL driver in Metabase's driver system
@@ -133,3 +133,9 @@
   [_driver database table]
   (log/debugf "[describe-table] - Describing table. Database: %s, Table: %s" (:name database) (:name table))
   (database/describe-table _driver database table))
+
+;; Implements substitute-native-parameters multimethod to handle native query parameters.
+(defmethod driver/substitute-native-parameters :sparql
+  [_driver inner-query]
+  (log/debugf "[substitute-native-parameters] - Substituting native parameters. Query: %s" (:query inner-query))
+  (parameters/substitute-native-parameters _driver inner-query))
