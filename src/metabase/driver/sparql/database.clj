@@ -26,7 +26,7 @@
       last-part)))
 
 (defn describe-table
-  "Descreve os campos (propriedades) de uma classe RDF (tabela SPARQL)."
+  "Describes the fields (properties) of an RDF class (SPARQL table)."
   [_ database table]
   (let [endpoint (-> database :details :endpoint)
         options {:insecure? (-> database :details :use-insecure)
@@ -60,11 +60,11 @@
   "Discovers the available 'tables' (RDF classes) in the SPARQL endpoint.
 
    Parameters:
-     _ - driver (não utilizado)
-     database - instância do Database do Metabase
+     _ - driver (not used)
+     database - Metabase Database instance
 
    Returns:
-     Map com a chave :tables contendo um conjunto de definições de tabelas."
+     Map with the :tables key containing a set of table definitions."
   [_ database]
   (let [endpoint (-> database :details :endpoint)
         options {:insecure? (-> database :details :use-insecure)

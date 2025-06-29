@@ -69,7 +69,7 @@
            (str/includes? datatype "integer"))
       (try (Long/parseLong value)
            (catch Exception e
-             (log/warn "Falha ao converter integer:" value "Erro:" (.getMessage e))
+             (log/warn "Failed to convert integer:" value "Error:" (.getMessage e))
              value))
 
       ;; Handle typed-literal decimals/floats
@@ -80,7 +80,7 @@
                (str/includes? datatype "double")))
       (try (Double/parseDouble value)
            (catch Exception e
-             (log/warn "Falha ao converter float:" value "Erro:" (.getMessage e))
+             (log/warn "Failed to convert float:" value "Error:" (.getMessage e))
              value))
 
       ;; Handle typed-literal booleans
@@ -95,7 +95,7 @@
            (str/includes? datatype "integer"))
       (try (Long/parseLong value)
            (catch Exception e
-             (log/warn "Falha ao converter integer:" value "Erro:" (.getMessage e))
+             (log/warn "Failed to convert integer:" value "Error:" (.getMessage e))
              value))
 
       ;; Handle regular literal decimals/floats
@@ -106,7 +106,7 @@
                (str/includes? datatype "double")))
       (try (Double/parseDouble value)
            (catch Exception e
-             (log/warn "Falha ao converter float:" value "Erro:" (.getMessage e))
+             (log/warn "Failed to convert float:" value "Error:" (.getMessage e))
              value))
 
       ;; Handle regular literal booleans

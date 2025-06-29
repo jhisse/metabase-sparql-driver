@@ -30,7 +30,7 @@
 ;;   Each RDF class is treated as a table in Metabase's data model
 ;;   The count helps identify the most significant classes in the dataset
 (defn classes-discovery-query
-  "Retorna a query SPARQL para descobrir classes RDF, com limite opcional."
+  "Returns the SPARQL query to discover RDF classes, with optional limit."
   ([]
    (classes-discovery-query 1000))
   ([limit]
