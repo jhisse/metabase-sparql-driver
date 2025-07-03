@@ -20,6 +20,34 @@
      BIND('pong' AS ?ping) 
    }")
 
+(defn sparql-1-1-bind-version-query
+  "Returns a SPARQL 1.1 query that uses the BIND clause to provide a version string.
+  
+  This query is useful to test whether the SPARQL endpoint supports SPARQL 1.1 features, 
+  especificamente o operador BIND, que não está disponível no SPARQL 1.0.
+  
+  Returns:
+    A string containing a SPARQL SELECT query with the version string using BIND.
+  
+  Usage:
+    Use this query to check SPARQL 1.1 compatibility."
+  []
+  "SELECT ?version WHERE { BIND(\"SPARQL 1.1\" AS ?version) }")
+
+(defn sparql-1-1-values-version-query
+  "Returns a SPARQL 1.1 query that uses the VALUES clause to provide a version string.
+  
+  This query is useful as fallback to test whether the SPARQL endpoint supports SPARQL 1.1 features, 
+  especificamente o operador VALUES, que não está disponível no SPARQL 1.0.
+  
+  Returns:
+    A string containing a SPARQL SELECT query with the version string using VALUES.
+  
+  Usage:
+    Use this query as a fallback to check SPARQL 1.1 compatibility."
+  []
+  "SELECT ?version WHERE { VALUES (?version) { (\"SPARQL 1.1\") } }")
+
 (defn classes-discovery-query
   "Returns the SPARQL query to discover RDF classes, with optional limit.
 

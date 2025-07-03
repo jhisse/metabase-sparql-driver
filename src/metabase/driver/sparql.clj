@@ -117,6 +117,12 @@
                            {:default-graph (:default-graph details)
                             :insecure? (:use-insecure details)}))
 
+;; Implements dbms-version multimethod to define the version of the SPARQL endpoint.
+(defmethod driver/dbms-version :sparql
+  [_driver database]
+  (log/debugf "[dbms-version] - Checking version for database: %s" (:name database))
+  (connection/dbms-version _driver database))
+
 ;; Implements describe-database multimethod to discover RDF classes as tables.
 (defmethod driver/describe-database :sparql
   [_driver database]
