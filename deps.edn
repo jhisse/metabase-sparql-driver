@@ -1,7 +1,7 @@
 {:paths ["src" "resources"]
  
  :deps {clj-http/clj-http {:mvn/version "3.13.0"}}
-        
+ 
  :aliases
  {:dev
   {:extra-deps
@@ -12,4 +12,8 @@
   {:main-opts ["-m" "clj-kondo.main" "--lint" "src"]}
   
   :format
-  {:main-opts ["-m" "cljfmt.main" "fix"]}}}
+  {:main-opts ["-m" "cljfmt.main" "fix"]}
+  
+  :splint {:extra-deps {io.github.noahtheduke/splint {:mvn/version "1.21.0"}
+                                org.clojure/clojure {:mvn/version "1.11.1"}}
+                   :main-opts ["-m" "noahtheduke.splint"]}}}

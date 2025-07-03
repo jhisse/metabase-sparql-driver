@@ -13,7 +13,7 @@ METABASE_PATH := $(MAKEFILE_DIR)/metabase
 # Target directory for the compiled driver
 TARGET_DIR := $(DRIVER_PATH)/target
 
-.PHONY: build clean init-metabase help all
+.PHONY: build clean init-metabase help all lint format splint
 
 # Default rule
 all: build
@@ -62,15 +62,36 @@ check-deps:
 # Complete build (with checks)
 build-full: check-deps init-metabase build
 
+# Lint code
+lint:
+	@echo "Linting code..."
+	clojure -M:dev:lint
+	@echo "Linting completed."
+
+# Format code
+format:
+	@echo "Formatting code..."
+	clojure -M:dev:format
+	@echo "Formatting completed."
+
+# Run splint for static code analysis
+splint:
+	@echo "Running splint static code analysis..."
+	clojure -M:splint
+	@echo "Splint analysis completed."
+
 # Help
 help:
 	@echo "Available commands:"
-	@echo "  make build        - Build the SPARQL driver"
-	@echo "  make build-full   - Complete build with checks and initialization"
-	@echo "  make clean        - Remove build files"
-	@echo "  make init-metabase- Initialize the Metabase submodule"
-	@echo "  make check-deps   - Check if dependencies are installed"
-	@echo "  make help         - Display this help"
+	@echo "  make build         - Build the SPARQL driver"
+	@echo "  make build-full    - Complete build with checks and initialization"
+	@echo "  make clean         - Remove build files"
+	@echo "  make init-metabase - Initialize the Metabase submodule"
+	@echo "  make check-deps    - Check if dependencies are installed"
+	@echo "  make lint          - Lint code using clj-kondo"
+	@echo "  make format        - Format code using cljfmt"
+	@echo "  make splint        - Run splint static code analysis"
+	@echo "  make help          - Display this help"
 	@echo ""
 	@echo "Paths:"
 	@echo "  Driver: $(DRIVER_PATH)"
