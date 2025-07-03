@@ -51,10 +51,8 @@
           rows (map (fn [binding]
                     ;; Converts each binding into a vector of values in the same order as vars
                       (mapv (fn [var-name]
-                              (let [var-binding (get binding (keyword var-name))]
-                                (if var-binding
-                                  (conversion/convert-value var-binding)
-                                  nil)))
+                              (when-let [var-binding (get binding (keyword var-name))]
+                                (conversion/convert-value var-binding)))
                             vars))
                     bindings)]
 
