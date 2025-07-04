@@ -23,17 +23,6 @@
   ;; TODO: add humanized error messages for SPARQL driver.
   message)
 
-;; Implements dbms-version multimethod to define the version of the SPARQL endpoint.
-(defmethod driver/dbms-version :sparql
-  [_driver database]
-  (log/debugf "[dbms-version] - Checking version for database: %s" (:name database))
-  ;; TODO: add dbms-version for SPARQL driver.
-  ;; This methos can discovery the version of the SPARQL endpoint by sending a SPARQL query to the endpoint.
-  ;; Check service description in https://www.w3.org/TR/2013/REC-sparql11-service-description-20130321/ 
-  ;; Sparql 1.0 vs 1.1 can be detected by checking the service description.
-  ;; Some features can be only available in SPARQL 1.1
-  nil)
-
 ;; Implements database-supports? multimethod to define supported features.
 (doseq [[feature supported?] {:metadata/key-constraints false
                               :nested-fields false
