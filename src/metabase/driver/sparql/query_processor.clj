@@ -5,6 +5,42 @@
    Provides functions to extract metadata and convert results to the format expected by Metabase."
   (:require [metabase.driver.sparql.conversion :as conversion]))
 
+(defn- handle-ask
+  "Processes the result of an ASK SPARQL query and calls respond with metadata and rows."
+  [result respond]
+  (let [metadata {:cols [{:name "boolean"
+                          :display_name "boolean"
+                          :base_type :type/Boolean}]}
+        rows [[(:boolean result)]]]
+    (respond metadata rows)))
+
+(defn- handle-select
+  "Processes the result of a SELECT SPARQL query and calls respond with metadata and rows."
+  [result respond]
+  (let [vars (get-in result [:head :vars])
+        bindings (get-in result [:results :bindings])
+        first-row (first bindings)
+        col-types (reduce (fn [types var-name]
+                            (let [binding (get first-row (keyword var-name))]
+                              (assoc types var-name
+                                     (if binding
+                                       (conversion/sparql-type->base-type (:type binding) (:datatype binding))
+                                       :type/Text))))
+                          {}
+                          vars)
+        metadata {:cols (map (fn [var-name]
+                               {:name var-name
+                                :display_name var-name
+                                :base_type (get col-types var-name :type/Text)})
+                             vars)}
+        rows (map (fn [binding]
+                    (mapv (fn [var-name]
+                            (when-let [var-binding (get binding (keyword var-name))]
+                              (conversion/convert-value var-binding)))
+                          vars))
+                  bindings)]
+    (respond metadata rows)))
+
 (defn process-query-results
   "Processes the results of a SPARQL query (SELECT or ASK).
    
@@ -16,45 +52,5 @@
      Result of the call to the respond function. For ASK queries, returns a single boolean column. For SELECT queries, returns columns and rows as usual."
   [result respond]
   (if (contains? result :boolean)
-    ;; Handle ASK query result
-    (let [metadata {:cols [{:name "boolean"
-                            :display_name "boolean"
-                            :base_type :type/Boolean}]}
-          rows [[(:boolean result)]]]
-      (respond metadata rows))
-    ;; Handle SELECT query result as before
-    (let [;; Extracts variable names from the response header
-          vars (get-in result [:head :vars])
-
-          ;; Extracts bindings from the response
-          bindings (get-in result [:results :bindings])
-          first-row (first bindings)
-
-          ;; Determines column types based on the first row
-          col-types (reduce (fn [types var-name]
-                              (let [binding (get first-row (keyword var-name))]
-                                (assoc types var-name
-                                       (if binding
-                                         (conversion/sparql-type->base-type (:type binding) (:datatype binding))
-                                         :type/Text))))
-                            {}
-                            vars)
-
-        ;; Creates metadata for the result set
-          metadata {:cols (map (fn [var-name]
-                                 {:name var-name
-                                  :display_name var-name
-                                  :base_type (get col-types var-name :type/Text)})
-                               vars)}
-
-        ;; Transforms the SPARQL JSON bindings into rows with converted values
-          rows (map (fn [binding]
-                    ;; Converts each binding into a vector of values in the same order as vars
-                      (mapv (fn [var-name]
-                              (when-let [var-binding (get binding (keyword var-name))]
-                                (conversion/convert-value var-binding)))
-                            vars))
-                    bindings)]
-
-    ;; Calls the respond function with metadata and rows
-      (respond metadata rows))))
+    (handle-ask result respond)
+    (handle-select result respond)))

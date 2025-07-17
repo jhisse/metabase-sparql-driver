@@ -22,27 +22,6 @@ driver:
       type: boolean
       default: false
       required: false
-    - name: use-default-prefixes
-      display-name: Enable default prefixes
-      description: Automatically add common prefixes (rdf, rdfs, xsd, etc.) to SPARQL queries
-      type: boolean
-      default: false
-      required: false
-    - name: prefixes
-      display-name: SPARQL Prefixes
-      description: These prefixes will be automatically prepended to each SPARQL query
-      type: text
-      default: |
-        PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
-        PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
-        PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>
-        PREFIX schema: <https://schema.org/>
-        PREFIX owl: <http://www.w3.org/2002/07/owl#>
-        PREFIX skos: <http://www.w3.org/2004/02/skos/core#>
-        PREFIX prov: <http://www.w3.org/ns/prov#>
-      required: false
-      visible-if:
-        use-default-prefixes: true
 init:
   - step: load-namespace
     namespace: metabase.driver.sparql
