@@ -9,7 +9,57 @@
             [metabase.lib.metadata :as lib.metadata]
             [metabase.driver.sparql.query-processor :as query-processor]))
 
-(def ^:private default-accept-header "application/json")
+(defn- ^:private create-http-options
+  "Create HTTP options map for SPARQL query execution.
+  
+   Parameters:
+     query - SPARQL query string to execute
+     options - Map containing configuration options:
+       :insecure? - Boolean flag to ignore SSL certificate validation
+       :default-graph - URI of the default graph to query
+       
+   Returns:
+     A map of HTTP options for clj-http client."
+  [query {:keys [insecure? default-graph]}]
+  (cond-> {:accept :json
+           :cookie-policy :none
+           :throw-exceptions false
+           :form-params {:query query}}
+    insecure? (assoc :insecure? true)
+    default-graph (assoc :query-params {:default-graph-uri default-graph})))
+
+(defn- ^:private parse-json-response
+  "Parse JSON response body from SPARQL endpoint.
+  
+   Parameters:
+     response - HTTP response from SPARQL endpoint
+     
+   Returns:
+     Parsed JSON body as Clojure data structure, or nil if parsing fails.
+     Logs error details when parsing fails."
+  [response]
+  (try
+    (json/decode+kw (:body response))
+    (catch Exception json-e
+      (log/errorf "Error parsing JSON response: %s" (.getMessage json-e))
+      (log/debugf "Full body response: %s" (:body response))
+      nil)))
+
+(defn- ^:private process-response
+  "Process HTTP response from SPARQL endpoint.
+  
+   Parameters:
+     response - HTTP response from SPARQL endpoint
+     
+   Returns:
+     On success: [true, response-body] where response-body is the parsed JSON response
+     On failure: [false, error-message] with the error message as string"
+  [response]
+  (if (= 200 (:status response))
+    (if-let [body (parse-json-response response)]
+      [true body]
+      [false "Invalid JSON response from SPARQL endpoint"])
+    [false (str "SPARQL endpoint returned status: " (:status response) "\nBody: " (:body response))]))
 
 (defn execute-sparql-query
   "Execute SPARQL queries against an endpoint using POST.
@@ -29,24 +79,11 @@
    using the POST method, which is robust for queries of any length."
   [endpoint query options]
   (try
-    (let [http-options (cond-> {:headers          {"Accept" default-accept-header}
-                                :throw-exceptions false
-                                :form-params      {:query query}}
-                         (:insecure? options) (assoc :insecure? true))
-
-          ;; Send default-graph-uri as a query parameter if provided
-          http-options (if-let [dg (:default-graph options)]
-                         (assoc http-options :query-params {:default-graph-uri dg})
-                         http-options)
-
+    (let [http-options (create-http-options query options)
           response (http/post endpoint http-options)]
-
-      (if (= 200 (:status response))
-        (let [body (json/decode+kw (:body response))]
-          [true body])
-        [false (str "SPARQL endpoint returned status: " (:status response) "\nBody: " (:body response))]))
+      (process-response response))
     (catch Exception e
-      (log/error "Error executing SPARQL query:" (.getMessage e))
+      (log/errorf "Error executing SPARQL query: %s" (.getMessage e))
       [false (.getMessage e)])))
 
 (defn execute-reducible-query
@@ -71,4 +108,3 @@
       (do
         (log/error "Error executing SPARQL query:" result)
         (respond {:cols []} [])))))
-
