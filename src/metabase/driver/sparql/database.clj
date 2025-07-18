@@ -81,7 +81,7 @@
     (if success
       (let [classes-with-counts (map (fn [binding]
                                        {:uri (get-in binding [:class :value])
-                                        :count (Integer/parseInt (get-in binding [:count :value]))})
+                                        :count (bigint (get-in binding [:count :value]))})
                                      (get-in result [:results :bindings]))]
         {:tables
          (set
