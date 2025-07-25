@@ -10,7 +10,7 @@
   "Converts a SPARQL type to a Metabase base type.
    
    Parameters:
-     sparql-type - SPARQL type ('uri', 'literal' or 'bnode')
+     sparql-type - SPARQL type ('uri', 'literal', 'bnode', etc.)
      datatype - Datatype URI (optional)
    
    Returns:
@@ -22,6 +22,18 @@
 
     ;; Blank nodes
     (= sparql-type "bnode") :type/Text
+
+    ;; Typed literals
+    (and (= sparql-type "typed-literal") datatype)
+    (cond
+      (str/includes? datatype "integer") :type/Integer
+      (str/includes? datatype "decimal") :type/Float
+      (str/includes? datatype "float") :type/Float
+      (str/includes? datatype "double") :type/Float
+      (str/includes? datatype "boolean") :type/Boolean
+      (str/includes? datatype "dateTime") :type/DateTime
+      (str/includes? datatype "date") :type/Date
+      :else :type/Text)
 
     ;; Regular literals with explicit datatypes
     (and (= sparql-type "literal") datatype)
@@ -51,7 +63,33 @@
         type-key (:type binding)
         datatype (:datatype binding)]
     (cond
-      ;; Handle literal integers
+      ;; Handle typed-literal integers
+      (and (= type-key "typed-literal")
+           datatype
+           (str/includes? datatype "integer"))
+      (try (Long/parseLong value)
+           (catch Exception e
+             (log/warn "Failed to convert integer:" value "Error:" (.getMessage e))
+             value))
+
+      ;; Handle typed-literal decimals/floats
+      (and (= type-key "typed-literal")
+           datatype
+           (or (str/includes? datatype "decimal")
+               (str/includes? datatype "float")
+               (str/includes? datatype "double")))
+      (try (Double/parseDouble value)
+           (catch Exception e
+             (log/warn "Failed to convert float:" value "Error:" (.getMessage e))
+             value))
+
+      ;; Handle typed-literal booleans
+      (and (= type-key "typed-literal")
+           datatype
+           (str/includes? datatype "boolean"))
+      (Boolean/parseBoolean value)
+
+      ;; Handle regular literal integers
       (and (= type-key "literal")
            datatype
            (str/includes? datatype "integer"))
@@ -60,7 +98,7 @@
              (log/warn "Failed to convert integer:" value "Error:" (.getMessage e))
              value))
 
-      ;; Handle literal decimals/floats
+      ;; Handle regular literal decimals/floats
       (and (= type-key "literal")
            datatype
            (or (str/includes? datatype "decimal")
@@ -71,7 +109,7 @@
              (log/warn "Failed to convert float:" value "Error:" (.getMessage e))
              value))
 
-      ;; Handle literal booleans
+      ;; Handle regular literal booleans
       (and (= type-key "literal")
            datatype
            (str/includes? datatype "boolean"))
