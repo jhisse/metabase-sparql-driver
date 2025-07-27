@@ -117,10 +117,20 @@ make docker-build
 
 ### :gear: Additional Make Commands
 
-- `make clean` - Remove build files
-- `make check-deps` - Check if dependencies are installed
-- `make build-full` - Complete build with checks and initialization
-- `make help` - Display help information
+- `make build`: Build the SPARQL driver
+- `make build-full`: Complete build with checks and initialization
+- `make clean`: Remove build files
+- `make init-metabase`: Initialize the Metabase submodule
+- `make check-deps`: Check if dependencies are installed
+- `make lint`: Lint code using clj-kondo
+- `make format`: Format code using cljfmt
+- `make splint`: Run splint static code analysis
+- `make docker-build`: Build docker image
+- `make docker-run`: Run docker image
+- `make docker-stop`: Stop docker image
+- `make docker-clean`: Clean old container
+- `make docker-build-driver`: Build driver with docker
+- `make help`: Display this help
 
 ## :handshake: Contributing
 
