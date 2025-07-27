@@ -66,7 +66,7 @@ ASK { dbr:Albert_Einstein a dbo:Scientist }
 | Default Graph |   ❌     | Default graph URI       | `http://dbpedia.org`          |
 | Ignore SSL    |   ❌     | Skip SSL validation     | `false`                       |
 
-## :building_construction: Build From Source
+## :building_construction: Build Locally From Source
 
 ### Prerequisites
 
@@ -102,6 +102,18 @@ Run `make check-deps` to check if dependencies are installed.
    ```text
    target/sparql.metabase-driver.jar
    ```
+
+### :whale: Build Only Driver with Docker
+
+```bash
+make docker-build-driver
+```
+
+### :whale: Build Metabase + Driver Docker Image
+
+```bash
+make docker-build
+```
 
 ### :gear: Additional Make Commands
 

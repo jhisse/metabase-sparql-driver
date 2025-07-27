@@ -80,18 +80,54 @@ splint:
 	clojure -M:splint
 	@echo "Splint analysis completed."
 
+# Build docker image
+docker-build:
+	@echo "Building docker image..."
+	@docker build -t metabase-sparql .
+	@echo "Docker image built."
+
+# Run docker image
+docker-run:
+	@echo "Running docker image..."
+	@docker run -d -p 3000:3000 --name metabase-sparql metabase-sparql
+	@echo "Docker image run."
+
+# Stop docker image
+docker-stop:
+	@echo "Stopping docker image..."
+	@docker stop metabase-sparql
+	@echo "Docker image stopped."
+
+# Clean old container
+docker-clean:
+	@echo "Cleaning old container..."
+	@docker rm -f metabase-sparql
+	@echo "Old container cleaned."
+
+# Build driver with docker
+docker-build-driver:
+	@echo "Building driver with docker..."
+	@docker build --tag metabase-sparql-driver --target builder-base .
+	@docker run -v $(TARGET_DIR):/app/target metabase-sparql-driver
+	@echo "Driver built with docker."
+
 # Help
 help:
 	@echo "Available commands:"
-	@echo "  make build         - Build the SPARQL driver"
-	@echo "  make build-full    - Complete build with checks and initialization"
-	@echo "  make clean         - Remove build files"
-	@echo "  make init-metabase - Initialize the Metabase submodule"
-	@echo "  make check-deps    - Check if dependencies are installed"
-	@echo "  make lint          - Lint code using clj-kondo"
-	@echo "  make format        - Format code using cljfmt"
-	@echo "  make splint        - Run splint static code analysis"
-	@echo "  make help          - Display this help"
+	@echo "  make build               - Build the SPARQL driver"
+	@echo "  make build-full          - Complete build with checks and initialization"
+	@echo "  make clean               - Remove build files"
+	@echo "  make init-metabase       - Initialize the Metabase submodule"
+	@echo "  make check-deps          - Check if dependencies are installed"
+	@echo "  make lint                - Lint code using clj-kondo"
+	@echo "  make format              - Format code using cljfmt"
+	@echo "  make splint              - Run splint static code analysis"
+	@echo "  make docker-build        - Build docker image"
+	@echo "  make docker-run          - Run docker image"
+	@echo "  make docker-stop         - Stop docker image"
+	@echo "  make docker-clean        - Clean old container"
+	@echo "  make docker-build-driver - Build driver with docker"
+	@echo "  make help                - Display this help"
 	@echo ""
 	@echo "Paths:"
 	@echo "  Driver: $(DRIVER_PATH)"
