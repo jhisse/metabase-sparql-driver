@@ -103,19 +103,19 @@ Run `make check-deps` to check if dependencies are installed.
    target/sparql.metabase-driver.jar
    ```
 
-### :whale: Build Only Driver with Docker
+## :whale: Build Only Driver with Docker
 
 ```bash
 make docker-build-driver
 ```
 
-### :whale: Build Metabase + Driver Docker Image
+## :whale: Build Metabase + Driver Docker Image
 
 ```bash
 make docker-build
 ```
 
-### :gear: Additional Make Commands
+## :gear: Additional Make Commands
 
 - `make build`: Build the SPARQL driver
 - `make build-full`: Complete build with checks and initialization
