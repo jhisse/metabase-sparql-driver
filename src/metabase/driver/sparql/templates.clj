@@ -15,11 +15,7 @@
      Used by the driver/can-connect? method to check endpoint availability
      A successful execution of this query indicates the endpoint is accessible"
   []
-  "SELECT ?s 
-   WHERE { 
-     ?s ?p ?o .
-   }
-   LIMIT 1")
+  "ASK { }")
 
 (defn sparql-1-1-bind-version-query
   "Returns a SPARQL 1.1 query that uses the BIND clause to provide a version string.
