@@ -71,3 +71,18 @@
         "GROUP BY ?class "
         "ORDER BY DESC(?count) "
         "LIMIT " limit)))
+
+(defn now-function-support-query
+  "Returns a SPARQL query that tests if the endpoint supports the now() function.
+  
+  This query attempts to use the SPARQL now() function to get the current datetime.
+  If the endpoint supports this function, it will return a result with the current datetime.
+  If not, it will either return no results or throw an error.
+  
+  Returns:
+    A string containing a SPARQL SELECT query using the now() function.
+  
+  Usage:
+    Used to test if the SPARQL endpoint supports the now() temporal function."
+  []
+  "SELECT ?currentDateTime WHERE { BIND(now() AS ?currentDateTime) }")

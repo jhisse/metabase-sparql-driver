@@ -10,6 +10,7 @@
             [metabase.driver.sparql.database :as database]
             [metabase.driver.sparql.execute :as execute]
             [metabase.driver.sparql.parameters :as parameters]
+            [metabase.driver.sparql.features :as features]
             [metabase.util.log :as log]))
 
 ;; Register the SPARQL driver in Metabase's driver system
@@ -85,18 +86,17 @@
     (log/debugf "[database-supports?] - Checking feature: %s, Supported: %s" feature supported?)
     supported?))
 
-;; Implements database-supports? multimethod to check if a feature is supported by SPARQL endpoint version.
-(doseq [[feature supported?] {:basic-aggregations false ;; ToDo: set true when be able to implement true
-                              :expression-aggregations false ;; ToDo: set true when be able to implement true
-                              :nested-queries false ;; ToDo: set true when be able to implement true
-                              :temporal-extract false ;; ToDo: set true when be able to implement true
-                              :date-arithmetics false ;; ToDo: set true when be able to implement true
-                              :now false ;; ToDo: set true when be able to implement true
-                              }]
-  ;; TODO: implement when driver/dbms-version is implemented
-  (defmethod driver/database-supports? [:sparql feature] [_driver _feature _db]
-    (log/debugf "[database-supports?] - Checking feature: %s, Supported: %s" feature supported?)
-    supported?))
+;; Implement database-supports? for features that need to be checked dynamically using the features module.
+;; Add new features to this vector as needed in the future.
+(doseq [feature [:basic-aggregations
+                 :expression-aggregations
+                 :nested-queries
+                 :temporal-extract
+                 :date-arithmetics
+                 :now]]
+  (defmethod driver/database-supports? [:sparql feature] [driver feature db]
+    (log/debugf "[database-supports?] - Checking feature: %s" feature)
+    (features/database-supports? driver feature db)))
 
 ;; Implements can-connect? multimethod to test SPARQL endpoint connectivity.
 (defmethod driver/can-connect? :sparql
