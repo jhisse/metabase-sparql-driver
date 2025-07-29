@@ -21,7 +21,7 @@
   "Returns a SPARQL 1.1 query that uses the BIND clause to provide a version string.
   
   This query is useful to test whether the SPARQL endpoint supports SPARQL 1.1 features, 
-  especificamente o operador BIND, que não está disponível no SPARQL 1.0.
+  specifically the BIND operator, which is not available in SPARQL 1.0.
   
   Returns:
     A string containing a SPARQL SELECT query with the version string using BIND.
@@ -35,7 +35,7 @@
   "Returns a SPARQL 1.1 query that uses the VALUES clause to provide a version string.
   
   This query is useful as fallback to test whether the SPARQL endpoint supports SPARQL 1.1 features, 
-  especificamente o operador VALUES, que não está disponível no SPARQL 1.0.
+  specifically the VALUES operator, which is not available in SPARQL 1.0.
   
   Returns:
     A string containing a SPARQL SELECT query with the version string using VALUES.
