@@ -24,28 +24,18 @@
     (= sparql-type "bnode") :type/Text
 
     ;; Typed literals
-    (and (= sparql-type "typed-literal") datatype)
-    (cond
-      (str/includes? datatype "integer") :type/Integer
-      (str/includes? datatype "decimal") :type/Float
-      (str/includes? datatype "float") :type/Float
-      (str/includes? datatype "double") :type/Float
-      (str/includes? datatype "boolean") :type/Boolean
-      (str/includes? datatype "dateTime") :type/DateTime
-      (str/includes? datatype "date") :type/Date
-      :else :type/Text)
-
-    ;; Regular literals with explicit datatypes
-    (and (= sparql-type "literal") datatype)
-    (cond
-      (str/includes? datatype "integer") :type/Integer
-      (str/includes? datatype "decimal") :type/Float
-      (str/includes? datatype "float") :type/Float
-      (str/includes? datatype "double") :type/Float
-      (str/includes? datatype "boolean") :type/Boolean
-      (str/includes? datatype "dateTime") :type/DateTime
-      (str/includes? datatype "date") :type/Date
-      :else :type/Text)
+    ((or (and (= sparql-type "typed-literal") datatype)
+         (and (= sparql-type "literal") datatype))
+     (cond
+       (str/includes? datatype "integer") :type/Integer
+       ((or
+         (str/includes? datatype "decimal")
+         (str/includes? datatype "float"))
+        (str/includes? datatype "double")) :type/Float
+       (str/includes? datatype "boolean") :type/Boolean
+       (str/includes? datatype "dateTime") :type/DateTime
+       (str/includes? datatype "date") :type/Date
+       :else :type/Text))
 
     ;; Literals with language tags are treated as text
     :else :type/Text))
