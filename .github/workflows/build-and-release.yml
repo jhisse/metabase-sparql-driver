@@ -60,18 +60,14 @@ jobs:
     name: Release Driver
     runs-on: ubuntu-latest
     needs: build
+    permissions:
+      contents: write
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-        with:
-          submodules: 'recursive'
-
       - name: Download driver artifact
         uses: actions/download-artifact@v4
         with:
           name: sparql-driver
           path: target
-          if-no-files-found: error
 
       - name: Create release
         env:
