@@ -81,4 +81,5 @@ jobs:
         run: |
           gh release create $TAG \
             --title="Metabase SPARQL Driver ${TAG#v}" \
+            --generate-notes \
             'target/sparql.metabase-driver.jar#sparql.metabase-driver.jar'
