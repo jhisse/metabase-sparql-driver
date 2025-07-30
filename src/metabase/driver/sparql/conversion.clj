@@ -29,9 +29,9 @@
     (cond
       (str/includes? datatype "integer") :type/Integer
       (or
-        (str/includes? datatype "decimal")
-        (str/includes? datatype "float")
-        (str/includes? datatype "double")) :type/Float
+       (str/includes? datatype "decimal")
+       (str/includes? datatype "float")
+       (str/includes? datatype "double")) :type/Float
       (str/includes? datatype "boolean") :type/Boolean
       (str/includes? datatype "dateTime") :type/DateTime
       (str/includes? datatype "date") :type/Date
