@@ -50,7 +50,7 @@ jobs:
         run: make docker-build-driver
 
       - name: Upload driver artifact
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: sparql-driver
           path: target/sparql.metabase-driver.jar
