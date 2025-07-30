@@ -55,3 +55,29 @@ jobs:
           name: sparql-driver
           path: target/sparql.metabase-driver.jar
           if-no-files-found: error
+  
+  release:
+    name: Release Driver
+    runs-on: ubuntu-latest
+    needs: build
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          submodules: 'recursive'
+
+      - name: Download driver artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: sparql-driver
+          path: target
+          if-no-files-found: error
+
+      - name: Create release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          gh release create $TAG \
+            --title="Metabase SPARQL Driver ${TAG#v}" \
+            'target/sparql.metabase-driver.jar#sparql.metabase-driver.jar'
