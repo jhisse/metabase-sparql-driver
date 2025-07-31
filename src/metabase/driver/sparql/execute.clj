@@ -79,8 +79,12 @@
    using the POST method, which is robust for queries of any length."
   [endpoint query options]
   (try
-    (let [http-options (create-http-options query options)
-          response (http/post endpoint http-options)]
+    (let [start-time (System/currentTimeMillis)
+          http-options (create-http-options query options)
+          response (http/post endpoint http-options)
+          end-time (System/currentTimeMillis)
+          execution-time (- end-time start-time)]
+      (log/debugf "SPARQL query execution time: %d ms" execution-time)
       (process-response response))
     (catch Exception e
       (log/errorf "Error executing SPARQL query: %s" (.getMessage e))
