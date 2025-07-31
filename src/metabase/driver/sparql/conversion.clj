@@ -107,3 +107,31 @@
 
       ;; Default: return the string value
       :else value)))
+
+(defn determine-column-types
+  "Determines column types based on the first rows of the result.
+   Examines up to 20 rows and uses the most generic type when different types exist.
+    
+   Parameters:
+     vars - List of variable names (columns) in the result
+     bindings - List of bindings (rows) in the result
+    
+   Returns:
+     Map associating variable names to Metabase base types"
+  [vars bindings]
+  (let [sample-rows (take 20 bindings)]
+    (reduce (fn [types var-name]
+              (let [var-key (keyword var-name)
+                    ;; Coletamos todos os tipos não-nulos nas primeiras 20 linhas
+                    column-types (for [row sample-rows
+                                       :let [binding (get row var-key)]
+                                       :when binding]
+                                   (sparql-type->base-type (:type binding) (:datatype binding)))
+                    ;; Se temos tipos diferentes ou nenhum tipo, usamos Text
+                    final-type (cond
+                                 (empty? column-types) :type/Text
+                                 (apply = column-types) (first column-types)
+                                 :else :type/Text)]
+                (assoc types var-name final-type)))
+            {}
+            vars)))

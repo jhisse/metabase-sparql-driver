@@ -19,15 +19,7 @@
   [result respond]
   (let [vars (get-in result [:head :vars])
         bindings (get-in result [:results :bindings])
-        first-row (first bindings)
-        col-types (reduce (fn [types var-name]
-                            (let [binding (get first-row (keyword var-name))]
-                              (assoc types var-name
-                                     (if binding
-                                       (conversion/sparql-type->base-type (:type binding) (:datatype binding))
-                                       :type/Text))))
-                          {}
-                          vars)
+        col-types (conversion/determine-column-types vars bindings)
         metadata {:cols (map (fn [var-name]
                                {:name var-name
                                 :display_name var-name
