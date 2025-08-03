@@ -40,10 +40,7 @@
         options {:insecure? (-> database :details :use-insecure)
                  :default-graph (-> database :details :default-graph)}
         class-uri (:name table)
-        query (str "SELECT DISTINCT ?property WHERE { "
-                   "?instance a <" class-uri "> ; "
-                   "?property ?value . "
-                   "} LIMIT 100")
+        query (templates/class-properties-query class-uri)
         [success result] (execute/execute-sparql-query endpoint query options)]
     (if success
       (let [bindings (get-in result [:results :bindings])

@@ -68,6 +68,28 @@
         "ORDER BY DESC(?count) "
         "LIMIT " limit)))
 
+(defn class-properties-query
+  "Returns a SPARQL query to discover properties of an RDF class.
+  
+  This query finds all properties used by instances of a specific RDF class.
+  
+  Parameters:
+    class-uri - URI of the RDF class to discover properties for
+    limit - Optional integer limiting the number of properties returned (default: 100)
+  
+  Returns:
+    A string containing a SPARQL SELECT query that returns distinct properties used by instances of the class.
+  
+  Usage:
+    Used by the driver/describe-table method to discover available 'fields' for a 'table'."
+  ([class-uri]
+   (class-properties-query class-uri 100))
+  ([class-uri limit]
+   (str "SELECT DISTINCT ?property WHERE { "
+        "?instance a <" class-uri "> ; "
+        "?property ?value . "
+        "} LIMIT " limit)))
+
 (defn now-function-support-query
   "Returns a SPARQL query that tests if the endpoint supports the now() function.
   
