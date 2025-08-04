@@ -3,8 +3,7 @@
 
    This namespace handles conversion of SPARQL data types to Metabase types.
    Provides functions to map SPARQL types to Metabase base types and convert values."
-  (:require [metabase.util.log :as log]
-            [clojure.string :as str]))
+  (:require [metabase.util.log :as log]))
 
 (defn sparql-type->base-type
   "Converts a SPARQL type to a Metabase base type.
@@ -27,14 +26,31 @@
     (or (and (= sparql-type "typed-literal") datatype)
         (and (= sparql-type "literal") datatype))
     (cond
-      (str/includes? datatype "integer") :type/Integer
-      (or
-       (str/includes? datatype "decimal")
-       (str/includes? datatype "float")
-       (str/includes? datatype "double")) :type/Float
-      (str/includes? datatype "boolean") :type/Boolean
-      (str/includes? datatype "dateTime") :type/DateTime
-      (str/includes? datatype "date") :type/Date
+      (or (= datatype "http://www.w3.org/2001/XMLSchema#integer")
+          (= datatype "http://www.w3.org/2001/XMLSchema#int")
+          (= datatype "http://www.w3.org/2001/XMLSchema#long")
+          (= datatype "http://www.w3.org/2001/XMLSchema#short")
+          (= datatype "http://www.w3.org/2001/XMLSchema#byte")
+          (= datatype "http://www.w3.org/2001/XMLSchema#nonNegativeInteger")
+          (= datatype "http://www.w3.org/2001/XMLSchema#positiveInteger")
+          (= datatype "http://www.w3.org/2001/XMLSchema#nonPositiveInteger")
+          (= datatype "http://www.w3.org/2001/XMLSchema#negativeInteger")
+          (= datatype "http://www.w3.org/2001/XMLSchema#unsignedLong")
+          (= datatype "http://www.w3.org/2001/XMLSchema#unsignedInt")
+          (= datatype "http://www.w3.org/2001/XMLSchema#unsignedShort")
+          (= datatype "http://www.w3.org/2001/XMLSchema#unsignedByte")) :type/Integer
+      (or (= datatype "http://www.w3.org/2001/XMLSchema#decimal")
+          (= datatype "http://www.w3.org/2001/XMLSchema#float")
+          (= datatype "http://www.w3.org/2001/XMLSchema#double")) :type/Float
+      (= datatype "http://www.w3.org/2001/XMLSchema#boolean") :type/Boolean
+      (or (= datatype "http://www.w3.org/2001/XMLSchema#dateTime")
+          (= datatype "http://www.w3.org/2001/XMLSchema#gYear")
+          (= datatype "http://www.w3.org/2001/XMLSchema#gYearMonth")) :type/DateTime  
+      (or (= datatype "http://www.w3.org/2001/XMLSchema#date")
+          (= datatype "http://www.w3.org/2001/XMLSchema#gMonthDay")
+          (= datatype "http://www.w3.org/2001/XMLSchema#gDay")
+          (= datatype "http://www.w3.org/2001/XMLSchema#gMonth")) :type/Date
+      (= datatype "http://www.w3.org/2001/XMLSchema#time") :type/Time
       :else :type/Text)
 
     ;; Literals with language tags are treated as text
@@ -53,59 +69,48 @@
         type-key (:type binding)
         datatype (:datatype binding)]
     (cond
-      ;; Handle typed-literal integers
-      (and (= type-key "typed-literal")
+      ;; Handle integers (both typed-literal and literal)
+      (and (or (= type-key "typed-literal")
+               (= type-key "literal"))
            datatype
-           (str/includes? datatype "integer"))
+           (or (= datatype "http://www.w3.org/2001/XMLSchema#integer")
+               (= datatype "http://www.w3.org/2001/XMLSchema#int")
+               (= datatype "http://www.w3.org/2001/XMLSchema#long")
+               (= datatype "http://www.w3.org/2001/XMLSchema#short")
+               (= datatype "http://www.w3.org/2001/XMLSchema#byte")
+               (= datatype "http://www.w3.org/2001/XMLSchema#nonNegativeInteger")
+               (= datatype "http://www.w3.org/2001/XMLSchema#positiveInteger")
+               (= datatype "http://www.w3.org/2001/XMLSchema#nonPositiveInteger")
+               (= datatype "http://www.w3.org/2001/XMLSchema#negativeInteger")
+               (= datatype "http://www.w3.org/2001/XMLSchema#unsignedLong")
+               (= datatype "http://www.w3.org/2001/XMLSchema#unsignedInt")
+               (= datatype "http://www.w3.org/2001/XMLSchema#unsignedShort")
+               (= datatype "http://www.w3.org/2001/XMLSchema#unsignedByte")))
       (try (Long/parseLong value)
            (catch Exception e
              (log/warn "Failed to convert integer:" value "Error:" (.getMessage e))
              value))
 
-      ;; Handle typed-literal decimals/floats
-      (and (= type-key "typed-literal")
+      ;; Handle decimals/floats (both typed-literal and literal)
+      (and (or (= type-key "typed-literal")
+               (= type-key "literal"))
            datatype
-           (or (str/includes? datatype "decimal")
-               (str/includes? datatype "float")
-               (str/includes? datatype "double")))
+           (or (= datatype "http://www.w3.org/2001/XMLSchema#decimal")
+               (= datatype "http://www.w3.org/2001/XMLSchema#float")
+               (= datatype "http://www.w3.org/2001/XMLSchema#double")))
       (try (Double/parseDouble value)
            (catch Exception e
              (log/warn "Failed to convert float:" value "Error:" (.getMessage e))
              value))
 
-      ;; Handle typed-literal booleans
-      (and (= type-key "typed-literal")
+      ;; Handle booleans (both typed-literal and literal)
+      (and (or (= type-key "typed-literal")
+               (= type-key "literal"))
            datatype
-           (str/includes? datatype "boolean"))
+           (= datatype "http://www.w3.org/2001/XMLSchema#boolean"))
       (Boolean/parseBoolean value)
 
-      ;; Handle regular literal integers
-      (and (= type-key "literal")
-           datatype
-           (str/includes? datatype "integer"))
-      (try (Long/parseLong value)
-           (catch Exception e
-             (log/warn "Failed to convert integer:" value "Error:" (.getMessage e))
-             value))
-
-      ;; Handle regular literal decimals/floats
-      (and (= type-key "literal")
-           datatype
-           (or (str/includes? datatype "decimal")
-               (str/includes? datatype "float")
-               (str/includes? datatype "double")))
-      (try (Double/parseDouble value)
-           (catch Exception e
-             (log/warn "Failed to convert float:" value "Error:" (.getMessage e))
-             value))
-
-      ;; Handle regular literal booleans
-      (and (= type-key "literal")
-           datatype
-           (str/includes? datatype "boolean"))
-      (Boolean/parseBoolean value)
-
-      ;; Default: return the string value
+      ;; Default case - strings and all other types
       :else value)))
 
 (defn determine-column-types
