@@ -36,8 +36,10 @@ WHERE {
   ?scientist a dbo:Scientist ;
              dbo:nationality dbr:Brazil ;
              rdfs:label ?name .
-  OPTIONAL { ?scientist dbo:birthDate ?birthDate }
-  OPTIONAL { ?scientist dbo:deathDate ?deathDate }
+  OPTIONAL { ?scientist dbo:birthDate ?birthDateRaw }
+  OPTIONAL { ?scientist dbo:deathDate ?deathDateRaw }
+  BIND(STRDT(?birthDateRaw, <http://www.w3.org/2001/XMLSchema#date>) AS ?birthDate)
+  BIND(STRDT(?deathDateRaw, <http://www.w3.org/2001/XMLSchema#date>) AS ?deathDate)
   FILTER(LANG(?name) = "pt")
 }
 ORDER BY DESC(?birthDate) (LANG(?name) = "pt")
