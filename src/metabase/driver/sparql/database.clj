@@ -36,30 +36,37 @@
    Returns:
      Map with :name, :schema, and :fields keys describing the table structure"
   [_ database table]
-  (let [endpoint (-> database :details :endpoint)
-        options {:insecure? (-> database :details :use-insecure)
-                 :default-graph (-> database :details :default-graph)}
-        class-uri (:name table)
-        query (templates/class-properties-query class-uri)
-        [success result] (execute/execute-sparql-query endpoint query options)]
-    (if success
-      (let [bindings (get-in result [:results :bindings])
-            pk-field {:name "id", :database-type "uri", :base-type :type/Text, :pk? true, :database-position 0}
-            other-fields (map-indexed
-                          (fn [idx binding]
-                            (let [property-uri (get-in binding [:property :value])]
-                              {:name property-uri
-                               :database-type "string"
-                               :base-type :type/Text
-                               :pk? false
-                               :database-position (inc idx)}))
-                          bindings)]
-        {:name   (:name table)
-         :schema nil
-         :fields (set (cons pk-field other-fields))})
-      (do
-        (log/error "Error describing SPARQL table:" result)
-        {:fields #{}}))))
+  ;; Check if metadata sync is disabled
+  (if (-> database :details :dont-sync-metadata)
+    (do
+      (log/info "Skipping table metadata sync for SPARQL database - dont-sync-metadata is enabled")
+      {:name   (:name table)
+       :schema nil
+       :fields #{}})
+    (let [endpoint (-> database :details :endpoint)
+          options {:insecure? (-> database :details :use-insecure)
+                   :default-graph (-> database :details :default-graph)}
+          class-uri (:name table)
+          query (templates/class-properties-query class-uri)
+          [success result] (execute/execute-sparql-query endpoint query options)]
+      (if success
+        (let [bindings (get-in result [:results :bindings])
+              pk-field {:name "id", :database-type "uri", :base-type :type/Text, :pk? true, :database-position 0}
+              other-fields (map-indexed
+                            (fn [idx binding]
+                              (let [property-uri (get-in binding [:property :value])]
+                                {:name property-uri
+                                 :database-type "string"
+                                 :base-type :type/Text
+                                 :pk? false
+                                 :database-position (inc idx)}))
+                            bindings)]
+          {:name   (:name table)
+           :schema nil
+           :fields (set (cons pk-field other-fields))})
+        (do
+          (log/error "Error describing SPARQL table:" result)
+          {:fields #{}})))))
 
 (defn describe-database
   "Discovers the available 'tables' (RDF classes) in the SPARQL endpoint.
@@ -71,22 +78,27 @@
    Returns:
      Map with the :tables key containing a set of table definitions."
   [_ database]
-  (let [endpoint (-> database :details :endpoint)
-        options {:insecure? (-> database :details :use-insecure)
-                 :default-graph (-> database :details :default-graph)}
-        [success result] (execute/execute-sparql-query endpoint (templates/classes-discovery-query 10) options)]
-    (if success
-      (let [classes-with-counts (map (fn [binding]
-                                       {:uri (get-in binding [:class :value])
-                                        :count (bigint (get-in binding [:count :value]))})
-                                     (get-in result [:results :bindings]))]
-        {:tables
-         (set
-          (for [{:keys [uri count]} classes-with-counts]
-            {:name uri
-             :schema nil
-             :display-name (extract-class-name uri)
-             :description (str "RDF Class: " uri " (Instances: " count ")")}))})
-      (do
-        (log/error "Error describing SPARQL database:" result)
-        {:tables #{}}))))
+  ;; Check if metadata sync is disabled
+  (if (-> database :details :dont-sync-metadata)
+    (do
+      (log/info "Skipping metadata sync for SPARQL database - dont-sync-metadata is enabled")
+      {:tables #{}})
+    (let [endpoint (-> database :details :endpoint)
+          options {:insecure? (-> database :details :use-insecure)
+                   :default-graph (-> database :details :default-graph)}
+          [success result] (execute/execute-sparql-query endpoint (templates/classes-discovery-query 10) options)]
+      (if success
+        (let [classes-with-counts (map (fn [binding]
+                                         {:uri (get-in binding [:class :value])
+                                          :count (bigint (get-in binding [:count :value]))})
+                                       (get-in result [:results :bindings]))]
+          {:tables
+           (set
+            (for [{:keys [uri count]} classes-with-counts]
+              {:name uri
+               :schema nil
+               :display-name (extract-class-name uri)
+               :description (str "RDF Class: " uri " (Instances: " count ")")}))})
+        (do
+          (log/error "Error describing SPARQL database:" result)
+          {:tables #{}})))))
