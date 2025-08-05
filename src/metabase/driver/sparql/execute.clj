@@ -7,7 +7,11 @@
             [metabase.util.json :as json]
             [metabase.query-processor.store :as qp.store]
             [metabase.lib.metadata :as lib.metadata]
-            [metabase.driver.sparql.query-processor :as query-processor]))
+            [metabase.driver.sparql.query-processor :as query-processor]
+            [clojure.string :as str])
+  (:import [java.net SocketTimeoutException ConnectException]
+           [java.util.concurrent TimeoutException]
+           [org.apache.http.conn ConnectTimeoutException ConnectionPoolTimeoutException]))
 
 (defn- ^:private create-http-options
   "Create HTTP options map for SPARQL query execution.
@@ -84,7 +88,12 @@
           response (http/post endpoint http-options)
           end-time (System/currentTimeMillis)
           execution-time (- end-time start-time)]
+      (log/debugf "Endpoint: %s" endpoint)
+      (log/debugf "Ignore SSL validation: %s" (get options :insecure?))
+      (log/debugf "SPARQL query: %s" query)
+      (log/debugf "SPARQL query execution return status: %s" (:status response))
       (log/debugf "SPARQL query execution time: %d ms" execution-time)
+      (log/debugf "--------------------------------")
       (process-response response))
     (catch Exception e
       (log/errorf "Error executing SPARQL query: %s" (.getMessage e))
