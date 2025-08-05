@@ -7,11 +7,7 @@
             [metabase.util.json :as json]
             [metabase.query-processor.store :as qp.store]
             [metabase.lib.metadata :as lib.metadata]
-            [metabase.driver.sparql.query-processor :as query-processor]
-            [clojure.string :as str])
-  (:import [java.net SocketTimeoutException ConnectException]
-           [java.util.concurrent TimeoutException]
-           [org.apache.http.conn ConnectTimeoutException ConnectionPoolTimeoutException]))
+            [metabase.driver.sparql.query-processor :as query-processor]))
 
 (defn- ^:private create-http-options
   "Create HTTP options map for SPARQL query execution.
