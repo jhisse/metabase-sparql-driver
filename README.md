@@ -134,6 +134,25 @@ make docker-build
 - `make docker-build-driver`: Build driver with docker
 - `make help`: Display this help
 
+## Run with debug logs
+
+To troubleshoot connection or query issues, run Metabase with debug logging:
+
+```bash
+java --add-opens java.base/java.nio=ALL-UNNAMED -Dlog4j.configurationFile=file:./log4j2.xml -jar metabase.jar
+```
+
+**Requirements:**
+- Java 21 installed
+- Place `metabase.jar` in the project root folder
+- The `log4j2.xml` file is already configured for SPARQL driver debugging
+
+**What you'll see:**
+- SPARQL query execution details
+- Connection attempts and errors
+- Data type conversion processes
+- Metadata sync operations
+
 ## :handshake: Contributing
 
 Found a bug or want to contribute? Open an issue or submit a PR!

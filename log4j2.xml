@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Configuration>
+  <Appenders>
+    <Console name="STDOUT" target="SYSTEM_OUT" follow="true">
+      <PatternLayout pattern="%date %level %logger{2} :: %message %notEmpty{%X}%n%throwable">
+        <replace regex=":basic-auth \\[.*\\]" replacement=":basic-auth [redacted]"/>
+      </PatternLayout>
+    </Console>
+  </Appenders>
+
+  <Loggers>
+    <Logger name="metabase.driver.sparql" level="DEBUG"/>
+    <Logger name="metabase.driver.sparql.execute" level="DEBUG"/>
+    <Logger name="metabase.driver.sparql.conversion" level="DEBUG"/>
+
+    <Root level="WARN">
+      <AppenderRef ref="STDOUT"/>
+    </Root>
+  </Loggers>
+</Configuration>
