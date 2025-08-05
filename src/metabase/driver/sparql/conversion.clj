@@ -45,7 +45,7 @@
       (= datatype "http://www.w3.org/2001/XMLSchema#boolean") :type/Boolean
       (or (= datatype "http://www.w3.org/2001/XMLSchema#dateTime")
           (= datatype "http://www.w3.org/2001/XMLSchema#gYear")
-          (= datatype "http://www.w3.org/2001/XMLSchema#gYearMonth")) :type/DateTime  
+          (= datatype "http://www.w3.org/2001/XMLSchema#gYearMonth")) :type/DateTime
       (or (= datatype "http://www.w3.org/2001/XMLSchema#date")
           (= datatype "http://www.w3.org/2001/XMLSchema#gMonthDay")
           (= datatype "http://www.w3.org/2001/XMLSchema#gDay")
