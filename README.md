@@ -127,6 +127,8 @@ make docker-build
 - `make lint`: Lint code using clj-kondo
 - `make format`: Format code using cljfmt
 - `make splint`: Run splint static code analysis
+- `make test`: Run tests
+- `make coverage`: Run tests with coverage analysis
 - `make docker-build`: Build docker image
 - `make docker-run`: Run docker image
 - `make docker-stop`: Stop docker image
