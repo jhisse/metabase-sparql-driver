@@ -13,7 +13,7 @@ METABASE_PATH := $(MAKEFILE_DIR)/metabase
 # Target directory for the compiled driver
 TARGET_DIR := $(DRIVER_PATH)/target
 
-.PHONY: build clean init-metabase help all lint format splint
+.PHONY: build clean init-metabase help all lint format splint test
 
 # Default rule
 all: build
@@ -80,6 +80,12 @@ splint:
 	clojure -M:splint
 	@echo "Splint analysis completed."
 
+# Run tests
+test:
+	@echo "Running tests..."
+	clojure -X:test
+	@echo "Tests completed."
+
 # Build docker image
 docker-build:
 	@echo "Building docker image..."
@@ -122,6 +128,7 @@ help:
 	@echo "  make lint                - Lint code using clj-kondo"
 	@echo "  make format              - Format code using cljfmt"
 	@echo "  make splint              - Run splint static code analysis"
+	@echo "  make test                - Run tests"
 	@echo "  make docker-build        - Build docker image"
 	@echo "  make docker-run          - Run docker image"
 	@echo "  make docker-stop         - Stop docker image"
