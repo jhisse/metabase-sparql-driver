@@ -13,7 +13,7 @@ METABASE_PATH := $(MAKEFILE_DIR)/metabase
 # Target directory for the compiled driver
 TARGET_DIR := $(DRIVER_PATH)/target
 
-.PHONY: build clean init-metabase help all lint format splint test
+.PHONY: build clean init-metabase help all lint format splint test coverage
 
 # Default rule
 all: build
@@ -86,6 +86,11 @@ test:
 	clojure -X:test
 	@echo "Tests completed."
 
+# Run tests with coverage analysis
+coverage:
+	@echo "Running tests with coverage analysis..."
+	clojure -M:coverage
+
 # Build docker image
 docker-build:
 	@echo "Building docker image..."
@@ -129,6 +134,7 @@ help:
 	@echo "  make format              - Format code using cljfmt"
 	@echo "  make splint              - Run splint static code analysis"
 	@echo "  make test                - Run tests"
+	@echo "  make coverage            - Run tests with coverage analysis"
 	@echo "  make docker-build        - Build docker image"
 	@echo "  make docker-run          - Run docker image"
 	@echo "  make docker-stop         - Stop docker image"
