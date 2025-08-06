@@ -34,11 +34,36 @@ jobs:
 
       - name: Run Static Analysis
         run: make splint
+  
+  tests:
+    name: Run Tests
+    runs-on: ubuntu-latest
+    needs: lint
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '21'
+
+      - name: Setup Clojure Tools
+        uses: DeLaGuardo/setup-clojure@13.4
+        with:
+          cli: latest
+
+      - name: Run Tests
+        run: make test
+      
+      - name: Run Coverage
+        run: make coverage
 
   build:
     name: Build Driver
     runs-on: ubuntu-latest
-    needs: lint
+    needs: tests
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
