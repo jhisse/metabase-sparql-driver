@@ -72,11 +72,13 @@
   "Returns a SPARQL query to discover properties of an RDF class.
   
   This query finds the most frequently used properties by instances of a specific RDF class,
-  ordered by frequency of occurrence.
+  ordered by frequency of occurrence. It uses SAMPLE to analyze a subset of instances,
+  which improves performance on large datasets.
   
   Parameters:
     class-uri - URI of the RDF class to discover properties for
     limit - Optional integer limiting the number of properties returned (default: 20)
+    sample-size - Optional integer limiting the number of instances to analyze (default: 1000)
   
   Returns:
     A string containing a SPARQL SELECT query that returns the most common properties 
@@ -87,10 +89,16 @@
   ([class-uri]
    (class-properties-query class-uri 20))
   ([class-uri limit]
+   (class-properties-query class-uri limit 1000))
+  ([class-uri limit sample-size]
    (str "SELECT ?property (COUNT(?instance) AS ?count) WHERE { "
-        "?instance a <" class-uri "> ; "
-        "?property ?value . "
-        "} GROUP BY ?property "
+        "  { SELECT ?instance WHERE { "
+        "      ?instance a <" class-uri "> "
+        "    } LIMIT " sample-size " "
+        "  } "
+        "  ?instance ?property ?value . "
+        "} "
+        "GROUP BY ?property "
         "ORDER BY DESC(?count) "
         "LIMIT " limit)))
 
