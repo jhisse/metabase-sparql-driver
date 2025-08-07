@@ -86,7 +86,7 @@
     (let [endpoint (-> database :details :endpoint)
           options {:insecure? (-> database :details :use-insecure)
                    :default-graph (-> database :details :default-graph)}
-          [success result] (execute/execute-sparql-query endpoint (templates/classes-discovery-query 10) options)]
+          [success result] (execute/execute-sparql-query endpoint (templates/classes-discovery-query 20) options)]
       (if success
         (let [classes-with-counts (map (fn [binding]
                                          {:uri (get-in binding [:class :value])
