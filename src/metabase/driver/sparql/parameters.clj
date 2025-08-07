@@ -5,7 +5,8 @@
    allowing for dynamic query generation with user-provided values."
   (:require
    [clojure.string :as str]
-   [metabase.driver.common.parameters.values :as params.values]))
+   [metabase.driver.common.parameters.values :as params.values]
+   [metabase.util.log :as log]))
 
 (defn substitute-native-parameters
   "Substitutes native parameters in the SPARQL query.
@@ -19,11 +20,17 @@
 
    Usage:
      Used by the driver to replace {{parameter}} placeholders with actual values"
-  [_driver {:keys [query] :as inner-query}]
-  (let [param->value (params.values/query->params-map inner-query)
-        substituted-query (reduce (fn [q [k v]]
-                                    (str/replace q (re-pattern (str "\\{\\{" k "\\}\\}"))
-                                                 (str v)))
-                                  query
-                                  param->value)]
-    (assoc inner-query :query substituted-query)))
+  [_driver inner-query]
+  (let [query (:query inner-query)
+        template-tags (:template-tags inner-query)
+        parameters (:parameters inner-query)]
+    (log/debugf "Query: %s" query)
+    (log/debugf "Template tags: %s" template-tags)
+    (log/debugf "Parameters: %s" parameters)
+    (let [param->value (params.values/query->params-map inner-query)
+          substituted-query (reduce (fn [q [k v]]
+                                      (str/replace q (re-pattern (str "\\{\\{" k "\\}\\}"))
+                                                   (str v)))
+                                    query
+                                    param->value)]
+      (assoc inner-query :query substituted-query))))
