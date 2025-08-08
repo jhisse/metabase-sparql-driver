@@ -3,7 +3,7 @@
 
    This namespace handles the discovery and description of \"tables\" (RDF classes)
    in SPARQL endpoints for Metabase."
-  (:require [clojure.tools.logging :as log]
+  (:require [metabase.util.log :as log]
             [clojure.string :as str]
             [metabase.driver.sparql.execute :as execute]
             [metabase.driver.sparql.templates :as templates]))
