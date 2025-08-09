@@ -18,7 +18,7 @@ driver:
       placeholder: http://dbpedia.org
       required: false
     - name: use-insecure
-      display-name: Ignore SSL certificate validation
+      display-name: Ignore TLS/SSL certificate validation
       type: boolean
       default: false
       required: false
