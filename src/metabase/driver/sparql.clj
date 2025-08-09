@@ -10,6 +10,7 @@
             [metabase.driver.sparql.database :as database]
             [metabase.driver.sparql.execute :as execute]
             [metabase.driver.sparql.parameters :as parameters]
+            [metabase.driver.sparql.mbql :as mbql]
             [metabase.driver.sparql.features :as features]
             [metabase.util.log :as log]))
 
@@ -135,3 +136,9 @@
   [_driver inner-query]
   (log/debugf "[substitute-native-parameters] - Substituting native parameters. Query: %s" (:query inner-query))
   (parameters/substitute-native-parameters _driver inner-query))
+
+;; Implements mbql->native multimethod to convert MBQL queries to SPARQL queries.
+(defmethod driver/mbql->native :sparql
+  [_driver mbql-query]
+  (log/debugf "[mbql->native] - Converting MBQL query to SPARQL query. MBQL Query: %s" mbql-query)
+  (mbql/mbql->native _driver mbql-query))

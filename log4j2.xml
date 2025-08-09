@@ -10,9 +10,10 @@
 
   <Loggers>
     <Logger name="metabase.driver.sparql" level="DEBUG"/>
-    <Logger name="metabase.driver.sparql.execute" level="DEBUG"/>
+    <Logger name="metabase.driver.sparql.mbql" level="DEBUG"/>
+    <!-- <Logger name="metabase.driver.sparql.execute" level="DEBUG"/>
     <Logger name="metabase.driver.sparql.conversion" level="DEBUG"/>
-    <Logger name="metabase.driver.sparql.parameters" level="DEBUG"/>
+    <Logger name="metabase.driver.sparql.parameters" level="DEBUG"/> -->
 
     <Root level="WARN">
       <AppenderRef ref="STDOUT"/>
