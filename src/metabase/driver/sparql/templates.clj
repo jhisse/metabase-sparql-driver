@@ -9,11 +9,11 @@
   "Simple query to test connectivity with a SPARQL endpoint.
 
    Returns:
-     A single row with a single column named ?ping containing the value 'pong'
+     A boolean result from an ASK query. true indicates the endpoint is reachable.
 
    Usage:
-     Used by the driver/can-connect? method to check endpoint availability
-     A successful execution of this query indicates the endpoint is accessible"
+     Used by the driver/can-connect? method to check endpoint availability.
+     A successful execution that returns true indicates the endpoint is accessible"
   []
   "ASK { }")
 
