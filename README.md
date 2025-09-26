@@ -62,11 +62,12 @@ ASK { dbr:Albert_Einstein a dbo:Scientist }
 
 ## :wrench: Configuration
 
-| Field         | Required | Description             | Example                       |
-|:--------------|:--------:|:------------------------|:------------------------------|
-| Endpoint URL  |   ✅     | SPARQL endpoint URL     | `https://dbpedia.org/sparql`  |
-| Default Graph |   ❌     | Default graph URI       | `http://dbpedia.org`          |
-| Ignore SSL    |   ❌     | Skip SSL validation     | `false`                       |
+| Field                                | Required | Description                        | Example                       |
+|:-------------------------------------|:--------:|:-----------------------------------|:------------------------------|
+| Endpoint URL                         |    ✅    | SPARQL endpoint URL                | `https://dbpedia.org/sparql`  |
+| Default Graph                        |    ❌    | Default graph URI                  | `http://dbpedia.org`          |
+| Ignore TLS/SSL certificate validation|    ❌    | Skip SSL validation                | `false`                       |
+| Don't sync metadata                  |    ❌    | Skip metadata discovery (Advanced) | `false`                       |
 
 ## :building_construction: Build Locally From Source
 
