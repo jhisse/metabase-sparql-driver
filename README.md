@@ -8,6 +8,8 @@ A driver for connecting Metabase to SPARQL endpoints for querying RDF data.
 
 This driver enables Metabase to connect to SPARQL endpoints using HTTP requests to query RDF data. It supports both secure and insecure connections with optional default graph specification.
 
+This driver represents RDF classes as tables and properties as columns, allowing you to use Metabase's visual query builder to create SPARQL queries intuitively. Discovering the most frequent classes and properties can be computationally expensive on large datasets. You can disable this metadata synchronization feature in the driver's advanced configuration settings.
+
 ## :zap: Quick Start
 
 1. **Download** the latest driver from [releases page](https://github.com/jhisse/metabase-sparql-driver/releases)
