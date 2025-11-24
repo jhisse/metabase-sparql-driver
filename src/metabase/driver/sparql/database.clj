@@ -95,7 +95,9 @@
         options {:insecure? (-> database :details :use-insecure)
                  :default-graph (-> database :details :default-graph)}
         class-uri (:name table)
-        query (templates/class-properties-query class-uri)
+        property-limit (or (-> database :details :property-limit) 20)
+        sample-limit (or (-> database :details :sample-limit) 10000)
+        query (templates/class-properties-query class-uri property-limit sample-limit)
         [success result] (execute/execute-sparql-query endpoint query options)]
     (if success
       {:name (:name table)
@@ -165,7 +167,8 @@
   (let [endpoint (-> database :details :endpoint)
         options {:insecure? (-> database :details :use-insecure)
                  :default-graph (-> database :details :default-graph)}
-        [success result] (execute/execute-sparql-query endpoint (templates/classes-discovery-query 20) options)]
+        class-limit (or (-> database :details :class-limit) 100)
+        [success result] (execute/execute-sparql-query endpoint (templates/classes-discovery-query class-limit) options)]
     (if success
       (let [classes-with-counts (map (fn [binding]
                                        {:uri (get-in binding [:class :value])

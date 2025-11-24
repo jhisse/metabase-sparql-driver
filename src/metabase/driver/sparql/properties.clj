@@ -45,5 +45,23 @@
                         "  ]\n"
                         "}")
      :description  "Explicitly define tables and fields to skip discovery. Format: JSON object with a tables array."
-     :visible-if   {:metadata-sync-strategy "explicit"}}]
+     :visible-if   {:metadata-sync-strategy "explicit"}}
+    {:name         "class-limit"
+     :display-name "Class Discovery Limit"
+     :type         :integer
+     :default      100
+     :description  "Maximum number of RDF classes (tables) to discover."
+     :visible-if   {:metadata-sync-strategy "auto"}}
+    {:name         "property-limit"
+     :display-name "Property Discovery Limit"
+     :type         :integer
+     :default      20
+     :description  "Maximum number of properties (fields) to discover per class."
+     :visible-if   {:metadata-sync-strategy "auto"}}
+    {:name         "sample-limit"
+     :display-name "Discovery Sample Size"
+     :type         :integer
+     :default      10000
+     :description  "Number of instances to sample when discovering properties."
+     :visible-if   {:metadata-sync-strategy "auto"}}]
    (into [] (mapcat u/one-or-many))))
