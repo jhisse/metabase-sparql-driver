@@ -144,7 +144,7 @@
 (defn- ensure-triple-for-field
   "Build OPTIONAL triple pattern for property and var."
   [property-uri var-alias]
-  (let [triple (format "  OPTIONAL { ?s <%s> ?%s . }" property-uri var-alias)]
+  (let [triple (format "  OPTIONAL { ?subject <%s> ?%s . }" property-uri var-alias)]
     (log/debugf "[mbql] OPTIONAL triple: property=%s var=?%s" property-uri var-alias)
     triple))
 
@@ -168,11 +168,6 @@
         (let [clause (str "ORDER BY " (str/join " " parts))]
           (log/debugf "[mbql] Order clause: %s" clause)
           clause)))))
-
-(defn- ensure-binding-id
-  "Expose subject as ?subject."
-  []
-  "  BIND(?s AS ?subject) .")
 
 (defn mbql->native
   "Compile outer MBQL to a native SPARQL map."
@@ -230,8 +225,7 @@
         select-part (str "SELECT ?subject"
                          (when (seq select-vars)
                            (str " " (str/join " " (map #(str "?" %) select-vars)))))
-        where-body  (->> (concat [(format "  ?s a <%s> ." class-uri)
-                                  (ensure-binding-id)]
+        where-body  (->> (concat [(format "  ?subject a <%s> ." class-uri)]
                                  triples-for-fields
                                  triples-for-extras
                                  filters)
