@@ -6,29 +6,6 @@ driver:
   name: sparql
   display-name: SPARQL
   lazy-load: true
-  connection-properties:
-    - name: endpoint
-      display-name: Endpoint URL
-      type: string
-      placeholder: http://dbpedia.org/sparql
-      required: true
-    - name: default-graph
-      display-name: Default Graph
-      type: string
-      placeholder: http://dbpedia.org
-      required: false
-    - name: use-insecure
-      display-name: Ignore TLS/SSL certificate validation
-      type: boolean
-      default: false
-      required: false
-    - advanced-options-start
-    - name: dont-sync-metadata
-      display-name: Don't sync metadata
-      default: false
-      type: boolean
-      visible-if:
-        advanced-options: true
 init:
   - step: load-namespace
     namespace: metabase.driver.sparql

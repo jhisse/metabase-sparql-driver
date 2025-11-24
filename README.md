@@ -62,12 +62,92 @@ ASK { dbr:Albert_Einstein a dbo:Scientist }
 
 ## :wrench: Configuration
 
-| Field                                | Required | Description                        | Example                       |
-|:-------------------------------------|:--------:|:-----------------------------------|:------------------------------|
-| Endpoint URL                         |    ✅    | SPARQL endpoint URL                | `https://dbpedia.org/sparql`  |
-| Default Graph                        |    ❌    | Default graph URI                  | `http://dbpedia.org`          |
-| Ignore TLS/SSL certificate validation|    ❌    | Skip SSL validation                | `false`                       |
-| Don't sync metadata                  |    ❌    | Skip metadata discovery (Advanced) | `false`                       |
+| Field                                | Required | Description                                          | Example/Options               |
+|:-------------------------------------|:--------:|:-----------------------------------------------------|:------------------------------|
+| Endpoint URL                         |    ✅    | SPARQL endpoint URL                                  | `https://dbpedia.org/sparql`  |
+| Default Graph                        |    ❌    | Default graph URI                                    | `http://dbpedia.org`          |
+| Ignore TLS/SSL certificate validation|    ❌    | Skip SSL validation                                  | `false`                       |
+| Metadata Sync Strategy (Advanced)    |    ❌    | How to discover tables/fields                        | `auto` / `none` / `explicit`  |
+| Schema Configuration (Advanced)      |    ❌    | JSON schema (visible when strategy is `explicit`)    | See example below             |
+
+**Metadata Sync Strategy options:**
+- **`auto`** (default): Automatically discover tables and fields from the endpoint
+- **`none`**: Skip metadata sync entirely (useful for very large datasets where discovery is slow)
+- **`explicit`**: Use a manually defined JSON schema (see example below)
+
+### Explicit Schema Configuration Example (DBpedia)
+
+If you choose **Explicit** as the Metadata Sync Strategy, you can use the following JSON to define tables for DBpedia:
+
+```json
+{
+  "tables": [
+    {
+      "name": "http://dbpedia.org/ontology/Person",
+      "description": "Person",
+      "fields": [
+        "http://www.w3.org/2000/01/rdf-schema#label",
+        "http://dbpedia.org/ontology/birthDate",
+        "http://dbpedia.org/ontology/birthPlace",
+        "http://xmlns.com/foaf/0.1/name"
+      ]
+    },
+    {
+      "name": "http://dbpedia.org/ontology/City",
+      "description": "City",
+      "fields": [
+        "http://www.w3.org/2000/01/rdf-schema#label",
+        "http://dbpedia.org/ontology/populationTotal",
+        "http://dbpedia.org/ontology/country",
+        "http://dbpedia.org/ontology/abstract"
+      ]
+    }
+  ]
+}
+```
+
+The schema is a JSON object with a `tables` key, which is an array of table objects. Each table object has:
+- `name` (required): URI of the RDF class
+- `description` (optional): Human-readable description of the table
+- `fields` (required): Array of property URIs to include as columns
+
+**JSON Schema for validation:**
+
+```json
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "properties": {
+    "tables": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "URI of the RDF class"
+          },
+          "description": {
+            "type": "string",
+            "description": "Human-readable description of the table"
+          },
+          "fields": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "description": "URI of the property"
+            },
+            "minItems": 1
+          }
+        },
+        "required": ["name", "fields"]
+      },
+      "minItems": 1
+    }
+  },
+  "required": ["tables"]
+}
+```
 
 ## :building_construction: Build Locally From Source
 

@@ -12,11 +12,17 @@
             [metabase.driver.sparql.parameters :as parameters]
             [metabase.driver.sparql.mbql :as mbql]
             [metabase.driver.sparql.features :as features]
+            [metabase.driver.sparql.properties :as properties]
             [metabase.util.log :as log]))
 
 ;; Register the SPARQL driver in Metabase's driver system
 ;; No sql or sql-jdbc parent because it's a custom driver using clj-http
 (driver/register! :sparql)
+
+;; Define connection properties for the SPARQL driver
+(defmethod driver/connection-properties :sparql
+  [_]
+  properties/connection-properties)
 
 ;; Implements humanize-connection-error-message multimethod to provide user-friendly error messages.
 (defmethod driver/humanize-connection-error-message :sparql
