@@ -49,11 +49,11 @@
   (let [ids-from-fields (set (keep field-token->id fields))
         ids-from-order  (set (keep (fn [[_dir fld & _]] (field-token->id fld)) order-by))
         ids-from-filter (letfn [(collect-field-tokens [x]
-                                    (cond
-                                      (and (vector? x) (= :field (first x))) [x]
-                                      (sequential? x) (mapcat collect-field-tokens x)
-                                      (map? x) (mapcat collect-field-tokens (vals x))
-                                      :else []))]
+                                  (cond
+                                    (and (vector? x) (= :field (first x))) [x]
+                                    (sequential? x) (mapcat collect-field-tokens x)
+                                    (map? x) (mapcat collect-field-tokens (vals x))
+                                    :else []))]
                           (set (keep field-token->id (collect-field-tokens filter-clause))))
         all-ids         (vec (set/union ids-from-fields ids-from-order ids-from-filter))]
     (log/debugf "[mbql] Collected field IDs: fields=%d order=%d filter=%d total=%d"
@@ -122,9 +122,9 @@
                                       (format "STRENDS(STR(?%s), %s)" var needle))]
                            (str "(" expr ")"))
               :contains (let [needle (literal->sparql v)
-                               expr (if insensitive?
-                                      (format "CONTAINS(LCASE(STR(?%s)), LCASE(%s))" var needle)
-                                      (format "CONTAINS(STR(?%s), %s)" var needle))]
+                              expr (if insensitive?
+                                     (format "CONTAINS(LCASE(STR(?%s)), LCASE(%s))" var needle)
+                                     (format "CONTAINS(STR(?%s), %s)" var needle))]
                           (str "(" expr ")"))
               :is-null (format "(!BOUND(?%s))" var)
               :not-null (format "(BOUND(?%s))" var)
@@ -167,7 +167,7 @@
       (when (seq parts)
         (let [clause (str "ORDER BY " (str/join " " parts))]
           (log/debugf "[mbql] Order clause: %s" clause)
-          clause)))) )
+          clause)))))
 
 (defn- ensure-binding-id
   "Expose subject as ?subject."
@@ -188,10 +188,10 @@
                                  table-id (count fields) (count order-by) (pr-str limit) (boolean filter-clause))
         field-ids    (collect-field-ids inner)
         field-id->prop (into {}
-                              (for [fid field-ids
-                                    :let [nm (:name (field-id->metadata fid))]
-                                    :when (and nm (not (id-field? fid)))]
-                                [fid nm]))
+                             (for [fid field-ids
+                                   :let [nm (:name (field-id->metadata fid))]
+                                   :when (and nm (not (id-field? fid)))]
+                               [fid nm]))
         field-id->var  (build-var-aliases field-ids)
         triples-for-fields (->> fields
                                 (keep field-token->id)
@@ -231,11 +231,11 @@
                          (when (seq select-vars)
                            (str " " (str/join " " (map #(str "?" %) select-vars)))))
         where-body  (->> (concat [(format "  ?s a <%s> ." class-uri)
-                                   (ensure-binding-id)]
-                                  triples-for-fields
-                                  triples-for-extras
-                                  filters)
-                          (str/join "\n"))
+                                  (ensure-binding-id)]
+                                 triples-for-fields
+                                 triples-for-extras
+                                 filters)
+                         (str/join "\n"))
         where-part  (str "WHERE {\n" where-body "\n}")
         limit-part  (when (number? limit) (str "LIMIT " limit))
         query       (str (str/trim select-part) "\n"
