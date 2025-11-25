@@ -13,6 +13,7 @@
             [metabase.driver.sparql.mbql :as mbql]
             [metabase.driver.sparql.features :as features]
             [metabase.driver.sparql.properties :as properties]
+            [metabase.driver.sparql.error :as error]
             [metabase.util.log :as log]))
 
 ;; Register the SPARQL driver in Metabase's driver system
@@ -27,9 +28,7 @@
 ;; Implements humanize-connection-error-message multimethod to provide user-friendly error messages.
 (defmethod driver/humanize-connection-error-message :sparql
   [_ message]
-  (log/debugf "[humanize-connection-error-message] - Received message: %s" message)
-  ;; TODO: add humanized error messages for SPARQL driver.
-  message)
+  (error/humanize-connection-error-message message))
 
 ;; Implements database-supports? multimethod to define supported features.
 (doseq [[feature supported?] {:metadata/key-constraints false

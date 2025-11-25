@@ -20,8 +20,10 @@
      true if the connection is successful, false otherwise."
   [endpoint options]
   (log/info "Trying to connect to SPARQL endpoint:" endpoint)
-  (let [[success _] (execute/execute-sparql-query endpoint (templates/connection-test-query) options)]
-    success))
+  (let [[success result] (execute/execute-sparql-query endpoint (templates/connection-test-query) options)]
+    (if success
+      true
+      (throw (Exception. (str "Connection failed: " result))))))
 
 (defn dbms-version
   "Checks and returns the version of the SPARQL endpoint.
