@@ -34,7 +34,7 @@ PREFIX dbr: <http://dbpedia.org/resource/>
 PREFIX dbo: <http://dbpedia.org/ontology/>
 PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
 
-SELECT DISTINCT ?scientist ?name ?birthDate ?deathDate 
+SELECT DISTINCT ?scientist ?name ?birthDate ?deathDate
 WHERE {
   ?scientist a dbo:Scientist ;
              dbo:nationality dbr:Brazil ;
