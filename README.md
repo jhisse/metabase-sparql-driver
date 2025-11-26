@@ -18,10 +18,10 @@ This driver represents RDF classes as tables and properties as columns, allowing
 
 ## :handshake: Compatibility
 
-| Driver Version | Metabase Version | Notes |
-|:---------------|:-----------------|:------|
-| **v0.1.0+**    | v0.56.3+         | Requires `describe-database*` (added in 0.56.3). |
-| **v0.0.1 - v0.0.9** | < v0.56.3       | Uses legacy `describe-database`. |
+| Driver Version      | Metabase Version | Notes                                            |
+|:--------------------|:-----------------|:-------------------------------------------------|
+| **v0.1.0+**         | v0.56.3+         | Requires `describe-database*` (added in 0.56.3). |
+| **v0.0.1 - v0.0.9** | < v0.56.3        | Uses legacy `describe-database`.                 |
 
 ## :zap: Quick Start
 
@@ -75,9 +75,9 @@ ASK { dbr:Albert_Einstein a dbo:Scientist }
 
 ## :camera: Screenshots
 
-![WikiData SPARQL Example - Barcelona Museums Map](./images/sparql-exemple-barcelona-museums-map.png)
+![Wikidata SPARQL Example - Barcelona Museums Map](./images/sparql-example-barcelona-museums-map.png)
 
-![AgroVoc SPARQL Example - Concepts by Language](./images/sparql-exemple-agrovoc-concepts-by-language.png)
+![AgroVoc SPARQL Example - Concepts by Language](./images/sparql-example-agrovoc-concepts-by-language.png)
 
 ![DBpedia SPARQL Example - Books by Country by Genre](./images/sparql-example-books-by-country-by-genre.png)
 
@@ -85,30 +85,30 @@ ASK { dbr:Albert_Einstein a dbo:Scientist }
 
 The driver automatically converts XSD datatypes to Metabase types:
 
-| XSD Datatype | Metabase Type | Examples |
-|:-------------|:--------------|:---------|
-| `xsd:integer`, `xsd:int`, `xsd:long`, `xsd:short`, `xsd:byte` | Integer | `42`, `-100` |
-| `xsd:nonNegativeInteger`, `xsd:positiveInteger`, `xsd:unsignedInt` | Integer | `0`, `1`, `255` |
-| `xsd:decimal`, `xsd:float`, `xsd:double` | Float | `3.14`, `2.718` |
-| `xsd:boolean` | Boolean | `true`, `false` |
-| `xsd:dateTime`, `xsd:gYear`, `xsd:gYearMonth` | DateTime | `2024-01-15T10:30:00Z` |
-| `xsd:date`, `xsd:gMonthDay`, `xsd:gDay`, `xsd:gMonth` | Date | `2024-01-15` |
-| `xsd:time` | Time | `10:30:00` |
-| URIs | URL | `http://dbpedia.org/resource/Berlin` |
-| Literals without datatype or with language tags | Text | `"Hello"@en` |
+| XSD Datatype                                                       | Metabase Type | Examples                             |
+|:-------------------------------------------------------------------|:--------------|:-------------------------------------|
+| `xsd:integer`, `xsd:int`, `xsd:long`, `xsd:short`, `xsd:byte`      | Integer       | `42`, `-100`                         |
+| `xsd:nonNegativeInteger`, `xsd:positiveInteger`, `xsd:unsignedInt` | Integer       | `0`, `1`, `255`                      |
+| `xsd:decimal`, `xsd:float`, `xsd:double`                           | Float         | `3.14`, `2.718`                      |
+| `xsd:boolean`                                                      | Boolean       | `true`, `false`                      |
+| `xsd:dateTime`, `xsd:gYear`, `xsd:gYearMonth`                      | DateTime      | `2024-01-15T10:30:00Z`               |
+| `xsd:date`, `xsd:gMonthDay`, `xsd:gDay`, `xsd:gMonth`              | Date          | `2024-01-15`                         |
+| `xsd:time`                                                         | Time          | `10:30:00`                           |
+| URIs                                                               | URL           | `http://dbpedia.org/resource/Berlin` |
+| Literals without datatype or with language tags                    | Text          | `"Hello"@en`                         |
 
 ## :wrench: Configuration
 
-
-| Field                                | Required | Description                                          | Example/Options               |
-|:-------------------------------------|:--------:|:-----------------------------------------------------|:------------------------------|
-| Endpoint URL                         |    ✅    | SPARQL endpoint URL                                  | `https://dbpedia.org/sparql`  |
-| Default Graph                        |    ❌    | Default graph URI                                    | `http://dbpedia.org`          |
-| Ignore TLS/SSL certificate validation|    ❌    | Skip SSL validation                                  | `false`                       |
-| Metadata Sync Strategy (Advanced)    |    ❌    | How to discover tables/fields                        | `auto` / `none` / `explicit`  |
-| Schema Configuration (Advanced)      |    ❌    | JSON schema (visible when strategy is `explicit`)    | See example below             |
+| Field                                 | Required | Description                                       | Example/Options              |
+|:--------------------------------------|:--------:|:--------------------------------------------------|:-----------------------------|
+| Endpoint URL                          |    ✅    | SPARQL endpoint URL                               | `https://dbpedia.org/sparql` |
+| Default Graph                         |    ❌    | Default graph URI                                 | `http://dbpedia.org`         |
+| Ignore TLS/SSL certificate validation |    ❌    | Skip SSL validation                               | `false`                      |
+| Metadata Sync Strategy (Advanced)     |    ❌    | How to discover tables/fields                     | `auto` / `none` / `explicit` |
+| Schema Configuration (Advanced)       |    ❌    | JSON schema (visible when strategy is `explicit`) | See example below            |
 
 **Metadata Sync Strategy options:**
+
 - **`auto`** (default): Automatically discover tables and fields from the endpoint
   - **Class Discovery Limit**: Maximum number of RDF classes (tables) to discover (default: 100)
   - **Property Discovery Limit**: Maximum number of properties (fields) per class (default: 20)
@@ -148,6 +148,7 @@ If you choose **Explicit** as the Metadata Sync Strategy, you can use the follow
 ```
 
 The schema is a JSON object with a `tables` key, which is an array of table objects. Each table object has:
+
 - `name` (required): URI of the RDF class
 - `description` (optional): Human-readable description of the table
 - `fields` (required): Array of property URIs to include as columns
@@ -274,11 +275,13 @@ java --add-opens java.base/java.nio=ALL-UNNAMED -Dlog4j.configurationFile=file:.
 ```
 
 **Requirements:**
+
 - Java 21 installed
 - Place `metabase.jar` in the project root folder
 - The `log4j2.xml` file is already configured for SPARQL driver debugging
 
 **What you'll see:**
+
 - SPARQL query execution details
 - Connection attempts and errors
 - Data type conversion processes
