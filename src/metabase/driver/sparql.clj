@@ -118,10 +118,10 @@
   (log/debugf "[dbms-version] - Checking version for database: %s" (:name database))
   (connection/dbms-version _driver database))
 
-;; Implements describe-database multimethod to discover RDF classes as tables.
-(defmethod driver/describe-database :sparql
+;; Implements describe-database* multimethod to discover RDF classes as tables.
+(defmethod driver/describe-database* :sparql
   [_driver database]
-  (log/debugf "[describe-database] - Describing database: %s" (:name database))
+  (log/debugf "[describe-database*] - Describing database: %s" (:name database))
   (database/describe-database _driver database))
 
 ;; Implements execute-reducible-query multimethod to execute a SPARQL query and process the results for Metabase.

@@ -16,6 +16,13 @@ This driver represents RDF classes as tables and properties as columns, allowing
 > [!TIP]
 > If this repository is useful to you, please consider starring it ⭐.
 
+## :handshake: Compatibility
+
+| Driver Version | Metabase Version | Notes |
+|:---------------|:-----------------|:------|
+| **v0.1.0+**    | v0.56.3+         | Requires `describe-database*` (added in 0.56.3). |
+| **v0.0.1 - v0.0.9** | < v0.56.3       | Uses legacy `describe-database`. |
+
 ## :zap: Quick Start
 
 1. **Download** the latest driver from [releases page](https://github.com/jhisse/metabase-sparql-driver/releases)
