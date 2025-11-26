@@ -152,6 +152,13 @@ The schema is a JSON object with a `tables` key, which is an array of table obje
 }
 ```
 
+## :warning: Limitations and Known Issues
+
+- **Aggregations**: Currently, the driver does not support aggregation functions in Query Builder (e.g., `COUNT`, `SUM`, `AVG`). Queries using "Summarize" in Metabase will likely fail or return incorrect results. Native queries using aggregation functions and any other SPARQL features are supported.
+- **Performance**: Fetching large result sets or performing metadata discovery on extensive endpoints can be resource-intensive. To mitigate this, we implemented **Configurable Limits** (Class/Property Limit, Sample Size) and **Sync Strategies** (`explicit` or `none`) to control the scope of automatic discovery or skip it entirely.
+- **Filter Support**: While **basic filtering works in Query Builder**, complex Metabase filter expressions or custom expressions might not be fully translated to SPARQL.
+- **Authentication**: Currently, **no authentication** is supported. The driver does not provide fields for username/password.
+
 ## :building_construction: Build Locally From Source
 
 ### Prerequisites
