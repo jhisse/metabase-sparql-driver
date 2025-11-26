@@ -1,6 +1,9 @@
 # Metabase SPARQL Driver
 
-[![License: AGPL v3](https://img.shields.io/badge/License-AGPL%20v3-blue.svg)](https://www.gnu.org/licenses/agpl-3.0)
+![GitHub Release](https://img.shields.io/github/v/release/jhisse/metabase-sparql-driver)
+![Build Status](https://img.shields.io/github/actions/workflow/status/jhisse/metabase-sparql-driver/build-and-release.yml)
+![GitHub License](https://img.shields.io/github/license/jhisse/metabase-sparql-driver)
+![GitHub Release Date](https://img.shields.io/github/release-date/jhisse/metabase-sparql-driver)
 
 A driver for connecting Metabase to SPARQL endpoints for querying RDF data.
 
