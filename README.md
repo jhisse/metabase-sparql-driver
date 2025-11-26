@@ -13,6 +13,9 @@ This driver enables Metabase to connect to SPARQL endpoints using HTTP requests 
 
 This driver represents RDF classes as tables and properties as columns, allowing you to use Metabase's visual query builder to create SPARQL queries intuitively. Discovering the most frequent classes and properties can be computationally expensive on large datasets. You can disable this metadata synchronization feature in the driver's advanced configuration settings.
 
+> [!TIP]
+> If this repository is useful to you, please consider starring it ⭐.
+
 ## :zap: Quick Start
 
 1. **Download** the latest driver from [releases page](https://github.com/jhisse/metabase-sparql-driver/releases)
@@ -63,7 +66,32 @@ ASK { dbr:Albert_Einstein a dbo:Scientist }
 
 ![DBpedia Ask Query](./images/ask-query-example.png)
 
+## :camera: Screenshots
+
+![WikiData SPARQL Example - Barcelona Museums Map](./images/sparql-exemple-barcelona-museums-map.png)
+
+![AgroVoc SPARQL Example - Concepts by Language](./images/sparql-exemple-agrovoc-concepts-by-language.png)
+
+![DBpedia SPARQL Example - Books by Country by Genre](./images/sparql-example-books-by-country-by-genre.png)
+
+## :arrows_counterclockwise: Automatic Type Conversion
+
+The driver automatically converts XSD datatypes to Metabase types:
+
+| XSD Datatype | Metabase Type | Examples |
+|:-------------|:--------------|:---------|
+| `xsd:integer`, `xsd:int`, `xsd:long`, `xsd:short`, `xsd:byte` | Integer | `42`, `-100` |
+| `xsd:nonNegativeInteger`, `xsd:positiveInteger`, `xsd:unsignedInt` | Integer | `0`, `1`, `255` |
+| `xsd:decimal`, `xsd:float`, `xsd:double` | Float | `3.14`, `2.718` |
+| `xsd:boolean` | Boolean | `true`, `false` |
+| `xsd:dateTime`, `xsd:gYear`, `xsd:gYearMonth` | DateTime | `2024-01-15T10:30:00Z` |
+| `xsd:date`, `xsd:gMonthDay`, `xsd:gDay`, `xsd:gMonth` | Date | `2024-01-15` |
+| `xsd:time` | Time | `10:30:00` |
+| URIs | URL | `http://dbpedia.org/resource/Berlin` |
+| Literals without datatype or with language tags | Text | `"Hello"@en` |
+
 ## :wrench: Configuration
+
 
 | Field                                | Required | Description                                          | Example/Options               |
 |:-------------------------------------|:--------:|:-----------------------------------------------------|:------------------------------|
@@ -75,6 +103,9 @@ ASK { dbr:Albert_Einstein a dbo:Scientist }
 
 **Metadata Sync Strategy options:**
 - **`auto`** (default): Automatically discover tables and fields from the endpoint
+  - **Class Discovery Limit**: Maximum number of RDF classes (tables) to discover (default: 100)
+  - **Property Discovery Limit**: Maximum number of properties (fields) per class (default: 20)
+  - **Discovery Sample Size**: Number of instances to sample when discovering properties (default: 10000)
 - **`none`**: Skip metadata sync entirely (useful for very large datasets where discovery is slow)
 - **`explicit`**: Use a manually defined JSON schema (see example below)
 
