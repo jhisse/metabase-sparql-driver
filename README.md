@@ -20,7 +20,7 @@ This driver represents RDF classes as tables and properties as columns, allowing
 
 | Driver Version      | Metabase Version | Notes                                            |
 |:--------------------|:-----------------|:-------------------------------------------------|
-| **v0.1.0+**         | v0.56.3+         | Requires `describe-database*` (added in 0.56.3). |
+| **v0.0.10+**        | v0.56.3+         | Requires `describe-database*` (added in 0.56.3). |
 | **v0.0.1 - v0.0.9** | < v0.56.3        | Uses legacy `describe-database`.                 |
 
 ## :zap: Quick Start
