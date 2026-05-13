@@ -11,10 +11,10 @@
 
 (defn- extract-class-name
   "Extracts the class name from a URI.
-   
+
    Parameters:
      class-uri - RDF class URI
-   
+
    Returns:
      Class name extracted from the last part of the URI (after the last '/' or '#')."
   [class-uri]
@@ -25,6 +25,38 @@
     (if (str/blank? last-part)
       class-uri
       last-part)))
+
+(defn- shorten-uri
+  "When `uri` starts with `default-graph`, strip that prefix; otherwise return `uri`.
+   Blank `default-graph` is treated as a no-op so behavior is unchanged when the user
+   hasn't configured a Default Graph URI. If stripping would produce a blank string
+   (i.e. `uri` equals `default-graph` exactly), the original `uri` is returned to keep
+   `:name` non-blank as required by Metabase's field schema."
+  [uri default-graph]
+  (if (and (not (str/blank? default-graph))
+           (string? uri)
+           (str/starts-with? uri default-graph))
+    (let [tail (subs uri (count default-graph))]
+      (if (str/blank? tail) uri tail))
+    uri))
+
+(defn- foreign-uri?
+  "True when `default-graph` is configured and `uri` does not start with it."
+  [uri default-graph]
+  (and (not (str/blank? default-graph))
+       (string? uri)
+       (not (str/starts-with? uri default-graph))))
+
+(defn- absolute-uri
+  "Reverse of [[shorten-uri]]. If `nm` already has a URI scheme it's returned as-is.
+   Otherwise it's treated as relative to `default-graph` (the implicit base prefix).
+   Returns `nm` unchanged when `default-graph` is blank or `nm` is already absolute."
+  [nm default-graph]
+  (cond
+    (str/blank? nm) nm
+    (re-find #"^[A-Za-z][A-Za-z0-9+.-]*:" nm) nm
+    (str/blank? default-graph) nm
+    :else (str default-graph nm)))
 
 (defn- parse-schema-config
   "Parses the schema configuration JSON string.
@@ -38,18 +70,25 @@
         nil))))
 
 (defn- build-pk-field
-  "Creates the primary key field (id) for a table."
+  "Creates the synthetic primary-key field that represents the RDF subject of each
+   instance. Named `subject` to mirror the `?subject` variable used in the emitted
+   SPARQL and to avoid collisions with shortened property URIs whose local name is
+   `id` (a very common case once Default Graph stripping is in effect)."
   []
-  {:name "id"
+  {:name "subject"
    :database-type "uri"
    :base-type :type/Text
    :pk? true
    :database-position 0})
 
 (defn- build-field-from-uri
-  "Creates a field definition from a property URI."
-  [idx field-uri]
-  {:name field-uri
+  "Creates a field definition from a property URI.
+
+   `default-graph` is stripped from the URI when it matches, so the column
+   name in Metabase is the short local name (e.g. `naam`) instead of the
+   full URI. The full URI is reconstructed at query-compile time."
+  [default-graph idx field-uri]
+  {:name (shorten-uri field-uri default-graph)
    :database-type "string"
    :base-type :type/Text
    :pk? false
@@ -57,19 +96,23 @@
 
 (defn- build-fields-from-explicit-config
   "Builds field set from explicit schema configuration."
-  [explicit-table]
-  (let [pk-field (build-pk-field)
-        other-fields (map-indexed build-field-from-uri (:fields explicit-table))]
+  [default-graph hide-foreign? explicit-table]
+  (let [pk-field     (build-pk-field)
+        candidates   (cond->> (:fields explicit-table)
+                       hide-foreign? (remove #(foreign-uri? % default-graph)))
+        other-fields (map-indexed (partial build-field-from-uri default-graph) candidates)]
     (set (cons pk-field other-fields))))
 
 (defn- build-fields-from-sparql-query
   "Builds field set from SPARQL query results."
-  [bindings]
-  (let [pk-field (build-pk-field)
+  [default-graph hide-foreign? bindings]
+  (let [pk-field   (build-pk-field)
+        candidates (cond->> bindings
+                     hide-foreign? (remove #(foreign-uri? (get-in % [:property :value]) default-graph)))
         other-fields (map-indexed
                       (fn [idx binding]
-                        (build-field-from-uri idx (get-in binding [:property :value])))
-                      bindings)]
+                        (build-field-from-uri default-graph idx (get-in binding [:property :value])))
+                      candidates)]
     (set (cons pk-field other-fields))))
 
 (defn- describe-table-none
@@ -82,27 +125,30 @@
 
 (defn- describe-table-explicit
   "Handles describe-table when sync strategy is 'explicit'."
-  [table explicit-table]
+  [default-graph hide-foreign? table explicit-table]
   (log/info "Using explicit schema configuration for table:" (:name table))
   {:name (:name table)
    :schema nil
-   :fields (build-fields-from-explicit-config explicit-table)})
+   :fields (build-fields-from-explicit-config default-graph hide-foreign? explicit-table)})
 
 (defn- describe-table-auto
   "Handles describe-table when sync strategy is 'auto' (or fallback)."
   [database table]
-  (let [endpoint (-> database :details :endpoint)
-        options {:insecure? (-> database :details :use-insecure)
-                 :default-graph (-> database :details :default-graph)}
-        class-uri (:name table)
-        property-limit (or (-> database :details :property-limit) 20)
-        sample-limit (or (-> database :details :sample-limit) 10000)
-        query (templates/class-properties-query class-uri property-limit sample-limit)
+  (let [details        (:details database)
+        default-graph  (:default-graph details)
+        hide-foreign?  (boolean (:hide-foreign-uris details))
+        endpoint       (:endpoint details)
+        options        {:insecure? (:use-insecure details)
+                        :default-graph default-graph}
+        class-uri      (absolute-uri (:name table) default-graph)
+        property-limit (or (:property-limit details) 20)
+        sample-limit   (or (:sample-limit details) 10000)
+        query          (templates/class-properties-query class-uri property-limit sample-limit)
         [success result] (execute/execute-sparql-query endpoint query options)]
     (if success
       {:name (:name table)
        :schema nil
-       :fields (build-fields-from-sparql-query (get-in result [:results :bindings]))}
+       :fields (build-fields-from-sparql-query default-graph hide-foreign? (get-in result [:results :bindings]))}
       (do
         (log/error "Error describing SPARQL table:" result)
         {:fields #{}}))))
@@ -113,38 +159,44 @@
    Parameters:
      _ - driver (not used)
      database - Metabase Database instance
-     table - Table definition with :name containing the RDF class URI
-   
+     table - Table definition with :name containing the (possibly shortened) RDF class URI
+
    Returns:
      Map with :name, :schema, and :fields keys describing the table structure"
   [_ database table]
-  (let [sync-strategy (keyword (get-in database [:details :metadata-sync-strategy] "auto"))
-        schema-config (some-> database :details :schema-config parse-schema-config)
+  (let [details        (:details database)
+        sync-strategy  (keyword (get details :metadata-sync-strategy "auto"))
+        default-graph  (:default-graph details)
+        hide-foreign?  (boolean (:hide-foreign-uris details))
+        schema-config  (some-> details :schema-config parse-schema-config)
+        full-name      (absolute-uri (:name table) default-graph)
         explicit-table (when (= sync-strategy :explicit)
-                         (some #(when (= (:name %) (:name table)) %) (:tables schema-config)))]
+                         (some #(when (= (:name %) full-name) %) (:tables schema-config)))]
     (cond
       (= sync-strategy :none)
       (describe-table-none table)
 
       (and (= sync-strategy :explicit) explicit-table)
-      (describe-table-explicit table explicit-table)
+      (describe-table-explicit default-graph hide-foreign? table explicit-table)
 
       :else
       (describe-table-auto database table))))
 
 (defn- build-table-from-config
   "Builds a table definition from schema configuration."
-  [table]
-  {:name (:name table)
-   :schema nil
-   :display-name (extract-class-name (:name table))
-   :description (or (:description table)
-                    (str "RDF Class: " (:name table) " (Explicit)"))})
+  [default-graph table]
+  (let [uri        (:name table)
+        short-name (shorten-uri uri default-graph)]
+    {:name short-name
+     :schema nil
+     :display-name (extract-class-name uri)
+     :description (or (:description table)
+                      (str "RDF Class: " uri " (Explicit)"))}))
 
 (defn- build-table-from-sparql-result
   "Builds a table definition from SPARQL query results."
-  [{:keys [uri count]}]
-  {:name uri
+  [default-graph {:keys [uri count]}]
+  {:name (shorten-uri uri default-graph)
    :schema nil
    :display-name (extract-class-name uri)
    :description (str "RDF Class: " uri " (Instances: " count ")")})
@@ -157,24 +209,30 @@
 
 (defn- describe-database-explicit
   "Handles describe-database when sync strategy is 'explicit'."
-  [database schema-config]
+  [default-graph hide-foreign? database schema-config]
   (log/info "Using explicit schema configuration for database:" (:name database))
-  {:tables (set (map build-table-from-config (:tables schema-config)))})
+  (let [tables (cond->> (:tables schema-config)
+                 hide-foreign? (remove #(foreign-uri? (:name %) default-graph)))]
+    {:tables (set (map #(build-table-from-config default-graph %) tables))}))
 
 (defn- describe-database-auto
   "Handles describe-database when sync strategy is 'auto' (or fallback)."
   [database]
-  (let [endpoint (-> database :details :endpoint)
-        options {:insecure? (-> database :details :use-insecure)
-                 :default-graph (-> database :details :default-graph)}
-        class-limit (or (-> database :details :class-limit) 100)
+  (let [details       (:details database)
+        default-graph (:default-graph details)
+        hide-foreign? (boolean (:hide-foreign-uris details))
+        endpoint      (:endpoint details)
+        options       {:insecure? (:use-insecure details)
+                       :default-graph default-graph}
+        class-limit   (or (:class-limit details) 100)
         [success result] (execute/execute-sparql-query endpoint (templates/classes-discovery-query class-limit) options)]
     (if success
-      (let [classes-with-counts (map (fn [binding]
-                                       {:uri (get-in binding [:class :value])
-                                        :count (bigint (get-in binding [:count :value]))})
-                                     (get-in result [:results :bindings]))]
-        {:tables (set (map build-table-from-sparql-result classes-with-counts))})
+      (let [classes-with-counts (cond->> (get-in result [:results :bindings])
+                                  :always (map (fn [binding]
+                                                 {:uri   (get-in binding [:class :value])
+                                                  :count (bigint (get-in binding [:count :value]))}))
+                                  hide-foreign? (remove #(foreign-uri? (:uri %) default-graph)))]
+        {:tables (set (map #(build-table-from-sparql-result default-graph %) classes-with-counts))})
       (do
         (log/error "Error describing SPARQL database:" result)
         {:tables #{}}))))
@@ -189,14 +247,17 @@
    Returns:
      Map with the :tables key containing a set of table definitions."
   [_ database]
-  (let [sync-strategy (keyword (get-in database [:details :metadata-sync-strategy] "auto"))
-        schema-config (some-> database :details :schema-config parse-schema-config)]
+  (let [details       (:details database)
+        sync-strategy (keyword (get details :metadata-sync-strategy "auto"))
+        default-graph (:default-graph details)
+        hide-foreign? (boolean (:hide-foreign-uris details))
+        schema-config (some-> details :schema-config parse-schema-config)]
     (cond
       (= sync-strategy :none)
       (describe-database-none)
 
       (and (= sync-strategy :explicit) schema-config)
-      (describe-database-explicit database schema-config)
+      (describe-database-explicit default-graph hide-foreign? database schema-config)
 
       :else
       (describe-database-auto database))))

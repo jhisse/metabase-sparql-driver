@@ -30,17 +30,41 @@
     (lib.metadata/field (qp.store/metadata-provider) field-id)))
 
 (defn- id-field?
-  "Return true if the field-id represents the subject (id) column."
+  "Return true if the field-id represents the synthetic subject column.
+
+   `:pk?` is the authoritative signal; the name fallbacks cover both the current
+   PK name (`subject`) and the legacy one (`id`) for databases that haven't been
+   re-synced after the rename."
   [field-id]
   (let [m (field-id->metadata field-id)]
-    (or (= "id" (:name m))
-        (:pk? m))))
+    (or (:pk? m)
+        (= "subject" (:name m))
+        (= "id" (:name m)))))
+
+(defn- database-default-graph
+  "Read the Default Graph URI from the connection details of the current database."
+  []
+  (some-> (lib.metadata/database (qp.store/metadata-provider))
+          :details
+          :default-graph))
+
+(defn- absolute-uri
+  "Reconstruct a full URI from a (possibly shortened) name.
+   If `nm` already has a URI scheme, returns it unchanged; otherwise prepends
+   `default-graph` (the implicit base prefix). Blank `default-graph` is a no-op."
+  [nm default-graph]
+  (cond
+    (str/blank? nm) nm
+    (re-find #"^[A-Za-z][A-Za-z0-9+.-]*:" nm) nm
+    (str/blank? default-graph) nm
+    :else (str default-graph nm)))
 
 (defn- table-id->class-uri
   "Resolve RDF class URI (table name) from :source-table."
   [table-id]
-  (let [uri (some-> (lib.metadata/table (qp.store/metadata-provider) table-id)
-                    :name)]
+  (let [nm  (some-> (lib.metadata/table (qp.store/metadata-provider) table-id)
+                    :name)
+        uri (absolute-uri nm (database-default-graph))]
     (log/debugf "[mbql] Resolved class URI for table-id %s: %s" table-id uri)
     uri))
 
@@ -177,22 +201,23 @@
    so the rest of the compiler can read `:query`, `:source-table`, `:fields`,
    `:filter`, `:order-by`, `:limit` directly."
   [_driver outer-query]
-  (let [outer-query  (driver-api/->legacy-MBQL outer-query)
-        inner        (:query outer-query)
-        table-id     (:source-table inner)
-        class-uri    (table-id->class-uri table-id)
-        fields       (:fields inner)
-        order-by     (:order-by inner)
-        limit        (:limit inner)
+  (let [outer-query   (driver-api/->legacy-MBQL outer-query)
+        inner         (:query outer-query)
+        table-id      (:source-table inner)
+        class-uri     (table-id->class-uri table-id)
+        default-graph (database-default-graph)
+        fields        (:fields inner)
+        order-by      (:order-by inner)
+        limit         (:limit inner)
         filter-clause (:filter inner)
-        _            (log/debugf "[mbql] Start compile: table-id=%s fields=%d order-by=%d limit=%s has-filter=%s"
-                                 table-id (count fields) (count order-by) (pr-str limit) (boolean filter-clause))
-        field-ids    (collect-field-ids inner)
+        _             (log/debugf "[mbql] Start compile: table-id=%s fields=%d order-by=%d limit=%s has-filter=%s"
+                                  table-id (count fields) (count order-by) (pr-str limit) (boolean filter-clause))
+        field-ids     (collect-field-ids inner)
         field-id->prop (into {}
                              (for [fid field-ids
                                    :let [nm (:name (field-id->metadata fid))]
                                    :when (and nm (not (id-field? fid)))]
-                               [fid nm]))
+                               [fid (absolute-uri nm default-graph)]))
         field-id->var  (build-var-aliases field-ids)
         triples-for-fields (->> fields
                                 (keep field-token->id)
