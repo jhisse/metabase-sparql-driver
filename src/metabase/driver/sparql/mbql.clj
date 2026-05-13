@@ -3,6 +3,7 @@
   (:require
    [clojure.string :as str]
    [clojure.set :as set]
+   [metabase.driver-api.core :as driver-api]
    [metabase.query-processor.store :as qp.store]
    [metabase.lib.metadata :as lib.metadata]
    [metabase.util.log :as log]))
@@ -170,9 +171,14 @@
           clause)))))
 
 (defn mbql->native
-  "Compile outer MBQL to a native SPARQL map."
+  "Compile outer MBQL to a native SPARQL map.
+
+   Metabase passes pMBQL (Lib / MBQL 5) here; convert to legacy MBQL first
+   so the rest of the compiler can read `:query`, `:source-table`, `:fields`,
+   `:filter`, `:order-by`, `:limit` directly."
   [_driver outer-query]
-  (let [inner        (:query outer-query)
+  (let [outer-query  (driver-api/->legacy-MBQL outer-query)
+        inner        (:query outer-query)
         table-id     (:source-table inner)
         class-uri    (table-id->class-uri table-id)
         fields       (:fields inner)

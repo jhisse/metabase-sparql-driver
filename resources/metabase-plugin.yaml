@@ -1,11 +1,77 @@
 info:
   name: Metabase SPARQL Driver
-  version: 0.0.10
+  version: 0.0.11
   description: Driver for connecting to SPARQL endpoints
 driver:
   name: sparql
   display-name: SPARQL
   lazy-load: true
+  connection-properties:
+    - name: endpoint
+      display-name: SPARQL Endpoint
+      placeholder: https://dbpedia.org/sparql
+      required: true
+    - name: use-insecure
+      display-name: Ignore SSL Certificate Errors
+      type: boolean
+      default: false
+    - name: default-graph
+      display-name: Default Graph URI
+      placeholder: http://dbpedia.org
+    - advanced-options-start
+    - name: metadata-sync-strategy
+      display-name: Metadata Sync Strategy
+      type: select
+      default: auto
+      options:
+        - name: Automatic (Discover from Endpoint)
+          value: auto
+        - name: None (Don't sync)
+          value: none
+        - name: Explicit (Use JSON Configuration)
+          value: explicit
+      description: Choose how Metabase discovers tables and fields.
+      visible-if:
+        advanced-options: true
+    - name: schema-config
+      display-name: Schema Configuration (JSON)
+      type: text
+      placeholder: |-
+        {
+          "tables": [
+            {
+              "name": "http://example.org/Person",
+              "fields": [
+                "http://xmlns.com/foaf/0.1/givenName",
+                "http://xmlns.com/foaf/0.1/familyName"
+              ]
+            }
+          ]
+        }
+      description: 'Explicitly define tables and fields to skip discovery. Format: JSON object with a tables array.'
+      visible-if:
+        metadata-sync-strategy: explicit
+    - name: class-limit
+      display-name: Class Discovery Limit
+      type: integer
+      default: 100
+      description: Maximum number of RDF classes (tables) to discover.
+      visible-if:
+        metadata-sync-strategy: auto
+    - name: property-limit
+      display-name: Property Discovery Limit
+      type: integer
+      default: 20
+      description: Maximum number of properties (fields) to discover per class.
+      visible-if:
+        metadata-sync-strategy: auto
+    - name: sample-limit
+      display-name: Discovery Sample Size
+      type: integer
+      default: 10000
+      description: Number of instances to sample when discovering properties.
+      visible-if:
+        metadata-sync-strategy: auto
 init:
   - step: load-namespace
     namespace: metabase.driver.sparql
