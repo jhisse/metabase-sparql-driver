@@ -23,6 +23,18 @@
              (= :field (first field-token)))
     (second field-token)))
 
+(defn- field-token->opts
+  "Extract the options map from a [:field id opts] token, if any."
+  [field-token]
+  (when (and (vector? field-token) (= :field (first field-token)))
+    (let [opts (nth field-token 2 nil)]
+      (when (map? opts) opts))))
+
+(defn- field-token->join-alias
+  "Return the `:join-alias` on a field token (the marker that the field is reached via an implicit join)."
+  [field-token]
+  (:join-alias (field-token->opts field-token)))
+
 (defn- field-id->metadata
   "Resolve field metadata by ID."
   [field-id]
@@ -85,10 +97,37 @@
                 (count ids-from-fields) (count ids-from-order) (count ids-from-filter) (count all-ids))
     all-ids))
 
-(defn- var-for-field-id
-  "Return SPARQL var for a field-id (handles subject)."
-  [field-id field-id->var]
-  (if (id-field? field-id) "subject" (get field-id->var field-id)))
+(defn- var-for-token
+  "Resolve the SPARQL variable name for a `[:field id opts]` token.
+
+   - If the token carries `:join-alias`, look up the joined target var via
+     `pair->target-var` keyed by `[field-id alias]`.
+   - Otherwise the subject (PK) field always maps to `?subject`.
+   - Otherwise look up the regular alias from `field-id->var`."
+  [field-token field-id->var pair->target-var]
+  (let [fid   (field-token->id field-token)
+        alias (field-token->join-alias field-token)]
+    (cond
+      (and fid alias) (get pair->target-var [fid alias])
+      (and fid (id-field? fid)) "subject"
+      fid (get field-id->var fid))))
+
+(defn- collect-joined-pairs
+  "Walk a legacy-MBQL stage and return the set of `[field-id alias]` pairs for every
+   `[:field id {:join-alias \"...\"}]` token that appears in `:fields`, `:order-by`,
+   or `:filter`."
+  [{:keys [fields order-by] filter-clause :filter}]
+  (letfn [(walk [x]
+            (cond
+              (and (vector? x) (= :field (first x)))
+              (when-let [a (field-token->join-alias x)]
+                [[(field-token->id x) a]])
+              (sequential? x) (mapcat walk x)
+              (map? x) (mapcat walk (vals x))
+              :else []))]
+    (set (concat (mapcat walk (or fields []))
+                 (mapcat walk (mapcat (fn [[_dir fld & _]] [fld]) (or order-by [])))
+                 (walk filter-clause)))))
 
 (defn- literal->sparql
   "Convert a value to a SPARQL literal."
@@ -102,22 +141,22 @@
 
 (defn- compile-filter-expr
   "Compile a filter clause to a SPARQL boolean expression string."
-  [filter-clause field-id->var]
+  [filter-clause field-id->var pair->target-var]
   (when (sequential? filter-clause)
     (let [[op lhs rhs maybe-opts & more] filter-clause]
       (case op
         :and (let [parts (->> (concat [lhs rhs] more)
-                              (keep #(compile-filter-expr % field-id->var)))]
+                              (keep #(compile-filter-expr % field-id->var pair->target-var)))]
                (when (seq parts)
                  (str "(" (str/join " && " parts) ")")))
         :or  (let [parts (->> (concat [lhs rhs] more)
-                              (keep #(compile-filter-expr % field-id->var)))]
+                              (keep #(compile-filter-expr % field-id->var pair->target-var)))]
                (when (seq parts)
                  (str "(" (str/join " || " parts) ")")))
-        :not (when-let [inner (compile-filter-expr lhs field-id->var)]
+        :not (when-let [inner (compile-filter-expr lhs field-id->var pair->target-var)]
                (str "(!" inner ")"))
         (let [fid (field-token->id lhs)
-              var (some-> fid (var-for-field-id field-id->var))
+              var (var-for-token lhs field-id->var pair->target-var)
               opts (when (map? maybe-opts) maybe-opts)
               insensitive? (false? (:case-sensitive opts))
               v (let [x rhs]
@@ -175,17 +214,16 @@
 
 (defn- compile-basic-filter
   "Compile a filter clause to one or more FILTER lines."
-  [filter-clause field-id->var _field-id->prop]
-  (when-let [expr (compile-filter-expr filter-clause field-id->var)]
+  [filter-clause field-id->var pair->target-var]
+  (when-let [expr (compile-filter-expr filter-clause field-id->var pair->target-var)]
     [(str "  FILTER " expr)]))
 
 (defn- compile-order-by
   "Compile :order-by to ORDER BY."
-  [order-by field-id->var]
+  [order-by field-id->var pair->target-var]
   (when (seq order-by)
     (let [parts (for [[dir fld & _] order-by
-                      :let [fid (field-token->id fld)
-                            var (if (id-field? fid) "subject" (some-> fid field-id->var))]]
+                      :let [var (var-for-token fld field-id->var pair->target-var)]]
                   (when var
                     (str (str/upper-case (name dir)) "(?" var ")")))
           parts (remove nil? parts)]
@@ -199,7 +237,17 @@
 
    Metabase passes pMBQL (Lib / MBQL 5) here; convert to legacy MBQL first
    so the rest of the compiler can read `:query`, `:source-table`, `:fields`,
-   `:filter`, `:order-by`, `:limit` directly."
+   `:filter`, `:order-by`, `:limit` directly.
+
+   Left-joins (added by `add-implicit-joins` for FK-remap dimensions) are
+   emitted as a pair of independent OPTIONALs:
+
+     OPTIONAL { ?subject <fk-prop> ?<alias>_subject . }
+     OPTIONAL { ?<alias>_subject <target-prop> ?<alias>__<target-var> . }
+
+   That matches SQL LEFT JOIN semantics (rows with no FK still appear; rows
+   with FK but no target value still appear). Multi-valued FKs fan out
+   naturally — SPARQL produces one solution per matching target."
   [_driver outer-query]
   (let [outer-query   (driver-api/->legacy-MBQL outer-query)
         inner         (:query outer-query)
@@ -210,8 +258,29 @@
         order-by      (:order-by inner)
         limit         (:limit inner)
         filter-clause (:filter inner)
-        _             (log/debugf "[mbql] Start compile: table-id=%s fields=%d order-by=%d limit=%s has-filter=%s"
-                                  table-id (count fields) (count order-by) (pr-str limit) (boolean filter-clause))
+        joins         (:joins inner)
+        _             (log/debugf "[mbql] Start compile: table-id=%s fields=%d order-by=%d limit=%s has-filter=%s joins=%d"
+                                  table-id (count fields) (count order-by) (pr-str limit) (boolean filter-clause) (count joins))
+        ;; Joined-field references: `[field-id alias]` pairs that appear anywhere in the stage.
+        joined-pairs   (collect-joined-pairs inner)
+        joined-fids    (set (map first joined-pairs))
+        ;; Per-join intermediate var: ?<alias>_subject  (binds the FK target URI).
+        alias->fk-id   (into {} (for [j joins] [(:alias j) (:fk-field-id j)]))
+        alias->fk-prop (into {}
+                             (for [[alias fk-id] alias->fk-id
+                                   :let [nm (:name (field-id->metadata fk-id))]
+                                   :when nm]
+                               [alias (absolute-uri nm default-graph)]))
+        alias->intermediate-var (into {}
+                                      (for [[alias _] alias->fk-id]
+                                        [alias (sanitize-var-name (str alias "_subject"))]))
+        ;; Per joined-pair: a unique target SPARQL var name `<alias>__<field-name>`.
+        pair->target-var (into {}
+                               (for [[fid alias] joined-pairs
+                                     :let [nm (or (:name (field-id->metadata fid)) (str "f_" fid))]]
+                                 [[fid alias] (sanitize-var-name (str alias "__" nm))]))
+        ;; All field-ids referenced anywhere in the stage; we only build direct triples for
+        ;; those that aren't reached via a join.
         field-ids     (collect-field-ids inner)
         field-id->prop (into {}
                              (for [fid field-ids
@@ -220,45 +289,81 @@
                                [fid (absolute-uri nm default-graph)]))
         field-id->var  (build-var-aliases field-ids)
         triples-for-fields (->> fields
-                                (keep field-token->id)
-                                (keep (fn [fid]
-                                        (when-let [prop (and (not (id-field? fid))
-                                                             (get field-id->prop fid))]
-                                          (ensure-triple-for-field prop (get field-id->var fid))))))
-        extra-field-ids (letfn [(collect-field-tokens [x]
-                                  (cond
-                                    (and (vector? x) (= :field (first x))) [x]
-                                    (sequential? x) (mapcat collect-field-tokens x)
-                                    (map? x) (mapcat collect-field-tokens (vals x))
-                                    :else []))]
-                          (->> (concat (map #(nth % 1 nil) (or order-by []))
-                                       (collect-field-tokens filter-clause))
-                               (keep field-token->id)
-                               set
-                               (remove (set (keep field-token->id fields)))))
-        triples-for-extras (for [fid extra-field-ids
+                                (keep (fn [tok]
+                                        (let [fid   (field-token->id tok)
+                                              alias (field-token->join-alias tok)]
+                                          (when (and fid
+                                                     (not alias)
+                                                     (not (id-field? fid))
+                                                     (get field-id->prop fid))
+                                            (ensure-triple-for-field (get field-id->prop fid)
+                                                                     (get field-id->var fid)))))))
+        ;; Field tokens appearing in order-by/filter but not in fields (still need their triple).
+        extra-direct-fids (letfn [(collect-field-tokens [x]
+                                    (cond
+                                      (and (vector? x) (= :field (first x))) [x]
+                                      (sequential? x) (mapcat collect-field-tokens x)
+                                      (map? x) (mapcat collect-field-tokens (vals x))
+                                      :else []))]
+                            (->> (concat (mapcat (fn [[_dir fld & _]] [fld]) (or order-by []))
+                                         (collect-field-tokens filter-clause))
+                                 (remove field-token->join-alias)
+                                 (keep field-token->id)
+                                 set
+                                 (remove (set (keep field-token->id (filter (complement field-token->join-alias) fields))))
+                                 (remove joined-fids)
+                                 (remove id-field?)))
+        triples-for-extras (for [fid extra-direct-fids
                                  :let [prop (get field-id->prop fid)
                                        var  (get field-id->var fid)]
-                                 :when prop]
+                                 :when (and prop var)]
                              (ensure-triple-for-field prop var))
-        _                 (log/debugf "[mbql] Triples: fields=%d extras=%d" (count triples-for-fields) (count triples-for-extras))
+        ;; OPTIONAL triples introduced by left-joins.
+        join-fk-triples (for [j joins
+                              :let [alias (:alias j)
+                                    fk-prop (get alias->fk-prop alias)
+                                    inter-var (get alias->intermediate-var alias)]
+                              :when (and fk-prop inter-var)]
+                          (format "  OPTIONAL { ?subject <%s> ?%s . }" fk-prop inter-var))
+        join-target-triples (for [[fid alias] joined-pairs
+                                  :let [nm (:name (field-id->metadata fid))
+                                        prop (absolute-uri nm default-graph)
+                                        target-var (get pair->target-var [fid alias])
+                                        inter-var (get alias->intermediate-var alias)]
+                                  :when (and prop target-var inter-var)]
+                              (format "  OPTIONAL { ?%s <%s> ?%s . }" inter-var prop target-var))
+        _ (log/debugf "[mbql] Triples: fields=%d extras=%d join-fk=%d join-targets=%d"
+                      (count triples-for-fields) (count triples-for-extras)
+                      (count join-fk-triples) (count join-target-triples))
         filters (when filter-clause
-                  (or (compile-basic-filter filter-clause field-id->var field-id->prop)
+                  (or (compile-basic-filter filter-clause field-id->var pair->target-var)
                       []))
-        _       (log/debugf "[mbql] Filters count: %d" (count filters))
-        order-clause (compile-order-by order-by field-id->var)
-        select-vars (->> (keep field-token->id fields)
-                         (remove id-field?)
-                         (map field-id->var)
-                         (remove nil?)
-                         distinct
-                         vec)
+        _ (log/debugf "[mbql] Filters count: %d" (count filters))
+        order-clause (compile-order-by order-by field-id->var pair->target-var)
+        ;; SELECT: ?subject + direct fields (non-joined) + joined target vars.
+        direct-select-vars (->> fields
+                                (remove field-token->join-alias)
+                                (keep field-token->id)
+                                (remove id-field?)
+                                (map field-id->var)
+                                (remove nil?)
+                                distinct
+                                vec)
+        joined-select-vars (->> fields
+                                (keep (fn [tok]
+                                        (when-let [a (field-token->join-alias tok)]
+                                          (get pair->target-var [(field-token->id tok) a]))))
+                                distinct
+                                vec)
+        select-vars (concat direct-select-vars joined-select-vars)
         select-part (str "SELECT ?subject"
                          (when (seq select-vars)
                            (str " " (str/join " " (map #(str "?" %) select-vars)))))
         where-body  (->> (concat [(format "  ?subject a <%s> ." class-uri)]
                                  triples-for-fields
                                  triples-for-extras
+                                 join-fk-triples
+                                 join-target-triples
                                  filters)
                          (str/join "\n"))
         where-part  (str "WHERE {\n" where-body "\n}")

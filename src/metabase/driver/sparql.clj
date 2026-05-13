@@ -42,7 +42,7 @@
                               :persist-models-enabled false
                               :binning false
                               :case-sensitivity-string-filter-options true
-                              :left-join false
+                              :left-join true ;; needed for FK-remap implicit joins; emitted as OPTIONAL chains
                               :right-join false
                               :inner-join false
                               :full-join false
