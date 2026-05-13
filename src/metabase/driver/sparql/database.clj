@@ -7,6 +7,7 @@
             [clojure.string :as str]
             [metabase.util.json :as json]
             [metabase.driver.sparql.execute :as execute]
+            [metabase.driver.sparql.shacl :as shacl]
             [metabase.driver.sparql.templates :as templates]))
 
 (defn- extract-class-name
@@ -153,6 +154,119 @@
         (log/error "Error describing SPARQL table:" result)
         {:fields #{}}))))
 
+;; ---- SHACL-driven sync ------------------------------------------------------
+
+(defn- shacl-prop->field
+  "Convert one SHACL property descriptor into a Metabase TableMetadataField."
+  [default-graph hide-foreign? idx prop]
+  (let [uri      (:property-uri prop)
+        foreign? (foreign-uri? uri default-graph)]
+    (when-not (and foreign? hide-foreign?)
+      (cond-> {:name              (shorten-uri uri default-graph)
+               :database-type     "string"
+               :base-type         (or (:base-type prop) :type/Text)
+               :pk?               false
+               :database-position (inc idx)}
+        (:semantic-type prop)     (assoc :semantic-type (:semantic-type prop))
+        (:description prop)       (assoc :field-comment (:description prop))
+        (:database-required prop) (assoc :database-required true)))))
+
+(defn- shacl-shape->table
+  "Convert one SHACL shape into a Metabase TableMetadata `:table` entry."
+  [default-graph {:keys [class-uri description]}]
+  {:name         (shorten-uri class-uri default-graph)
+   :schema       nil
+   :display-name (extract-class-name class-uri)
+   :description  (or description (str "RDF Class: " class-uri " (SHACL)"))})
+
+(defn- shacl-shape->describe-table
+  "Convert one SHACL shape into the map returned by `driver/describe-table`.
+
+   Properties are emitted in `sh:order` ascending, with `:property-uri` as a
+   tie-breaker so the output is deterministic; properties without `sh:order`
+   sort to the end."
+  [default-graph hide-foreign? {:keys [class-uri properties]}]
+  (let [pk-field   (build-pk-field)
+        candidates (cond->> properties
+                     hide-foreign? (remove #(foreign-uri? (:property-uri %) default-graph))
+                     :always       (sort-by (juxt #(or (:order %) Long/MAX_VALUE)
+                                                  :property-uri)))
+        fields     (->> candidates
+                        (map-indexed (fn [idx p] (shacl-prop->field default-graph hide-foreign? idx p)))
+                        (remove nil?))]
+    {:name   (shorten-uri class-uri default-graph)
+     :schema nil
+     :fields (set (cons pk-field fields))}))
+
+(defn- shape-for-table
+  "Find the SHACL shape whose class matches `table` (after URI reconstruction)."
+  [shapes default-graph table]
+  (let [full (absolute-uri (:name table) default-graph)]
+    (some #(when (= (:class-uri %) full) %) shapes)))
+
+(defn- shacl-shapes
+  "Fetch and cache SHACL shapes for `database`. Returns `nil` if no URL is
+   configured (we treat this as a misconfiguration and let the caller error)."
+  [database]
+  (when-let [url (-> database :details :shacl-url)]
+    (try
+      (shacl/metadata url)
+      (catch Throwable t
+        (log/errorf t "[shacl] Failed to load SHACL document at %s" url)
+        nil))))
+
+(defn fks
+  "Return the FK rows for `describe-fks` derived from the SHACL document
+   configured on `database`. Returns `nil` for non-SHACL sync strategies."
+  [database]
+  (when (= :shacl (keyword (get-in database [:details :metadata-sync-strategy] "auto")))
+    (let [default-graph (-> database :details :default-graph)
+          hide-foreign? (boolean (-> database :details :hide-foreign-uris))
+          shapes        (shacl-shapes database)]
+      (for [shape shapes
+            prop  (:properties shape)
+            :let  [fk-class (:fk-target-class prop)
+                   prop-uri (:property-uri prop)]
+            :when fk-class
+            :when (not (and hide-foreign?
+                            (or (foreign-uri? fk-class default-graph)
+                                (foreign-uri? prop-uri default-graph)
+                                (foreign-uri? (:class-uri shape) default-graph))))]
+        {:fk-table-name   (shorten-uri (:class-uri shape) default-graph)
+         :fk-table-schema nil
+         :fk-column-name  (shorten-uri prop-uri default-graph)
+         :pk-table-name   (shorten-uri fk-class default-graph)
+         :pk-table-schema nil
+         :pk-column-name  "subject"}))))
+
+(defn- describe-database-shacl
+  [database]
+  (let [details       (:details database)
+        default-graph (:default-graph details)
+        hide-foreign? (boolean (:hide-foreign-uris details))
+        shapes        (shacl-shapes database)]
+    (when-not shapes
+      (log/warnf "[shacl] No shapes available for database %s; returning empty table set" (:name database)))
+    {:tables (->> (or shapes [])
+                  (remove (fn [s] (and hide-foreign?
+                                       (foreign-uri? (:class-uri s) default-graph))))
+                  (map #(shacl-shape->table default-graph %))
+                  set)}))
+
+(defn- describe-table-shacl
+  [database table]
+  (let [details       (:details database)
+        default-graph (:default-graph details)
+        hide-foreign? (boolean (:hide-foreign-uris details))
+        shapes        (shacl-shapes database)
+        match         (shape-for-table shapes default-graph table)]
+    (if match
+      (shacl-shape->describe-table default-graph hide-foreign? match)
+      (do
+        (log/warnf "[shacl] No shape found for table %s; returning empty fields"
+                   (:name table))
+        {:name (:name table) :schema nil :fields #{(build-pk-field)}}))))
+
 (defn describe-table
   "Describes the fields (properties) of an RDF class (SPARQL table).
 
@@ -175,6 +289,9 @@
     (cond
       (= sync-strategy :none)
       (describe-table-none table)
+
+      (= sync-strategy :shacl)
+      (describe-table-shacl database table)
 
       (and (= sync-strategy :explicit) explicit-table)
       (describe-table-explicit default-graph hide-foreign? table explicit-table)
@@ -255,6 +372,9 @@
     (cond
       (= sync-strategy :none)
       (describe-database-none)
+
+      (= sync-strategy :shacl)
+      (describe-database-shacl database)
 
       (and (= sync-strategy :explicit) schema-config)
       (describe-database-explicit default-graph hide-foreign? database schema-config)

@@ -1,6 +1,6 @@
 info:
   name: Metabase SPARQL Driver
-  version: 0.0.14
+  version: 0.0.17
   description: Driver for connecting to SPARQL endpoints
 driver:
   name: sparql
@@ -35,9 +35,17 @@ driver:
           value: none
         - name: Explicit (Use JSON Configuration)
           value: explicit
+        - name: SHACL (Fetch from URL)
+          value: shacl
       description: Choose how Metabase discovers tables and fields.
       visible-if:
         advanced-options: true
+    - name: shacl-url
+      display-name: SHACL URL
+      placeholder: https://example.org/schema.ttl
+      description: HTTPS URL serving a SHACL document in Turtle. Fetched at sync time when Metadata Sync Strategy is set to SHACL.
+      visible-if:
+        metadata-sync-strategy: shacl
     - name: schema-config
       display-name: Schema Configuration (JSON)
       type: text

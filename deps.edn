@@ -1,6 +1,8 @@
 {:paths ["src" "resources"]
  
- :deps {clj-http/clj-http {:mvn/version "3.13.0"}}
+ :deps {clj-http/clj-http {:mvn/version "3.13.0"}
+        ;; Turtle parser for the optional SHACL metadata-sync strategy.
+        org.eclipse.rdf4j/rdf4j-rio-turtle {:mvn/version "5.0.3"}}
 
  :mvn/repos
  {"metabase-maven-downloads" {:url "https://s3.amazonaws.com/metabase-maven-downloads"}
