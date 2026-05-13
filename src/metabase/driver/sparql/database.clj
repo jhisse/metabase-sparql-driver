@@ -163,7 +163,7 @@
         foreign? (foreign-uri? uri default-graph)]
     (when-not (and foreign? hide-foreign?)
       (cond-> {:name              (shorten-uri uri default-graph)
-               :database-type     "string"
+               :database-type     (if (:lang-string? prop) "langString" "string")
                :base-type         (or (:base-type prop) :type/Text)
                :pk?               false
                :database-position (inc idx)}
@@ -206,14 +206,17 @@
 
 (defn- shacl-shapes
   "Fetch and cache SHACL shapes for `database`. Returns `nil` if no URL is
-   configured (we treat this as a misconfiguration and let the caller error)."
+   configured (we treat this as a misconfiguration and let the caller error).
+   Language preference (for `sh:name`/`sh:description`) is read from the
+   connection details and forwarded to the SHACL extractor."
   [database]
   (when-let [url (-> database :details :shacl-url)]
-    (try
-      (shacl/metadata url)
-      (catch Throwable t
-        (log/errorf t "[shacl] Failed to load SHACL document at %s" url)
-        nil))))
+    (let [lang (or (-> database :details :default-language) "")]
+      (try
+        (shacl/metadata url lang)
+        (catch Throwable t
+          (log/errorf t "[shacl] Failed to load SHACL document at %s" url)
+          nil)))))
 
 (defn fks
   "Return the FK rows for `describe-fks` derived from the SHACL document

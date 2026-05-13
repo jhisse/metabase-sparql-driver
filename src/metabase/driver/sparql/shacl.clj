@@ -25,6 +25,8 @@
 (def ^:private xsd  "http://www.w3.org/2001/XMLSchema#")
 (def ^:private mb   "https://data.metabase.com/")
 
+(def ^:private lang-string-datatype (str rdf "langString"))
+
 (def ^:private datatype->base-type
   "Mapping from XSD datatype IRI suffix to Metabase base-type keyword."
   {"string"             :type/Text
@@ -156,28 +158,47 @@
   (when (literal? t)
     (try (Long/parseLong (:value t)) (catch Exception _ nil))))
 
+(defn- pick-localized
+  "From a sequence of object terms (some literals, some IRIs), pick the best
+   string value for the configured `lang`. Preference order:
+     1. literal with `:lang` matching `lang`,
+     2. literal with no language tag,
+     3. first remaining literal.
+   Returns the string `:value`, or `nil` when no literal is available."
+  [terms lang]
+  (let [lits          (filter literal? terms)
+        match-lang    (when-not (str/blank? lang)
+                        (first (filter #(= lang (:lang %)) lits)))
+        untagged      (first (filter #(str/blank? (:lang %)) lits))
+        any           (first lits)]
+    (some-> (or match-lang untagged any) :value)))
+
 (defn- property-shape
-  "Extract one property descriptor from the property-shape node `prop-node`."
-  [spo prop-node]
+  "Extract one property descriptor from the property-shape node `prop-node`.
+   `lang` is the configured default language tag (may be nil/blank) used to
+   pick the best `sh:name` / `sh:description` literal."
+  [spo prop-node lang]
   (let [path        (single spo prop-node (str sh "path"))
         datatype    (single spo prop-node (str sh "datatype"))
         target-cls  (single spo prop-node (str sh "class"))
-        name-lit    (single spo prop-node (str sh "name"))
-        desc-lit    (single spo prop-node (str sh "description"))
+        name-text   (pick-localized (objects spo prop-node (str sh "name")) lang)
+        desc-text   (pick-localized (objects spo prop-node (str sh "description")) lang)
         order-lit   (single spo prop-node (str sh "order"))
         min-count   (single spo prop-node (str sh "minCount"))
         mb-hide     (single spo prop-node (str mb "hide"))
         mb-sem      (single spo prop-node (str mb "semanticType"))
         mb-display  (single spo prop-node (str mb "displayValueProperty"))
         datatype-iri (when (iri? datatype) (:value datatype))
+        lang-string? (= datatype-iri lang-string-datatype)
         base-type   (or (xsd-base-type datatype-iri)
+                        (when lang-string? :type/Text)
                         (when (iri? target-cls) :type/Text)
                         :type/Text)
         sem-type    (or (coerce-semantic-type mb-sem)
                         (when (iri? target-cls) :type/FK)
                         (semantic-type-from-datatype datatype-iri))
-        descr       (->> [(when (literal? name-lit) (:value name-lit))
-                          (when (literal? desc-lit) (:value desc-lit))
+        descr       (->> [name-text
+                          desc-text
                           (when (iri? mb-display)
                             (str "Display via " (:value mb-display)))]
                          (remove str/blank?)
@@ -194,6 +215,7 @@
                                         (some-> (:value min-count)
                                                 Long/parseLong
                                                 pos?)))
+       :lang-string?      lang-string?
        :hidden?           (literal-truthy? mb-hide)})))
 
 (defn- shape
@@ -202,10 +224,10 @@
 
    `:parent-shape-iris` carries the IRIs referenced via `sh:node` so that
    [[resolve-inheritance]] can flatten parent properties into the child."
-  [spo shape-node]
+  [spo shape-node lang]
   (let [target-cls   (single spo shape-node (str sh "targetClass"))
         mb-hide      (single spo shape-node (str mb "hide"))
-        desc-lit     (single spo shape-node (str sh "description"))
+        desc-text    (pick-localized (objects spo shape-node (str sh "description")) lang)
         prop-nodes   (objects spo shape-node (str sh "property"))
         parent-iris  (->> (objects spo shape-node (str sh "node"))
                           (filter iri?)
@@ -215,9 +237,9 @@
       {:node-iri          (when (iri? shape-node) (:value shape-node))
        :class-uri         (:value target-cls)
        :hidden?           (literal-truthy? mb-hide)
-       :description       (when (literal? desc-lit) (:value desc-lit))
+       :description       desc-text
        :parent-shape-iris parent-iris
-       :properties        (vec (keep #(property-shape spo %) prop-nodes))})))
+       :properties        (vec (keep #(property-shape spo % lang) prop-nodes))})))
 
 (defn- resolve-inheritance
   "For each shape that references parents via `sh:node`, recursively merge in
@@ -271,12 +293,15 @@
                       :fk-target-class \"…\" or nil
                       :display-value-property \"…\" or nil
                       :database-required true|false
+                      :lang-string? true|false
                       :hidden? false}
                      ...)}
 
    Shapes flagged `metabase:hide true` are pruned. Properties flagged
-   `metabase:hide true` are pruned from their parent shape."
-  [triples]
+   `metabase:hide true` are pruned from their parent shape. `lang` (a BCP-47
+   tag, may be blank) drives the language-preferred selection of
+   `sh:name`/`sh:description` literals."
+  [triples lang]
   (let [spo         (index-spo triples)
         ;; Pick up shapes via *either* `rdf:type sh:NodeShape` or by being the
         ;; subject of `sh:targetClass` — handles SHACL files that omit the type.
@@ -290,11 +315,12 @@
                                       (when (contains? preds (str sh "targetClass")) s))
                                     spo)))
         shapes      (->> shape-nodes
-                         (keep #(shape spo %))
+                         (keep #(shape spo % lang))
                          (remove :hidden?)
                          resolve-inheritance
                          merge-shapes-by-class)]
-    (log/debugf "[shacl] Extracted %d shape(s) from %d triple(s)" (count shapes) (count triples))
+    (log/debugf "[shacl] Extracted %d shape(s) from %d triple(s) (lang=%s)"
+                (count shapes) (count triples) (pr-str lang))
     (map (fn [s]
            (update s :properties (fn [ps] (remove :hidden? ps))))
          shapes)))
@@ -305,24 +331,32 @@
 (def ^:private cache (atom {}))
 (def ^:private cache-ttl-ms (* 30 1000))
 
-(defn- cache-lookup [url]
-  (let [{:keys [at value]} (get @cache url)]
+(defn- cache-lookup [k]
+  (let [{:keys [at value]} (get @cache k)]
     (when (and at (< (- (System/currentTimeMillis) at) cache-ttl-ms))
       value)))
 
-(defn- cache-store! [url value]
-  (swap! cache assoc url {:at (System/currentTimeMillis) :value value})
+(defn- cache-store! [k value]
+  (swap! cache assoc k {:at (System/currentTimeMillis) :value value})
   value)
 
 (defn metadata
-  "Return the cached SHACL metadata for `url`, fetching and parsing if necessary.
-   Cache TTL is short (~30s) so a single sync run only fetches once."
-  [url]
-  (or (cache-lookup url)
-      (cache-store! url
-                    (-> url fetch-shacl (parse-turtle url) shacl->metadata))))
+  "Return the cached SHACL metadata for `url` resolved under language `lang`.
+   Fetches and parses if needed. The cache key includes `lang` so switching
+   language re-derives labels without forcing a fresh HTTP fetch on every
+   call (since the same triples back multiple language views, we could
+   eventually cache parsed triples separately — for now the per-pair cache
+   is correct and simple)."
+  [url lang]
+  (let [k [url lang]]
+    (or (cache-lookup k)
+        (cache-store! k
+                      (-> url
+                          fetch-shacl
+                          (parse-turtle url)
+                          (shacl->metadata lang))))))
 
 (defn invalidate!
-  "Forget the cached SHACL metadata for `url` (use after a known schema change)."
+  "Forget the cached SHACL metadata for `url` (all languages)."
   [url]
-  (swap! cache dissoc url))
+  (swap! cache (fn [m] (into {} (remove (fn [[[u _] _]] (= u url)) m)))))

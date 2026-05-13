@@ -1,6 +1,6 @@
 info:
   name: Metabase SPARQL Driver
-  version: 0.0.17
+  version: 0.0.18
   description: Driver for connecting to SPARQL endpoints
 driver:
   name: sparql
@@ -18,6 +18,10 @@ driver:
     - name: default-graph
       display-name: Default Graph URI
       placeholder: http://dbpedia.org
+    - name: default-language
+      display-name: Default Language
+      placeholder: nl
+      description: 'BCP-47 language tag (e.g. nl, en). When set, queries against rdf:langString columns include a FILTER restricting to this language tag (plus untagged literals), and SHACL sh:name / sh:description literals are picked using this language first. Leave blank to disable.'
     - name: hide-foreign-uris
       display-name: Hide URIs outside the Default Graph
       type: boolean

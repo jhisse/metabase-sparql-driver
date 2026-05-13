@@ -60,6 +60,28 @@
           :details
           :default-graph))
 
+(defn- database-default-language
+  "Read the Default Language (BCP-47 tag) from connection details. May be blank."
+  []
+  (some-> (lib.metadata/database (qp.store/metadata-provider))
+          :details
+          :default-language))
+
+(defn- lang-string-field?
+  "True when the field's `:database-type` indicates an `rdf:langString` property
+   (set during SHACL sync). Other sync strategies always emit `\"string\"`, so
+   this is effectively a SHACL-only signal."
+  [field-id]
+  (= "langString" (:database-type (field-id->metadata field-id))))
+
+(defn- lang-filter-line
+  "Render the LANG filter clause for one variable. Guards against unbound
+   variables (left joins) and accepts untagged literals alongside the target
+   language."
+  [var-name lang]
+  (format "  FILTER(!BOUND(?%s) || LANG(?%s) = \"%s\" || LANG(?%s) = \"\")"
+          var-name var-name lang var-name))
+
 (defn- absolute-uri
   "Reconstruct a full URI from a (possibly shortened) name.
    If `nm` already has a URI scheme, returns it unchanged; otherwise prepends
@@ -335,6 +357,21 @@
         _ (log/debugf "[mbql] Triples: fields=%d extras=%d join-fk=%d join-targets=%d"
                       (count triples-for-fields) (count triples-for-extras)
                       (count join-fk-triples) (count join-target-triples))
+        ;; LANG filters for `rdf:langString` columns, when a default-language is configured.
+        ;; One per referenced variable; covers direct fields, extras, and joined targets.
+        lang-filter-lines
+        (let [lang (database-default-language)]
+          (when-not (str/blank? lang)
+            (let [direct-lang-vars (->> (concat (keep field-token->id (remove field-token->join-alias fields))
+                                                extra-direct-fids)
+                                        (filter lang-string-field?)
+                                        (keep #(get field-id->var %)))
+                  joined-lang-vars (->> joined-pairs
+                                        (filter (fn [[fid _]] (lang-string-field? fid)))
+                                        (keep (fn [pair] (get pair->target-var pair))))]
+              (mapv #(lang-filter-line % lang)
+                    (distinct (concat direct-lang-vars joined-lang-vars))))))
+        _ (log/debugf "[mbql] LANG filter lines: %d" (count (or lang-filter-lines [])))
         filters (when filter-clause
                   (or (compile-basic-filter filter-clause field-id->var pair->target-var)
                       []))
@@ -364,6 +401,7 @@
                                  triples-for-extras
                                  join-fk-triples
                                  join-target-triples
+                                 (or lang-filter-lines [])
                                  filters)
                          (str/join "\n"))
         where-part  (str "WHERE {\n" where-body "\n}")
