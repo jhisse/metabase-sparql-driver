@@ -347,7 +347,7 @@ With **Default Graph URI** = `https://odis.q.libis.be/` and **Default Language**
 
 ## :warning: Limitations and Known Issues
 
-- **Aggregations**: The driver does not yet support aggregation functions in Query Builder (e.g. `COUNT`, `SUM`, `AVG`). Queries using "Summarize" will likely fail or return incorrect results. Native SPARQL queries using aggregations are fine.
+- **Aggregations**: Basic aggregations in Query Builder's "Summarize" are supported — **Count**, **Count distinct**, **Sum**, **Average**, **Minimum**, **Maximum** — with an optional group-by (breakout). `Count` compiles to `COUNT(DISTINCT ?subject)`, so grouping by a multi-valued property counts *entities* per group rather than fanned-out solution rows. Advanced aggregations (standard deviation, percentiles, cumulative sum/count, expression aggregations) and post-aggregation filtering (`HAVING`) are not supported.
 - **Joins**: Implicit foreign-key joins (the "Display values" remap on a FK column) are emitted as nested `OPTIONAL` chains and work for one-hop relationships. Multi-hop joins, explicit inner/right/full joins from Query Builder are not supported — only `:left-join` is enabled.
 - **FK display value setup**: When SHACL declares `metabase:displayValueProperty`, the driver stashes the suggestion in the field description but does **not** yet write Metabase's `dimension` row automatically. After sync you still pick the display field manually in the column settings panel.
 - **Auto-mode language tagging**: The `FILTER(LANG(?x) = …)` clause only fires for columns whose `rdf:langString` datatype was declared in SHACL. The `auto` sync strategy can't see datatypes by sampling alone, so multilingual fan-out can still happen there.

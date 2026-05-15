@@ -273,6 +273,66 @@
           (log/debugf "[mbql] Order clause: %s" clause)
           clause)))))
 
+(defn- unwrap-aggregation
+  "Strip an `:aggregation-options` wrapper, returning the inner aggregation clause."
+  [agg]
+  (if (and (sequential? agg) (= :aggregation-options (first agg)))
+    (second agg)
+    agg))
+
+(defn- aggregation-arg-token
+  "Return the `[:field …]` token an aggregation operates on, or nil for arg-less
+   aggregations such as `[:count]`."
+  [agg]
+  (let [agg (unwrap-aggregation agg)
+        arg (when (sequential? agg) (second agg))]
+    (when (and (vector? arg) (= :field (first arg)))
+      arg)))
+
+(defn- aggregation->projection
+  "Compile one aggregation clause to a SPARQL projection
+   `{:select \"(EXPR AS ?ag_N)\" :var \"ag_N\"}`. `token->var` resolves a field
+   token to its SPARQL variable. Returns nil for unsupported aggregations.
+
+   `[:count]` with no argument becomes `COUNT(DISTINCT ?subject)` so that the
+   multi-valued OPTIONAL fan-out does not inflate entity counts."
+  [agg index token->var]
+  (let [agg     (unwrap-aggregation agg)
+        op      (when (sequential? agg) (first agg))
+        out     (str "ag_" index)
+        arg     (aggregation-arg-token agg)
+        arg-var (when arg (token->var arg))
+        expr    (case op
+                  :count    (if arg-var
+                              (format "COUNT(?%s)" arg-var)
+                              "COUNT(DISTINCT ?subject)")
+                  :distinct (when arg-var (format "COUNT(DISTINCT ?%s)" arg-var))
+                  :sum      (when arg-var (format "SUM(?%s)" arg-var))
+                  :avg      (when arg-var (format "AVG(?%s)" arg-var))
+                  :min      (when arg-var (format "MIN(?%s)" arg-var))
+                  :max      (when arg-var (format "MAX(?%s)" arg-var))
+                  nil)]
+    (when expr
+      {:select (format "(%s AS ?%s)" expr out)
+       :var    out})))
+
+(defn- compile-agg-order-by
+  "Compile `:order-by` for an aggregation query. Order terms may reference a
+   breakout field (`[:field …]`) or an aggregation by index (`[:aggregation N]`)."
+  [order-by field-id->var pair->target-var]
+  (when (seq order-by)
+    (let [parts (for [[dir tok & _] order-by
+                      :let [v (cond
+                                (and (vector? tok) (= :aggregation (first tok)))
+                                (str "ag_" (second tok))
+                                (and (vector? tok) (= :field (first tok)))
+                                (var-for-token tok field-id->var pair->target-var)
+                                :else nil)]
+                      :when v]
+                  (str (str/upper-case (name dir)) "(?" v ")"))]
+      (when (seq parts)
+        (str "ORDER BY " (str/join " " parts))))))
+
 (defn mbql->native
   "Compile outer MBQL to a native SPARQL map.
 
@@ -288,7 +348,14 @@
 
    That matches SQL LEFT JOIN semantics (rows with no FK still appear; rows
    with FK but no target value still appear). Multi-valued FKs fan out
-   naturally — SPARQL produces one solution per matching target."
+   naturally — SPARQL produces one solution per matching target.
+
+   Aggregation queries (`:aggregation` present) take a different SELECT shape:
+   only breakout columns and aggregate expressions are projected, with a
+   `GROUP BY` over the breakout columns. `[:count]` compiles to
+   `COUNT(DISTINCT ?subject)` so the multi-valued OPTIONAL fan-out does not
+   inflate entity counts. `:sum` / `:avg` / `:min` / `:max` / `:distinct`
+   compile to the matching SPARQL aggregate over the column variable."
   [_driver outer-query]
   (let [outer-query   (driver-api/->legacy-MBQL outer-query)
         inner         (:query outer-query)
@@ -300,10 +367,21 @@
         limit         (:limit inner)
         filter-clause (:filter inner)
         joins         (:joins inner)
-        _             (log/debugf "[mbql] Start compile: table-id=%s fields=%d order-by=%d limit=%s has-filter=%s joins=%d"
-                                  table-id (count fields) (count order-by) (pr-str limit) (boolean filter-clause) (count joins))
+        aggregations  (:aggregation inner)
+        breakout      (:breakout inner)
+        agg?          (boolean (seq aggregations))
+        ;; In aggregation mode raw :fields are not projected; the columns that
+        ;; need WHERE triples are the breakout columns and the aggregated columns.
+        output-tokens (if agg?
+                        (vec (concat breakout (keep aggregation-arg-token aggregations)))
+                        (vec (or fields [])))
+        ;; A synthetic inner query so collect-field-ids / collect-joined-pairs
+        ;; pick up breakout + aggregation-arg fields the same way they do :fields.
+        triple-inner  (assoc inner :fields output-tokens)
+        _             (log/debugf "[mbql] Start compile: table-id=%s agg?=%s output-fields=%d breakout=%d order-by=%d joins=%d"
+                                  table-id agg? (count output-tokens) (count breakout) (count order-by) (count joins))
         ;; Joined-field references: `[field-id alias]` pairs that appear anywhere in the stage.
-        joined-pairs   (collect-joined-pairs inner)
+        joined-pairs   (collect-joined-pairs triple-inner)
         joined-fids    (set (map first joined-pairs))
         ;; Per-join intermediate var: ?<alias>_subject — binds the joined entity URI.
         alias->intermediate-var (into {}
@@ -332,14 +410,15 @@
                                                           (str "f_" fid)))))]))
         ;; All field-ids referenced anywhere in the stage; we only build direct triples for
         ;; those that aren't reached via a join.
-        field-ids     (collect-field-ids inner)
+        field-ids     (collect-field-ids triple-inner)
         field-id->prop (into {}
                              (for [fid field-ids
                                    :let [nm (:name (field-id->metadata fid))]
                                    :when (and nm (not (id-field? fid)))]
                                [fid (absolute-uri nm default-graph)]))
         field-id->var  (build-var-aliases field-ids)
-        triples-for-fields (->> fields
+        token->var     (fn [tok] (var-for-token tok field-id->var pair->target-var))
+        triples-for-fields (->> output-tokens
                                 (keep (fn [tok]
                                         (let [fid   (field-token->id tok)
                                               alias (field-token->join-alias tok)]
@@ -361,7 +440,7 @@
                                  (remove field-token->join-alias)
                                  (keep field-token->id)
                                  set
-                                 (remove (set (keep field-token->id (filter (complement field-token->join-alias) fields))))
+                                 (remove (set (keep field-token->id (remove field-token->join-alias output-tokens))))
                                  (remove joined-fids)
                                  (remove id-field?)))
         triples-for-extras (for [fid extra-direct-fids
@@ -394,7 +473,7 @@
         lang-filter-lines
         (let [lang (database-default-language)]
           (when-not (str/blank? lang)
-            (let [direct-lang-vars (->> (concat (keep field-token->id (remove field-token->join-alias fields))
+            (let [direct-lang-vars (->> (concat (keep field-token->id (remove field-token->join-alias output-tokens))
                                                 extra-direct-fids)
                                         (filter lang-string-field?)
                                         (keep #(get field-id->var %)))
@@ -408,26 +487,42 @@
                   (or (compile-basic-filter filter-clause field-id->var pair->target-var)
                       []))
         _ (log/debugf "[mbql] Filters count: %d" (count filters))
-        order-clause (compile-order-by order-by field-id->var pair->target-var)
-        ;; SELECT: ?subject + direct fields (non-joined) + joined target vars.
-        direct-select-vars (->> fields
-                                (remove field-token->join-alias)
-                                (keep field-token->id)
-                                (remove id-field?)
-                                (map field-id->var)
-                                (remove nil?)
-                                distinct
-                                vec)
-        joined-select-vars (->> fields
-                                (keep (fn [tok]
-                                        (when-let [a (field-token->join-alias tok)]
-                                          (get pair->target-var [(field-token->id tok) a]))))
-                                distinct
-                                vec)
-        select-vars (concat direct-select-vars joined-select-vars)
-        select-part (str "SELECT ?subject"
-                         (when (seq select-vars)
-                           (str " " (str/join " " (map #(str "?" %) select-vars)))))
+        ;; --- SELECT / GROUP BY / ORDER BY ------------------------------------
+        agg-projections (when agg?
+                          (keep-indexed (fn [i a] (aggregation->projection a i token->var))
+                                        aggregations))
+        breakout-vars   (when agg?
+                          (->> breakout (keep token->var) distinct vec))
+        select-part (if agg?
+                      ;; Aggregation query: project breakout columns then aggregate
+                      ;; expressions. No ?subject in the projection.
+                      (str "SELECT "
+                           (str/join " " (concat (map #(str "?" %) breakout-vars)
+                                                 (map :select agg-projections))))
+                      ;; Plain SELECT: ?subject + direct fields + joined target vars.
+                      (let [direct-select-vars (->> fields
+                                                    (remove field-token->join-alias)
+                                                    (keep field-token->id)
+                                                    (remove id-field?)
+                                                    (map field-id->var)
+                                                    (remove nil?)
+                                                    distinct
+                                                    vec)
+                            joined-select-vars (->> fields
+                                                    (keep (fn [tok]
+                                                            (when-let [a (field-token->join-alias tok)]
+                                                              (get pair->target-var [(field-token->id tok) a]))))
+                                                    distinct
+                                                    vec)
+                            select-vars (concat direct-select-vars joined-select-vars)]
+                        (str "SELECT ?subject"
+                             (when (seq select-vars)
+                               (str " " (str/join " " (map #(str "?" %) select-vars)))))))
+        group-by-clause (when (and agg? (seq breakout-vars))
+                          (str "GROUP BY " (str/join " " (map #(str "?" %) breakout-vars))))
+        order-clause (if agg?
+                       (compile-agg-order-by order-by field-id->var pair->target-var)
+                       (compile-order-by order-by field-id->var pair->target-var))
         where-body  (->> (concat [(format "  ?subject a <%s> ." class-uri)]
                                  triples-for-fields
                                  triples-for-extras
@@ -440,6 +535,7 @@
         limit-part  (when (number? limit) (str "LIMIT " limit))
         query       (str (str/trim select-part) "\n"
                          where-part "\n"
+                         (when group-by-clause (str group-by-clause "\n"))
                          (when order-clause (str order-clause "\n"))
                          (when limit-part (str limit-part)))]
     (log/debugf "[sparql.mbql->native] Compiled query: %s" query)
