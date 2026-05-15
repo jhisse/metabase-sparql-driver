@@ -36,10 +36,27 @@
   (:join-alias (field-token->opts field-token)))
 
 (defn- field-id->metadata
-  "Resolve field metadata by ID."
+  "Resolve field metadata by numeric ID. Returns nil for non-numeric field refs
+   (e.g. string column names produced by nested-query / aggregation outputs) so
+   they never reach the application DB as a malformed `field.id` lookup."
   [field-id]
-  (when field-id
+  (when (integer? field-id)
     (lib.metadata/field (qp.store/metadata-provider) field-id)))
+
+(defn- unwrap-source-query
+  "Drill through `:source-query` wrappers (multi-stage queries — e.g. when a
+   saved card or model is used as a source) to the innermost stage that still
+   has a `:source-table`. Returns `[stage limit]`, where `limit` is the
+   outermost non-nil `:limit` encountered.
+
+   The SPARQL driver compiles a single class-rooted query, so passthrough
+   wrapper stages added by the QP (model metadata refresh, card sources) are
+   collapsed onto their underlying table query."
+  [stage]
+  (loop [q stage, limit (:limit stage)]
+    (if (or (:source-table q) (not (:source-query q)))
+      [q limit]
+      (recur (:source-query q) (or limit (:limit (:source-query q)))))))
 
 (defn- id-field?
   "Return true if the field-id represents the synthetic subject column.
@@ -358,13 +375,12 @@
    compile to the matching SPARQL aggregate over the column variable."
   [_driver outer-query]
   (let [outer-query   (driver-api/->legacy-MBQL outer-query)
-        inner         (:query outer-query)
+        [inner limit] (unwrap-source-query (:query outer-query))
         table-id      (:source-table inner)
         class-uri     (table-id->class-uri table-id)
         default-graph (database-default-graph)
         fields        (:fields inner)
         order-by      (:order-by inner)
-        limit         (:limit inner)
         filter-clause (:filter inner)
         joins         (:joins inner)
         aggregations  (:aggregation inner)
