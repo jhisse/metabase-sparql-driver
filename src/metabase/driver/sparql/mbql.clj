@@ -44,14 +44,14 @@
 (defn- id-field?
   "Return true if the field-id represents the synthetic subject column.
 
-   `:pk?` is the authoritative signal; the name fallbacks cover both the current
-   PK name (`subject`) and the legacy one (`id`) for databases that haven't been
-   re-synced after the rename."
+   The only reliable signal is the reserved name `subject` that
+   `build-pk-field` hardcodes. We must NOT use `:semantic-type :type/PK`:
+   Metabase's name-based classifier auto-stamps `:type/PK` on *any* field
+   literally named `id`, and after Default-Graph URI shortening a real RDF
+   property `<base>/id` becomes a column named `id`. Treating it as the
+   subject would silently drop it from the SELECT."
   [field-id]
-  (let [m (field-id->metadata field-id)]
-    (or (:pk? m)
-        (= "subject" (:name m))
-        (= "id" (:name m)))))
+  (= "subject" (:name (field-id->metadata field-id))))
 
 (defn- database-default-graph
   "Read the Default Graph URI from the connection details of the current database."
@@ -133,6 +133,25 @@
       (and fid alias) (get pair->target-var [fid alias])
       (and fid (id-field? fid)) "subject"
       fid (get field-id->var fid))))
+
+(defn- condition->fk-field-id
+  "Extract the *current-table* field-id from a join `:condition`. The condition
+   is a legacy-MBQL filter clause, normally `[:= [:field A] [:field B {:join-alias …}]]`
+   (a `[:and …]` wrapper for multi-column joins is unwrapped to its first `:=`).
+   The current-table side is the `:field` token *without* a `:join-alias`."
+  [condition]
+  (when (sequential? condition)
+    (let [eq (cond
+               (= := (first condition)) condition
+               (= :and (first condition)) (first (filter #(and (sequential? %) (= := (first %)))
+                                                          (rest condition)))
+               :else nil)]
+      (when eq
+        (->> (rest eq)
+             (filter #(and (vector? %) (= :field (first %))))
+             (remove field-token->join-alias)
+             (keep field-token->id)
+             first)))))
 
 (defn- collect-joined-pairs
   "Walk a legacy-MBQL stage and return the set of `[field-id alias]` pairs for every
@@ -286,21 +305,31 @@
         ;; Joined-field references: `[field-id alias]` pairs that appear anywhere in the stage.
         joined-pairs   (collect-joined-pairs inner)
         joined-fids    (set (map first joined-pairs))
-        ;; Per-join intermediate var: ?<alias>_subject  (binds the FK target URI).
-        alias->fk-id   (into {} (for [j joins] [(:alias j) (:fk-field-id j)]))
+        ;; Per-join intermediate var: ?<alias>_subject — binds the joined entity URI.
+        alias->intermediate-var (into {}
+                                      (for [j joins]
+                                        [(:alias j) (sanitize-var-name (str (:alias j) "_subject"))]))
+        ;; FK property to reach the joined entity. Implicit joins carry `:fk-field-id`;
+        ;; explicit joins only have a `:condition`, so fall back to that.
         alias->fk-prop (into {}
-                             (for [[alias fk-id] alias->fk-id
-                                   :let [nm (:name (field-id->metadata fk-id))]
+                             (for [j joins
+                                   :let [alias (:alias j)
+                                         fk-id (or (:fk-field-id j)
+                                                   (condition->fk-field-id (:condition j)))
+                                         nm    (when fk-id (:name (field-id->metadata fk-id)))]
                                    :when nm]
                                [alias (absolute-uri nm default-graph)]))
-        alias->intermediate-var (into {}
-                                      (for [[alias _] alias->fk-id]
-                                        [alias (sanitize-var-name (str alias "_subject"))]))
-        ;; Per joined-pair: a unique target SPARQL var name `<alias>__<field-name>`.
+        ;; Per joined-pair: the SPARQL var that carries the value. The joined entity's
+        ;; own subject column IS the intermediate var (no extra triple needed); every
+        ;; other joined column gets a unique `<alias>__<field-name>` var.
         pair->target-var (into {}
-                               (for [[fid alias] joined-pairs
-                                     :let [nm (or (:name (field-id->metadata fid)) (str "f_" fid))]]
-                                 [[fid alias] (sanitize-var-name (str alias "__" nm))]))
+                               (for [[fid alias] joined-pairs]
+                                 [[fid alias]
+                                  (if (id-field? fid)
+                                    (get alias->intermediate-var alias)
+                                    (sanitize-var-name
+                                     (str alias "__" (or (:name (field-id->metadata fid))
+                                                          (str "f_" fid)))))]))
         ;; All field-ids referenced anywhere in the stage; we only build direct triples for
         ;; those that aren't reached via a join.
         field-ids     (collect-field-ids inner)
@@ -347,7 +376,10 @@
                                     inter-var (get alias->intermediate-var alias)]
                               :when (and fk-prop inter-var)]
                           (format "  OPTIONAL { ?subject <%s> ?%s . }" fk-prop inter-var))
+        ;; One triple per joined column. The joined entity's own subject column needs
+        ;; no triple — it IS the intermediate var, already bound by the FK triple.
         join-target-triples (for [[fid alias] joined-pairs
+                                  :when (not (id-field? fid))
                                   :let [nm (:name (field-id->metadata fid))
                                         prop (absolute-uri nm default-graph)
                                         target-var (get pair->target-var [fid alias])
