@@ -65,7 +65,7 @@
     (let [pk (build-pk-field)]
       (is (= "subject" (:name pk)))
       (is (true? (:pk? pk)))
-      (is (= 0 (:database-position pk))))))
+      (is (zero? (:database-position pk))))))
 
 (deftest build-field-from-uri-test
   (testing "field name is the shortened local name"

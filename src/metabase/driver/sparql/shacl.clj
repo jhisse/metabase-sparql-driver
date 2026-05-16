@@ -144,10 +144,7 @@
    keyword, or `nil` for blank/unrecognized input."
   [t]
   (when t
-    (let [s (cond
-              (literal? t) (:value t)
-              (iri? t)     (:value t)
-              :else        nil)]
+    (let [s (when (or (literal? t) (iri? t)) (:value t))]
       (when-not (str/blank? s)
         (cond
           (str/starts-with? s "type/") (keyword s)

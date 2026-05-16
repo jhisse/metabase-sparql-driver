@@ -53,11 +53,11 @@
    Otherwise it's treated as relative to `default-graph` (the implicit base prefix).
    Returns `nm` unchanged when `default-graph` is blank or `nm` is already absolute."
   [nm default-graph]
-  (cond
-    (str/blank? nm) nm
-    (re-find #"^[A-Za-z][A-Za-z0-9+.-]*:" nm) nm
-    (str/blank? default-graph) nm
-    :else (str default-graph nm)))
+  (if (or (str/blank? nm)
+          (re-find #"^[A-Za-z][A-Za-z0-9+.-]*:" nm)
+          (str/blank? default-graph))
+    nm
+    (str default-graph nm)))
 
 (defn- parse-schema-config
   "Parses the schema configuration JSON string.
@@ -214,7 +214,7 @@
     (let [lang (or (-> database :details :default-language) "")]
       (try
         (shacl/metadata url lang)
-        (catch Throwable t
+        (catch Exception t
           (log/errorf t "[shacl] Failed to load SHACL document at %s" url)
           nil)))))
 

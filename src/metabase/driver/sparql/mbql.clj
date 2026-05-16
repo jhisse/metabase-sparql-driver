@@ -4,8 +4,6 @@
    [clojure.string :as str]
    [clojure.set :as set]
    [metabase.driver-api.core :as driver-api]
-   [metabase.query-processor.store :as qp.store]
-   [metabase.lib.metadata :as lib.metadata]
    [metabase.util.log :as log]))
 
 (defn- sanitize-var-name
@@ -41,7 +39,7 @@
    they never reach the application DB as a malformed `field.id` lookup."
   [field-id]
   (when (integer? field-id)
-    (lib.metadata/field (qp.store/metadata-provider) field-id)))
+    (driver-api/field (driver-api/metadata-provider) field-id)))
 
 
 (defn- id-field?
@@ -59,14 +57,14 @@
 (defn- database-default-graph
   "Read the Default Graph URI from the connection details of the current database."
   []
-  (some-> (lib.metadata/database (qp.store/metadata-provider))
+  (some-> (driver-api/database (driver-api/metadata-provider))
           :details
           :default-graph))
 
 (defn- database-default-language
   "Read the Default Language (BCP-47 tag) from connection details. May be blank."
   []
-  (some-> (lib.metadata/database (qp.store/metadata-provider))
+  (some-> (driver-api/database (driver-api/metadata-provider))
           :details
           :default-language))
 
@@ -90,16 +88,16 @@
    If `nm` already has a URI scheme, returns it unchanged; otherwise prepends
    `default-graph` (the implicit base prefix). Blank `default-graph` is a no-op."
   [nm default-graph]
-  (cond
-    (str/blank? nm) nm
-    (re-find #"^[A-Za-z][A-Za-z0-9+.-]*:" nm) nm
-    (str/blank? default-graph) nm
-    :else (str default-graph nm)))
+  (if (or (str/blank? nm)
+          (re-find #"^[A-Za-z][A-Za-z0-9+.-]*:" nm)
+          (str/blank? default-graph))
+    nm
+    (str default-graph nm)))
 
 (defn- table-id->class-uri
   "Resolve RDF class URI (table name) from :source-table."
   [table-id]
-  (let [nm  (some-> (lib.metadata/table (qp.store/metadata-provider) table-id)
+  (let [nm  (some-> (driver-api/table (driver-api/metadata-provider) table-id)
                     :name)
         uri (absolute-uri nm (database-default-graph))]
     (log/debugf "[mbql] Resolved class URI for table-id %s: %s" table-id uri)
@@ -144,16 +142,15 @@
    for multi-column joins is unwrapped to its first `:=`)."
   [condition]
   (when (sequential? condition)
-    (let [eq (cond
-               (= := (first condition)) condition
-               (= :and (first condition)) (first (filter #(and (sequential? %) (= := (first %)))
-                                                          (rest condition)))
-               :else nil)]
-      (when eq
-        (->> (rest eq)
-             (filter #(and (vector? %) (= :field (first %))))
-             (remove field-token->join-alias)
-             first)))))
+    (when-let [eq (condp = (first condition)
+                    := condition
+                    :and (first (filter #(and (sequential? %) (= := (first %)))
+                                        (rest condition)))
+                    nil)]
+      (->> (rest eq)
+           (filter #(and (vector? %) (= :field (first %))))
+           (remove field-token->join-alias)
+           first))))
 
 (defn- condition->fk-field-id
   "Field-id of the current-table side of a join `:condition` (see [[condition->fk-ref]])."
