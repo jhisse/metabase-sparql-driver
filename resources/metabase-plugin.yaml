@@ -1,6 +1,6 @@
 info:
   name: Metabase SPARQL Driver
-  version: 0.0.22
+  version: 0.0.24
   description: Driver for connecting to SPARQL endpoints
 driver:
   name: sparql
