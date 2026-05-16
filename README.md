@@ -1,9 +1,9 @@
 # Metabase SPARQL Driver
 
-![GitHub Release](https://img.shields.io/github/v/release/jhisse/metabase-sparql-driver)
-![Build Status](https://img.shields.io/github/actions/workflow/status/jhisse/metabase-sparql-driver/build-and-release.yml)
-![GitHub License](https://img.shields.io/github/license/jhisse/metabase-sparql-driver)
-![GitHub Release Date](https://img.shields.io/github/release-date/jhisse/metabase-sparql-driver)
+![GitHub Release](https://img.shields.io/github/v/release/libis/metabase-sparql-driver)
+![Build Status](https://img.shields.io/github/actions/workflow/status/libis/metabase-sparql-driver/build-and-release.yml)
+![GitHub License](https://img.shields.io/github/license/libis/metabase-sparql-driver)
+![GitHub Release Date](https://img.shields.io/github/release-date/libis/metabase-sparql-driver)
 
 A driver for connecting Metabase to SPARQL endpoints for querying RDF data.
 
@@ -20,7 +20,8 @@ This driver represents RDF classes as tables and properties as columns, allowing
 
 | Driver Version       | Metabase Version | Notes                                                                                                                                          |
 |:---------------------|:-----------------|:-----------------------------------------------------------------------------------------------------------------------------------------------|
-| **v0.0.11+**         | v0.57.x+         | Adapts to the post-0.56 driver-API changes (pMBQL `mbql->native`, seq-based `humanize-connection-error-message`, plugin-manifest form fields). |
+| **v0.0.12+**         | v0.61.x          | Built and tested against Metabase v0.61.1.                                                                                                     |
+| **v0.0.11**          | v0.57.x — v0.60.x | Adapts to the post-0.56 driver-API changes (pMBQL `mbql->native`, seq-based `humanize-connection-error-message`, plugin-manifest form fields). |
 | **v0.0.10**          | v0.56.3 — v0.56.x | Requires `describe-database*` (added in 0.56.3).                                                                                              |
 | **v0.0.1 – v0.0.9**  | < v0.56.3        | Uses legacy `describe-database`.                                                                                                               |
 
@@ -29,7 +30,7 @@ This driver represents RDF classes as tables and properties as columns, allowing
 
 ## :zap: Quick Start
 
-1. **Download** the latest driver from [releases page](https://github.com/jhisse/metabase-sparql-driver/releases)
+1. **Download** the latest driver from the [releases page](../../releases)
 2. **Copy** `sparql.metabase-driver.jar` to your Metabase `plugins/` directory
 3. **Restart** Metabase
 4. **Add database** → Select "SPARQL" → Enter endpoint URL
@@ -110,7 +111,7 @@ The driver automatically converts XSD / RDF datatypes to Metabase types. At **qu
 |:--------------------------------------|:--------:|:---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|:------------------------------------|
 | SPARQL Endpoint                       |    ✅    | SPARQL endpoint URL.                                                                                                                                                                                                                                     | `https://dbpedia.org/sparql`        |
 | Ignore SSL Certificate Errors         |    ❌    | Skip TLS/SSL validation.                                                                                                                                                                                                                                 | `false`                             |
-| Default Graph URI                     |    ❌    | Default graph URI **and** implicit base prefix. RDF classes and properties whose URI starts with this value are shortened in the Metabase UI — `https://odis.q.libis.be/Archief` becomes `Archief`. The full URI is reconstructed automatically at query time. | `https://odis.q.libis.be/`          |
+| Default Graph URI                     |    ❌    | Default graph URI **and** implicit base prefix. RDF classes and properties whose URI starts with this value are shortened in the Metabase UI — `http://dbpedia.org/ontology/Person` becomes `Person`. The full URI is reconstructed automatically at query time. | `http://dbpedia.org/ontology/`      |
 | Default Language                      |    ❌    | BCP-47 language tag. When set, queries against `rdf:langString` columns are filtered to this language (untagged literals are still kept), and SHACL `sh:name` / `sh:description` literals are picked using this language first.                          | `nl`, `en`                          |
 | Hide URIs outside the Default Graph   |    ❌    | When enabled, RDF classes and properties whose URI does **not** start with the Default Graph URI are skipped during sync (less clutter when external vocabularies are sampled).                                                                          | `false`                             |
 | Metadata Sync Strategy (Advanced)     |    ❌    | How the driver discovers tables/fields.                                                                                                                                                                                                                  | `auto` / `none` / `explicit` / `shacl` |
@@ -131,11 +132,11 @@ The driver automatically converts XSD / RDF datatypes to Metabase types. At **qu
 
 The **Default Graph URI** doubles as the implicit base prefix for the database. When it is set, classes and properties under that namespace are shortened to their local name everywhere in the UI:
 
-| Default Graph URI            | Full URI                                          | Shown as       |
-|:-----------------------------|:--------------------------------------------------|:---------------|
-| `https://odis.q.libis.be/`   | `https://odis.q.libis.be/Archief`                 | `Archief`      |
-| `https://odis.q.libis.be/`   | `https://odis.q.libis.be/geografische_thesaurus`  | `geografische_thesaurus` |
-| `https://odis.q.libis.be/`   | `http://www.w3.org/1999/02/22-rdf-syntax-ns#type` | *(unchanged — foreign URI)* |
+| Default Graph URI               | Full URI                                          | Shown as       |
+|:--------------------------------|:--------------------------------------------------|:---------------|
+| `http://dbpedia.org/ontology/`  | `http://dbpedia.org/ontology/Person`              | `Person`       |
+| `http://dbpedia.org/ontology/`  | `http://dbpedia.org/ontology/birthPlace`          | `birthPlace`   |
+| `http://dbpedia.org/ontology/`  | `http://www.w3.org/1999/02/22-rdf-syntax-ns#type` | *(unchanged — foreign URI)* |
 
 This mirrors RDF/Turtle "base IRI" semantics: only URIs *under* the configured base get shortened. Foreign-namespace URIs always keep their full form so you can tell them apart. Enable **Hide URIs outside the Default Graph** to drop them from sync entirely.
 
@@ -295,12 +296,12 @@ Metabase resolves the relationship the same way it would for any SQL FK, so Quer
 `sh:node` is used as the inheritance edge. Given:
 
 ```turtle
-odis:EntiteitShape    a sh:NodeShape ; sh:targetClass odis:Entiteit .
-odis:CodetabelShape   a sh:NodeShape ; sh:targetClass odis:Codetabel   ; sh:node odis:EntiteitShape .
-odis:PersoonTitelShape a sh:NodeShape ; sh:targetClass odis:PersoonTitel ; sh:node odis:CodetabelShape .
+dbo:AgentShape     a sh:NodeShape ; sh:targetClass dbo:Agent .
+dbo:PersonShape    a sh:NodeShape ; sh:targetClass dbo:Person    ; sh:node dbo:AgentShape .
+dbo:ScientistShape a sh:NodeShape ; sh:targetClass dbo:Scientist ; sh:node dbo:PersonShape .
 ```
 
-`PersoonTitelShape` ends up with **all** properties from `CodetabelShape` and `EntiteitShape`, plus its own. If the child redefines a `sh:path` that a parent already defined, the child's declaration wins (different `sh:description`, different `sh:minCount`, etc.). Cycles are broken with a visited set. `sh:node` references that don't resolve to another NodeShape (e.g. when they accidentally point at the class IRI itself) are silently ignored.
+`ScientistShape` ends up with **all** properties from `PersonShape` and `AgentShape`, plus its own. If the child redefines a `sh:path` that a parent already defined, the child's declaration wins (different `sh:description`, different `sh:minCount`, etc.). Cycles are broken with a visited set. `sh:node` references that don't resolve to another NodeShape (e.g. when they accidentally point at the class IRI itself) are silently ignored.
 
 ### Worked example
 
@@ -308,42 +309,43 @@ odis:PersoonTitelShape a sh:NodeShape ; sh:targetClass odis:PersoonTitel ; sh:no
 @prefix sh:       <http://www.w3.org/ns/shacl#> .
 @prefix xsd:      <http://www.w3.org/2001/XMLSchema#> .
 @prefix rdf:      <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
+@prefix rdfs:     <http://www.w3.org/2000/01/rdf-schema#> .
 @prefix metabase: <https://data.metabase.com/> .
-@prefix odis:     <https://odis.q.libis.be/> .
+@prefix dbo:      <http://dbpedia.org/ontology/> .
 
-odis:EntiteitShape a sh:NodeShape ;
-  sh:targetClass odis:Entiteit ;
-  sh:property [ sh:path odis:id ;
+dbo:AgentShape a sh:NodeShape ;
+  sh:targetClass dbo:Agent ;
+  sh:property [ sh:path dbo:wikiPageID ;
                 sh:datatype xsd:string ;
                 sh:minCount 1 ;
                 sh:maxCount 1 ;
                 sh:order 1 ;
-                sh:name "id"@nl, "id"@en ;
-                sh:description "Systeem UUID"@nl, "System UUID"@en ] .
+                sh:name "wikiPageID"@nl, "wikiPageID"@en ;
+                sh:description "Wikipedia-pagina-ID"@nl, "Wikipedia page ID"@en ] .
 
-odis:ArchiefShape a sh:NodeShape ;
-  sh:targetClass odis:Archief ;
-  sh:node        odis:EntiteitShape ;
-  sh:property [ sh:path odis:naam ;
+dbo:PersonShape a sh:NodeShape ;
+  sh:targetClass dbo:Person ;
+  sh:node        dbo:AgentShape ;
+  sh:property [ sh:path dbo:birthName ;
                 sh:datatype rdf:langString ;
                 sh:name "Naam"@nl, "Name"@en ;
                 sh:order 2 ] ;
-  sh:property [ sh:path  odis:geografische_thesaurus ;
-                sh:class odis:GeografischeTrefwoord ;
-                metabase:displayValueProperty odis:waarde ;
+  sh:property [ sh:path  dbo:birthPlace ;
+                sh:class dbo:Place ;
+                metabase:displayValueProperty rdfs:label ;
                 sh:order 3 ] ;
-  sh:property [ sh:path odis:_audit ;
+  sh:property [ sh:path dbo:wikiPageRevisionID ;
                 sh:datatype xsd:anyURI ;
                 metabase:hide true ] .
 ```
 
-With **Default Graph URI** = `https://odis.q.libis.be/` and **Default Language** = `nl`, this produces:
+With **Default Graph URI** = `http://dbpedia.org/ontology/` and **Default Language** = `nl`, this produces:
 
-- A table **Archief** with columns `subject`, `id` (inherited from Entiteit), `naam`, `geografische_thesaurus`.
-- `naam` is `langString`, so queries get `FILTER(... LANG(?naam) = "nl" || LANG(?naam) = "")`.
-- `geografische_thesaurus` is marked **Foreign Key** pointing to `GeografischeTrefwoord.subject`. Field description includes "Display via `https://odis.q.libis.be/waarde`" as a hint.
-- `_audit` is absent (`metabase:hide`).
-- The synced Dutch description ("Systeem UUID") is preferred over the English one.
+- A table **Person** with columns `subject`, `wikiPageID` (inherited from Agent), `birthName`, `birthPlace`.
+- `birthName` is `langString`, so queries get `FILTER(... LANG(?birthName) = "nl" || LANG(?birthName) = "")`.
+- `birthPlace` is marked **Foreign Key** pointing to `Place.subject`. Field description includes "Display via `http://www.w3.org/2000/01/rdf-schema#label`" as a hint.
+- `wikiPageRevisionID` is absent (`metabase:hide`).
+- The synced Dutch description ("Wikipedia-pagina-ID") is preferred over the English one.
 
 ## :warning: Limitations and Known Issues
 
@@ -371,7 +373,7 @@ Run `make check-deps` to check if dependencies are installed.
 1. Clone this repository:
 
    ```bash
-   git clone https://github.com/jhisse/metabase-sparql-driver.git
+   git clone https://github.com/libis/metabase-sparql-driver.git
    cd metabase-sparql-driver
    ```
 
