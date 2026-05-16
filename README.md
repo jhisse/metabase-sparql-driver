@@ -1,9 +1,9 @@
 # Metabase SPARQL Driver
 
-![GitHub Release](https://img.shields.io/github/v/release/libis/metabase-sparql-driver)
-![Build Status](https://img.shields.io/github/actions/workflow/status/libis/metabase-sparql-driver/build-and-release.yml)
-![GitHub License](https://img.shields.io/github/license/libis/metabase-sparql-driver)
-![GitHub Release Date](https://img.shields.io/github/release-date/libis/metabase-sparql-driver)
+![GitHub Release](https://img.shields.io/github/v/release/jhisse/metabase-sparql-driver)
+![Build Status](https://img.shields.io/github/actions/workflow/status/jhisse/metabase-sparql-driver/build-and-release.yml)
+![GitHub License](https://img.shields.io/github/license/jhisse/metabase-sparql-driver)
+![GitHub Release Date](https://img.shields.io/github/release-date/jhisse/metabase-sparql-driver)
 
 A driver for connecting Metabase to SPARQL endpoints for querying RDF data.
 
@@ -18,19 +18,18 @@ This driver represents RDF classes as tables and properties as columns, allowing
 
 ## :handshake: Compatibility
 
-| Driver Version       | Metabase Version | Notes                                                                                                                                          |
-|:---------------------|:-----------------|:-----------------------------------------------------------------------------------------------------------------------------------------------|
-| **v0.0.12+**         | v0.61.x          | Built and tested against Metabase v0.61.1.                                                                                                     |
-| **v0.0.11**          | v0.57.x — v0.60.x | Adapts to the post-0.56 driver-API changes (pMBQL `mbql->native`, seq-based `humanize-connection-error-message`, plugin-manifest form fields). |
-| **v0.0.10**          | v0.56.3 — v0.56.x | Requires `describe-database*` (added in 0.56.3).                                                                                              |
-| **v0.0.1 – v0.0.9**  | < v0.56.3        | Uses legacy `describe-database`.                                                                                                               |
+| Driver Version       | Metabase Version  | Notes                                            |
+|:---------------------|:------------------|:-------------------------------------------------|
+| **v0.0.11+**         | v0.61.x           | Built and tested against Metabase v0.61.1.       |
+| **v0.0.10**          | v0.56.3 — v0.56.x | Requires `describe-database*` (added in 0.56.3). |
+| **v0.0.1 – v0.0.9**  | < v0.56.3         | Uses legacy `describe-database`.                 |
 
 > [!IMPORTANT]
 > Upgrading from `v0.0.10` or earlier renames the synthetic primary-key column from `id` to `subject` and shortens class/property names whose URI starts with the **Default Graph** URI. After dropping the new jar in, **re-sync each database** so the renamed metadata lands cleanly.
 
 ## :zap: Quick Start
 
-1. **Download** the latest driver from the [releases page](../../releases)
+1. **Download** the latest driver from the [releases page](https://github.com/jhisse/metabase-sparql-driver/releases)
 2. **Copy** `sparql.metabase-driver.jar` to your Metabase `plugins/` directory
 3. **Restart** Metabase
 4. **Add database** → Select "SPARQL" → Enter endpoint URL
@@ -373,7 +372,7 @@ Run `make check-deps` to check if dependencies are installed.
 1. Clone this repository:
 
    ```bash
-   git clone https://github.com/libis/metabase-sparql-driver.git
+   git clone https://github.com/jhisse/metabase-sparql-driver.git
    cd metabase-sparql-driver
    ```
 

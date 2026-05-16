@@ -68,19 +68,41 @@
                                          (when (.isPresent opt) (.get opt)))})
     :else                 {:type :unknown :value (str v)}))
 
+(def ^:private default-connect-timeout-ms 10000)
+(def ^:private default-socket-timeout-ms  30000)
+(def ^:private default-max-bytes (* 10 1024 1024))
+
 (defn fetch-shacl
   "GET the SHACL document at `url`. Returns the response body as a string.
-   Throws an `ex-info` with a humanized message on non-2xx responses."
-  [url]
-  (log/infof "[shacl] Fetching SHACL document from %s" url)
-  (let [resp (http/get url {:headers          {"Accept" "text/turtle"}
-                            :throw-exceptions false
-                            :as               :string})]
-    (if (= 200 (:status resp))
-      (:body resp)
-      (throw (ex-info (format "Failed to fetch SHACL document from %s (status %s)"
-                              url (:status resp))
-                      {:url url :status (:status resp)})))))
+
+   `opts` may supply `:connect-timeout-ms`, `:socket-timeout-ms` and
+   `:max-bytes`; each falls back to a built-in default. `http` URLs are
+   accepted alongside `https` so a local endpoint can be used while testing.
+
+   Throws an `ex-info` on non-2xx responses or when the body exceeds the
+   configured size cap."
+  ([url] (fetch-shacl url nil))
+  ([url {:keys [connect-timeout-ms socket-timeout-ms max-bytes]}]
+   (let [connect-ms (or connect-timeout-ms default-connect-timeout-ms)
+         socket-ms  (or socket-timeout-ms default-socket-timeout-ms)
+         max-bytes  (or max-bytes default-max-bytes)]
+     (log/infof "[shacl] Fetching SHACL document from %s" url)
+     (let [resp (http/get url {:headers            {"Accept" "text/turtle"}
+                               :throw-exceptions   false
+                               :connection-timeout connect-ms
+                               :socket-timeout     socket-ms
+                               :as                 :string})]
+       (if (= 200 (:status resp))
+         (let [body  (:body resp)
+               bytes (alength (.getBytes ^String body "UTF-8"))]
+           (when (> bytes max-bytes)
+             (throw (ex-info (format "SHACL document from %s is %d bytes, exceeding the %d-byte limit"
+                                     url bytes max-bytes)
+                             {:url url :bytes bytes :max-bytes max-bytes})))
+           body)
+         (throw (ex-info (format "Failed to fetch SHACL document from %s (status %s)"
+                                 url (:status resp))
+                         {:url url :status (:status resp)})))))))
 
 (def ^:private no-contexts
   "Empty array for the trailing `Resource...` varargs on `Rio/parse`. Clojure's
@@ -339,19 +361,18 @@
 
 (defn metadata
   "Return the cached SHACL metadata for `url` resolved under language `lang`.
-   Fetches and parses if needed. The cache key includes `lang` so switching
-   language re-derives labels without forcing a fresh HTTP fetch on every
-   call (since the same triples back multiple language views, we could
-   eventually cache parsed triples separately — for now the per-pair cache
-   is correct and simple)."
-  [url lang]
-  (let [k [url lang]]
-    (or (cache-lookup k)
-        (cache-store! k
-                      (-> url
-                          fetch-shacl
-                          (parse-turtle url)
-                          (shacl->metadata lang))))))
+   Fetches and parses if needed. `opts` is forwarded to [[fetch-shacl]] (HTTP
+   timeouts and size cap); it does not affect the parsed result, so the cache
+   key stays `[url lang]`. The cache key includes `lang` so switching language
+   re-derives labels without forcing a fresh HTTP fetch on every call."
+  ([url lang] (metadata url lang nil))
+  ([url lang opts]
+   (let [k [url lang]]
+     (or (cache-lookup k)
+         (cache-store! k
+                       (-> (fetch-shacl url opts)
+                           (parse-turtle url)
+                           (shacl->metadata lang)))))))
 
 (defn invalidate!
   "Forget the cached SHACL metadata for `url` (all languages)."

@@ -135,11 +135,12 @@
   (database/describe-table _driver database table))
 
 ;; Implements describe-fks multimethod. FKs are only known when the user has chosen the
-;; SHACL sync strategy and provided a SHACL URL. For other strategies we return an empty seq.
+;; SHACL sync strategy and provided a SHACL URL. For other strategies `database/fks`
+;; returns an empty seq.
 (defmethod driver/describe-fks :sparql
   [_driver database & _]
   (log/debugf "[describe-fks] - Discovering FKs for database: %s" (:name database))
-  (or (database/fks database) []))
+  (database/fks database))
 
 ;; Implements substitute-native-parameters multimethod to handle native query parameters.
 (defmethod driver/substitute-native-parameters :sparql

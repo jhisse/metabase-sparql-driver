@@ -8,11 +8,12 @@
             [metabase.util.json :as json]
             [metabase.driver.sparql.execute :as execute]
             [metabase.driver.sparql.shacl :as shacl]
-            [metabase.driver.sparql.templates :as templates]))
+            [metabase.driver.sparql.templates :as templates]
+            [metabase.driver.sparql.uri :as uri]))
 
 (defn- extract-class-name
   "Extracts the class name from a URI.
-
+   
    Parameters:
      class-uri - RDF class URI
 
@@ -47,17 +48,6 @@
   (and (not (str/blank? default-graph))
        (string? uri)
        (not (str/starts-with? uri default-graph))))
-
-(defn- absolute-uri
-  "Reverse of [[shorten-uri]]. If `nm` already has a URI scheme it's returned as-is.
-   Otherwise it's treated as relative to `default-graph` (the implicit base prefix).
-   Returns `nm` unchanged when `default-graph` is blank or `nm` is already absolute."
-  [nm default-graph]
-  (if (or (str/blank? nm)
-          (re-find #"^[A-Za-z][A-Za-z0-9+.-]*:" nm)
-          (str/blank? default-graph))
-    nm
-    (str default-graph nm)))
 
 (defn- parse-schema-config
   "Parses the schema configuration JSON string.
@@ -141,7 +131,7 @@
         endpoint       (:endpoint details)
         options        {:insecure? (:use-insecure details)
                         :default-graph default-graph}
-        class-uri      (absolute-uri (:name table) default-graph)
+        class-uri      (uri/absolute-uri (:name table) default-graph)
         property-limit (or (:property-limit details) 20)
         sample-limit   (or (:sample-limit details) 10000)
         query          (templates/class-properties-query class-uri property-limit sample-limit)
@@ -201,28 +191,41 @@
 (defn- shape-for-table
   "Find the SHACL shape whose class matches `table` (after URI reconstruction)."
   [shapes default-graph table]
-  (let [full (absolute-uri (:name table) default-graph)]
+  (let [full (uri/absolute-uri (:name table) default-graph)]
     (some #(when (= (:class-uri %) full) %) shapes)))
+
+(defn- shacl-fetch-opts
+  "Build the HTTP options map for the SHACL fetch from connection `details`.
+   Timeouts are configured in seconds and the size cap in megabytes; unset
+   values are left `nil` so the SHACL extractor applies its own defaults."
+  [details]
+  {:connect-timeout-ms (some-> (:shacl-connect-timeout details) (* 1000))
+   :socket-timeout-ms  (some-> (:shacl-socket-timeout details) (* 1000))
+   :max-bytes          (some-> (:shacl-max-size-mb details) (* 1024 1024))})
 
 (defn- shacl-shapes
   "Fetch and cache SHACL shapes for `database`. Returns `nil` if no URL is
    configured (we treat this as a misconfiguration and let the caller error).
-   Language preference (for `sh:name`/`sh:description`) is read from the
-   connection details and forwarded to the SHACL extractor."
+   Language preference (for `sh:name`/`sh:description`) and the HTTP
+   timeout/size-cap settings are read from the connection details and
+   forwarded to the SHACL extractor."
   [database]
   (when-let [url (-> database :details :shacl-url)]
-    (let [lang (or (-> database :details :default-language) "")]
+    (let [details (:details database)
+          lang    (or (:default-language details) "")
+          opts    (shacl-fetch-opts details)]
       (try
-        (shacl/metadata url lang)
+        (shacl/metadata url lang opts)
         (catch Exception t
           (log/errorf t "[shacl] Failed to load SHACL document at %s" url)
           nil)))))
 
 (defn fks
   "Return the FK rows for `describe-fks` derived from the SHACL document
-   configured on `database`. Returns `nil` for non-SHACL sync strategies."
+   configured on `database`. Returns an empty seq for non-SHACL sync strategies."
   [database]
-  (when (= :shacl (keyword (get-in database [:details :metadata-sync-strategy] "auto")))
+  (if-not (= :shacl (keyword (get-in database [:details :metadata-sync-strategy] "auto")))
+    []
     (let [default-graph (-> database :details :default-graph)
           hide-foreign? (boolean (-> database :details :hide-foreign-uris))
           shapes        (shacl-shapes database)]
@@ -286,7 +289,7 @@
         default-graph  (:default-graph details)
         hide-foreign?  (boolean (:hide-foreign-uris details))
         schema-config  (some-> details :schema-config parse-schema-config)
-        full-name      (absolute-uri (:name table) default-graph)
+        full-name      (uri/absolute-uri (:name table) default-graph)
         explicit-table (when (= sync-strategy :explicit)
                          (some #(when (= (:name %) full-name) %) (:tables schema-config)))]
     (cond

@@ -1,9 +1,11 @@
 (ns metabase.driver.sparql.mbql
-  "Simple MBQL → SPARQL transpilation. No aggregations or complex functions."
+  "Simple MBQL → SPARQL transpilation. Supports projection, filters, ordering,
+   implicit joins, and aggregations."
   (:require
    [clojure.string :as str]
    [clojure.set :as set]
    [metabase.driver-api.core :as driver-api]
+   [metabase.driver.sparql.uri :as uri]
    [metabase.util.log :as log]))
 
 (defn- sanitize-var-name
@@ -83,23 +85,12 @@
   (format "  FILTER(!BOUND(?%s) || LANG(?%s) = \"%s\" || LANG(?%s) = \"\")"
           var-name var-name lang var-name))
 
-(defn- absolute-uri
-  "Reconstruct a full URI from a (possibly shortened) name.
-   If `nm` already has a URI scheme, returns it unchanged; otherwise prepends
-   `default-graph` (the implicit base prefix). Blank `default-graph` is a no-op."
-  [nm default-graph]
-  (if (or (str/blank? nm)
-          (re-find #"^[A-Za-z][A-Za-z0-9+.-]*:" nm)
-          (str/blank? default-graph))
-    nm
-    (str default-graph nm)))
-
 (defn- table-id->class-uri
   "Resolve RDF class URI (table name) from :source-table."
   [table-id]
   (let [nm  (some-> (driver-api/table (driver-api/metadata-provider) table-id)
                     :name)
-        uri (absolute-uri nm (database-default-graph))]
+        uri (uri/absolute-uri nm (database-default-graph))]
     (log/debugf "[mbql] Resolved class URI for table-id %s: %s" table-id uri)
     uri))
 
@@ -396,7 +387,7 @@
                                                    (condition->fk-field-id (:condition j)))
                                          nm    (when fk-id (:name (field-id->metadata fk-id)))]
                                    :when nm]
-                               [alias (absolute-uri nm default-graph)]))
+                               [alias (uri/absolute-uri nm default-graph)]))
         ;; Per joined-pair: the SPARQL var that carries the value. The joined entity's
         ;; own subject column IS the intermediate var (no extra triple needed); every
         ;; other joined column gets a unique `<alias>__<field-name>` var.
@@ -415,7 +406,7 @@
                              (for [fid field-ids
                                    :let [nm (:name (field-id->metadata fid))]
                                    :when (and nm (not (id-field? fid)))]
-                               [fid (absolute-uri nm default-graph)]))
+                               [fid (uri/absolute-uri nm default-graph)]))
         field-id->var  (build-var-aliases field-ids)
         token->var     (fn [tok] (var-for-token tok field-id->var pair->target-var))
         triples-for-fields (->> output-tokens
@@ -460,7 +451,7 @@
         join-target-triples (for [[fid alias] joined-pairs
                                   :when (not (id-field? fid))
                                   :let [nm (:name (field-id->metadata fid))
-                                        prop (absolute-uri nm default-graph)
+                                        prop (uri/absolute-uri nm default-graph)
                                         target-var (get pair->target-var [fid alias])
                                         inter-var (get alias->intermediate-var alias)]
                                   :when (and prop target-var inter-var)]
@@ -579,7 +570,7 @@
                                    join   (get alias->join alias)
                                    fk-var (some-> join :condition condition->fk-ref inner-var-for-ref)
                                    nm     (when (integer? tid) (:name (field-id->metadata tid)))
-                                   prop   (when nm (absolute-uri nm default-graph))
+                                   prop   (when nm (uri/absolute-uri nm default-graph))
                                    rvar   (sanitize-var-name (str alias "__" (or nm (str "f_" tid))))]
                             :when (and fk-var prop)]
                         {:optional (format "  OPTIONAL { ?%s <%s> ?%s . }" fk-var prop rvar)

@@ -3,12 +3,13 @@
    Default-Graph base prefix, foreign-URI hiding, explicit/none sync strategies,
    and the SHACL shape -> Metabase metadata conversion."
   (:require [clojure.test :refer :all]
-            [metabase.driver.sparql.database :as database]))
+            [metabase.driver.sparql.database :as database]
+            [metabase.driver.sparql.uri :as uri]))
 
 (def ^:private extract-class-name @#'database/extract-class-name)
 (def ^:private shorten-uri @#'database/shorten-uri)
 (def ^:private foreign-uri? @#'database/foreign-uri?)
-(def ^:private absolute-uri @#'database/absolute-uri)
+(def ^:private absolute-uri uri/absolute-uri)
 (def ^:private parse-schema-config @#'database/parse-schema-config)
 (def ^:private build-pk-field @#'database/build-pk-field)
 (def ^:private build-field-from-uri @#'database/build-field-from-uri)
@@ -157,6 +158,6 @@
       (is (contains? names "naam")))))
 
 (deftest fks-non-shacl-test
-  (testing "fks returns nil for non-SHACL sync strategies"
-    (is (nil? (database/fks {:details {:metadata-sync-strategy "auto"}})))
-    (is (nil? (database/fks {:details {}})))))
+  (testing "fks returns an empty seq for non-SHACL sync strategies"
+    (is (= [] (database/fks {:details {:metadata-sync-strategy "auto"}})))
+    (is (= [] (database/fks {:details {}})))))

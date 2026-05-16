@@ -1,6 +1,6 @@
 info:
   name: Metabase SPARQL Driver
-  version: 0.0.12
+  version: 0.0.11
   description: Driver for connecting to SPARQL endpoints
 driver:
   name: sparql
@@ -47,7 +47,28 @@ driver:
     - name: shacl-url
       display-name: SHACL URL
       placeholder: https://example.org/schema.ttl
-      description: HTTPS URL serving a SHACL document in Turtle. Fetched at sync time when Metadata Sync Strategy is set to SHACL.
+      description: URL serving a SHACL document in Turtle. Fetched at sync time when Metadata Sync Strategy is set to SHACL. HTTPS is recommended; plain HTTP is allowed for local testing.
+      visible-if:
+        metadata-sync-strategy: shacl
+    - name: shacl-connect-timeout
+      display-name: SHACL Connect Timeout (seconds)
+      type: integer
+      default: 10
+      description: Maximum time to wait when establishing a connection to the SHACL URL.
+      visible-if:
+        metadata-sync-strategy: shacl
+    - name: shacl-socket-timeout
+      display-name: SHACL Read Timeout (seconds)
+      type: integer
+      default: 30
+      description: Maximum time to wait for data while reading the SHACL document.
+      visible-if:
+        metadata-sync-strategy: shacl
+    - name: shacl-max-size-mb
+      display-name: SHACL Max Document Size (MB)
+      type: integer
+      default: 10
+      description: Reject SHACL documents larger than this size.
       visible-if:
         metadata-sync-strategy: shacl
     - name: schema-config
