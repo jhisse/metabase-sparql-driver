@@ -143,7 +143,17 @@ jobs:
           name: sparql-driver
           path: target/sparql.metabase-driver.jar
           if-no-files-found: error
-  
+
+        - name: Save Clojure dependencies cache
+        if: always() && steps.cache-clojure.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v5
+        with:
+          path: |
+            ~/.m2/repository
+            ~/.gitlibs
+            ~/.deps.clj
+          key: ${{ steps.cache-clojure.outputs.cache-primary-key }}
+
   release:
     name: Release Driver
     runs-on: ubuntu-latest
