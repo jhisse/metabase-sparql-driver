@@ -96,6 +96,16 @@ jobs:
       - name: Run Coverage
         run: make coverage
 
+      - name: Save Clojure dependencies cache
+        if: always() && steps.cache-clojure.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v5
+        with:
+          path: |
+            ~/.m2/repository
+            ~/.gitlibs
+            ~/.deps.clj
+          key: ${{ steps.cache-clojure.outputs.cache-primary-key }}
+
   build:
     name: Build Driver
     runs-on: ubuntu-latest
