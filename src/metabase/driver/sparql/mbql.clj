@@ -6,6 +6,7 @@
    [clojure.set :as set]
    [metabase.driver-api.core :as driver-api]
    [metabase.driver.sparql.uri :as uri]
+   [metabase.lib.metadata.result-metadata :as result-metadata]
    [metabase.util.log :as log]))
 
 (defn- sanitize-var-name
@@ -335,6 +336,73 @@
 
 (declare compile-stage)
 
+(defn- resolve-expected-var
+  "Resolve the SPARQL variable a stage already projects for one Lib expected column,
+   using the variable maps the stage compiler has built. Returns nil when the stage
+   compiler did not project that column (so the caller must synthesize it)."
+  [col field-id->var pair->target-var]
+  (let [fid   (:id col)
+        alias (:lib/join-alias col)]
+    (cond
+      (and fid alias)           (get pair->target-var [fid alias])
+      (and fid (id-field? fid)) "subject"
+      fid                       (get field-id->var fid))))
+
+(defn- reconcile-base-projection
+  "Build the SELECT variable list (plus any extra OPTIONAL triples) for a base stage so
+   it projects exactly one variable per Lib `expected-cols` entry, in Lib's order.
+
+   `expected-cols` is the authoritative column list from Metabase's result-metadata
+   (`metabase.lib.metadata.result-metadata/returned-columns`) — the same calculation the
+   `annotate` middleware uses. Columns the stage compiler already covers reuse their
+   variable; columns it missed (e.g. an FK-remap layered on another FK-remap target)
+   are synthesized here so the driver's column count can never drift from Lib's.
+
+   Returns `{:vars [...] :triples [...]}`."
+  [expected-cols {:keys [field-id->var pair->target-var alias->intermediate-var default-graph]}]
+  (let [placeholder (atom 0)]
+    (reduce
+     (fn [acc col]
+       (let [fid      (:id col)
+             alias    (:lib/join-alias col)
+             existing (resolve-expected-var col field-id->var pair->target-var)]
+         (cond
+           existing
+           (update acc :vars conj existing)
+
+           ;; Joined column the compiler missed: bind it off the join's intermediate var.
+           (and fid alias (get alias->intermediate-var alias))
+           (let [inter (get alias->intermediate-var alias)]
+             (if (id-field? fid)
+               (update acc :vars conj inter)
+               (let [nm   (:name (field-id->metadata fid))
+                     v    (sanitize-var-name (str alias "__" (or nm (str "f_" fid))))
+                     prop (uri/absolute-uri nm default-graph)]
+                 (-> acc
+                     (update :vars conj v)
+                     (update :triples conj
+                             (format "  OPTIONAL { ?%s <%s> ?%s . }" inter prop v))))))
+
+           ;; Direct column the compiler missed: bind it off ?subject.
+           (and fid (not alias) (not (id-field? fid)) (:name (field-id->metadata fid)))
+           (let [nm   (:name (field-id->metadata fid))
+                 v    (sanitize-var-name nm)
+                 prop (uri/absolute-uri nm default-graph)]
+             (-> acc
+                 (update :vars conj v)
+                 (update :triples conj
+                         (format "  OPTIONAL { ?subject <%s> ?%s . }" prop v))))
+
+           (and fid (id-field? fid))
+           (update acc :vars conj "subject")
+
+           ;; Unresolvable column (e.g. an expression): project an unbound placeholder
+           ;; so the column count still matches Lib; the value comes back as nil.
+           :else
+           (update acc :vars conj (str "undefined_" (swap! placeholder inc))))))
+     {:vars [] :triples []}
+     expected-cols)))
+
 (defn- compile-base-stage
   "Compile a base MBQL stage (one with `:source-table`) to a SPARQL query.
 
@@ -348,8 +416,13 @@
    and aggregate expressions, with a `GROUP BY` over the breakouts. `[:count]`
    compiles to `COUNT(DISTINCT ?subject)`.
 
+   When `expected-cols` (Lib's authoritative column list) is supplied for a
+   non-aggregation stage, the SELECT projection is reconciled against it so the
+   driver's column count and order always match what the `annotate` middleware
+   expects — see [[reconcile-base-projection]].
+
    Returns `{:sparql <query string> :vars <SELECT var names, in order>}`."
-  [inner]
+  [inner expected-cols]
   (let [limit         (:limit inner)
         table-id      (:source-table inner)
         class-uri     (table-id->class-uri table-id)
@@ -501,9 +574,19 @@
                                             (get pair->target-var [(field-token->id tok) a]))))
                                   distinct
                                   vec))
-        result-vars (if agg?
-                      (vec (concat breakout-vars (keep :var agg-projections)))
-                      (vec (concat ["subject"] direct-select-vars joined-select-vars)))
+        ;; When Lib's expected columns are known, reconcile the SELECT against them so
+        ;; the driver's column count/order can never drift from the `annotate` middleware.
+        reconciled  (when (and expected-cols (not agg?))
+                      (reconcile-base-projection
+                       expected-cols
+                       {:field-id->var           field-id->var
+                        :pair->target-var        pair->target-var
+                        :alias->intermediate-var alias->intermediate-var
+                        :default-graph           default-graph}))
+        result-vars (cond
+                      agg?       (vec (concat breakout-vars (keep :var agg-projections)))
+                      reconciled (vec (:vars reconciled))
+                      :else      (vec (concat ["subject"] direct-select-vars joined-select-vars)))
         select-part (if agg?
                       (str "SELECT "
                            (str/join " " (concat (map #(str "?" %) breakout-vars)
@@ -519,6 +602,7 @@
                                  triples-for-extras
                                  join-fk-triples
                                  join-target-triples
+                                 (or (:triples reconciled) [])
                                  (or lang-filter-lines [])
                                  filters)
                          (str/join "\n"))
@@ -557,8 +641,14 @@
    `:aggregation`, `:breakout`, `:filter`, `:order-by`, and explicit `:fields`
    projection are honored, resolved against the variables the sub-`SELECT`
    already projects (no triple patterns are needed at this level).
+
+   When `expected-cols` (Lib's authoritative column list) is supplied for a
+   non-aggregation stage, the SELECT projection is reconciled against it so the
+   driver's column count and order always match what the `annotate` middleware
+   expects.
+
    Returns `{:sparql … :vars …}`."
-  [stage]
+  [stage expected-cols]
   (let [default-graph (database-default-graph)
         inner         (compile-stage (:source-query stage))
         joins         (:joins stage)
@@ -602,8 +692,43 @@
                           (let [vs (map token->var (:fields stage))]
                             (when (every? some? vs)
                               (vec (distinct vs)))))
+        ;; When Lib's expected columns are known, reconcile the SELECT against them:
+        ;; remap columns resolve via `pair->target-var` (or are synthesized as an extra
+        ;; OPTIONAL), every other column consumes the next inner sub-SELECT var in order.
+        reconciled    (when (and expected-cols (not agg?))
+                        (let [inner-vars  (atom (:vars inner))
+                              placeholder (atom 0)]
+                          (reduce
+                           (fn [acc col]
+                             (let [tid   (:id col)
+                                   alias (:lib/join-alias col)
+                                   join  (when alias (get alias->join alias))
+                                   fk-var (some-> join :condition condition->fk-ref inner-var-for-ref)
+                                   nm    (when (integer? tid) (:name (field-id->metadata tid)))]
+                               (cond
+                                 (and alias (get pair->target-var [tid alias]))
+                                 (update acc :vars conj (get pair->target-var [tid alias]))
+
+                                 (and alias join fk-var nm)
+                                 (let [rvar (sanitize-var-name (str alias "__" nm))
+                                       prop (uri/absolute-uri nm default-graph)]
+                                   (-> acc
+                                       (update :vars conj rvar)
+                                       (update :optionals conj
+                                               (format "  OPTIONAL { ?%s <%s> ?%s . }" fk-var prop rvar))))
+
+                                 (seq @inner-vars)
+                                 (let [v (first @inner-vars)]
+                                   (swap! inner-vars rest)
+                                   (update acc :vars conj v))
+
+                                 :else
+                                 (update acc :vars conj (str "undefined_" (swap! placeholder inc))))))
+                           {:vars [] :optionals []}
+                           expected-cols)))
         result-vars   (cond
                         agg?           (vec (concat breakout-vars (keep :var agg-projections)))
+                        reconciled     (vec (:vars reconciled))
                         projected-vars projected-vars
                         :else          passthrough-vars)
         select-part   (if agg?
@@ -623,6 +748,8 @@
                            "  {\n" (:sparql inner) "\n  }\n"
                            (when (seq remap-entries)
                              (str (str/join "\n" (map :optional remap-entries)) "\n"))
+                           (when (seq (:optionals reconciled))
+                             (str (str/join "\n" (:optionals reconciled)) "\n"))
                            (when (seq filters)
                              (str (str/join "\n" filters) "\n"))
                            "}\n"
@@ -634,24 +761,48 @@
      :vars   result-vars}))
 
 (defn- compile-stage
-  "Compile one MBQL stage, recursing through `:source-query` wrappers."
-  [stage]
-  (if (:source-query stage)
-    (compile-derived-stage stage)
-    (compile-base-stage stage)))
+  "Compile one MBQL stage, recursing through `:source-query` wrappers.
+
+   `expected-cols` (Lib's authoritative column list) is only supplied for the
+   outermost stage — the one whose SELECT becomes the query's result columns.
+   Inner sub-`SELECT`s recurse with `nil`."
+  ([stage] (compile-stage stage nil))
+  ([stage expected-cols]
+   (if (:source-query stage)
+     (compile-derived-stage stage expected-cols)
+     (compile-base-stage stage expected-cols))))
+
+(defn- expected-result-columns
+  "Lib's authoritative result columns for `outer-query` (pMBQL) — the same calculation
+   the `annotate` middleware uses to decide how many columns the query should return.
+   Returns nil if Lib cannot compute them, in which case the compiler falls back to
+   deriving the projection from the query's own `:fields`."
+  [outer-query]
+  (try
+    (not-empty (result-metadata/returned-columns outer-query []))
+    (catch Exception e
+      (log/warnf "[sparql.mbql] Could not compute expected columns from Lib: %s"
+                 (.getMessage e))
+      nil)))
 
 (defn mbql->native
   "Compile a Metabase query into a native SPARQL map `{:query <string> :mbql? true}`.
 
-   Metabase passes pMBQL (Lib / MBQL 5); it is converted to legacy MBQL first.
+   Metabase passes pMBQL (Lib / MBQL 5). Before converting to legacy MBQL we ask Lib
+   for the query's authoritative result columns ([[expected-result-columns]]) and
+   reconcile the outermost SELECT against them, so the driver's column count and order
+   can never drift from what the `annotate` middleware expects.
+
    Multi-stage queries (a saved card / model used as a source, or an FK
    display-value remap layered on an aggregation) are compiled stage by stage:
    the inner stage becomes a SPARQL sub-`SELECT` and the outer stage's remap
    joins wrap it. See [[compile-base-stage]] for the per-stage details."
   [_driver outer-query]
-  (let [outer-query (driver-api/->legacy-MBQL outer-query)
-        {:keys [sparql]} (compile-stage (:query outer-query))]
-    (log/debugf "[sparql.mbql->native] Compiled query: %s" sparql)
+  (let [expected-cols    (expected-result-columns outer-query)
+        legacy-query     (driver-api/->legacy-MBQL outer-query)
+        {:keys [sparql vars]} (compile-stage (:query legacy-query) expected-cols)]
+    (log/debugf "[sparql.mbql->native] Compiled query (%d projected columns): %s"
+                (count vars) sparql)
     {:query sparql
      :mbql? true}))
 

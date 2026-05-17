@@ -268,6 +268,69 @@
         (is (str/includes? sparql "(COUNT(*) AS ?ag_0)"))
         (is (str/includes? sparql "GROUP BY ?naam"))))))
 
+;; ---------------------------------------------------------------------------
+;; Lib-driven projection (the column-count-mismatch fix)
+;; ---------------------------------------------------------------------------
+
+(deftest reconcile-base-projection-test
+  (with-fixture
+    (let [f   @#'mbql/reconcile-base-projection
+          ctx {:field-id->var           {2 "naam" 3 "leeftijd"}
+               :pair->target-var        {[10 "Plaats"] "Plaats__label"}
+               :alias->intermediate-var {"Plaats" "Plaats_subject"}
+               :default-graph           base}]
+      (testing "columns the compiler already projects reuse their variable"
+        (is (= {:vars ["subject" "naam" "Plaats__label"] :triples []}
+               (f [{:id 1} {:id 2} {:id 10 :lib/join-alias "Plaats"}] ctx))))
+      (testing "a joined column the compiler missed is synthesized off the intermediate var"
+        (is (= {:vars    ["subject" "Plaats__naam"]
+                :triples [(str "  OPTIONAL { ?Plaats_subject <" base "naam> ?Plaats__naam . }")]}
+               (f [{:id 1} {:id 2 :lib/join-alias "Plaats"}] ctx))))
+      (testing "an unresolvable column still gets a (placeholder) variable"
+        (is (= {:vars ["undefined_1"] :triples []}
+               (f [{:lib/join-alias "Nope"}] ctx)))))))
+
+(deftest compile-base-stage-lib-driven-projection-test
+  (with-fixture
+    (testing "the SELECT is reconciled against Lib's expected columns"
+      (let [stage    {:source-table 100
+                      :fields [[:field 1 nil] [:field 2 nil]
+                               [:field 10 {:join-alias "Plaats"}]]
+                      :joins  [{:alias "Plaats" :fk-field-id 4}]}
+            ;; Lib expects an extra joined column (id 3) the :fields list omits —
+            ;; the FK-remap-on-a-remap case behind the recurring column mismatch.
+            expected [{:id 1} {:id 2}
+                      {:id 10 :lib/join-alias "Plaats"}
+                      {:id 3  :lib/join-alias "Plaats"}]
+            {:keys [sparql vars]} (@#'mbql/compile-base-stage stage expected)]
+        (is (= 4 (count vars)) "one SELECT variable per Lib expected column")
+        (is (= ["subject" "naam" "Plaats__label" "Plaats__leeftijd"] vars))
+        (is (str/includes? sparql "SELECT ?subject ?naam ?Plaats__label ?Plaats__leeftijd"))
+        (testing "the missing column is synthesized off the join's intermediate var"
+          (is (str/includes?
+               sparql
+               (str "OPTIONAL { ?Plaats_subject <" base "leeftijd> ?Plaats__leeftijd . }"))))))))
+
+(deftest compile-base-stage-lib-driven-order-test
+  (with-fixture
+    (testing "expected-cols drives column order, independent of :fields order"
+      (let [stage {:source-table 100
+                   :fields [[:field 1 nil] [:field 2 nil] [:field 3 nil]]}
+            {:keys [vars]} (@#'mbql/compile-base-stage stage [{:id 1} {:id 3} {:id 2}])]
+        (is (= ["subject" "leeftijd" "naam"] vars))))))
+
+(deftest compile-derived-stage-lib-driven-projection-test
+  (with-fixture
+    (testing "expected-cols drives the derived-stage SELECT and preserves the column count"
+      (let [card {:source-table 100 :aggregation [[:count]] :breakout [[:field 2 nil]]}
+            ;; the inner card projects [naam ag_0]; Lib expects a third column
+            {:keys [vars]} (@#'mbql/compile-derived-stage
+                            {:source-query card}
+                            [{:id 2} {:id 3} {:id 99 :lib/join-alias "Missing"}])]
+        (is (= 3 (count vars)))
+        (is (= ["naam" "ag_0"] (take 2 vars)))
+        (is (str/starts-with? (last vars) "undefined_"))))))
+
 (deftest compile-base-stage-lang-filter-test
   (testing "rdf:langString columns get a LANG filter when a default language is set"
     (with-redefs-fn
