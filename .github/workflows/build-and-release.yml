@@ -116,6 +116,18 @@ jobs:
         with:
           submodules: 'recursive'
 
+      - name: Restore Clojure dependencies cache
+        id: cache-clojure
+        uses: actions/cache/restore@v5
+        with:
+          path: |
+            ~/.m2/repository
+            ~/.gitlibs
+            ~/.deps.clj
+          key: ${{ runner.os }}-clojure-${{ hashFiles('deps.edn', 'metabase/deps.edn') }}
+          restore-keys: |
+            ${{ runner.os }}-clojure-
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4
 
