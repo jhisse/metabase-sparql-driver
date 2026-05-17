@@ -30,18 +30,9 @@ driver:
     - advanced-options-start
     - name: metadata-sync-strategy
       display-name: Metadata Sync Strategy
-      type: select
+      type: string
       default: auto
-      options:
-        - name: Automatic (Discover from Endpoint)
-          value: auto
-        - name: None (Don't sync)
-          value: none
-        - name: Explicit (Use JSON Configuration)
-          value: explicit
-        - name: SHACL (Fetch from URL)
-          value: shacl
-      description: Choose how Metabase discovers tables and fields.
+      description: 'How Metabase discovers tables and fields. One of: auto (discover from endpoint), none (don''t sync), explicit (use JSON configuration), shacl (fetch from URL).'
       visible-if:
         advanced-options: true
     - name: shacl-url
@@ -52,21 +43,21 @@ driver:
         metadata-sync-strategy: shacl
     - name: shacl-connect-timeout
       display-name: SHACL Connect Timeout (seconds)
-      type: integer
+      type: string
       default: 10
       description: Maximum time to wait when establishing a connection to the SHACL URL.
       visible-if:
         metadata-sync-strategy: shacl
     - name: shacl-socket-timeout
       display-name: SHACL Read Timeout (seconds)
-      type: integer
+      type: string
       default: 30
       description: Maximum time to wait for data while reading the SHACL document.
       visible-if:
         metadata-sync-strategy: shacl
     - name: shacl-max-size-mb
       display-name: SHACL Max Document Size (MB)
-      type: integer
+      type: string
       default: 10
       description: Reject SHACL documents larger than this size.
       visible-if:
@@ -91,21 +82,21 @@ driver:
         metadata-sync-strategy: explicit
     - name: class-limit
       display-name: Class Discovery Limit
-      type: integer
+      type: string
       default: 100
       description: Maximum number of RDF classes (tables) to discover.
       visible-if:
         metadata-sync-strategy: auto
     - name: property-limit
       display-name: Property Discovery Limit
-      type: integer
+      type: string
       default: 20
       description: Maximum number of properties (fields) to discover per class.
       visible-if:
         metadata-sync-strategy: auto
     - name: sample-limit
       display-name: Discovery Sample Size
-      type: integer
+      type: string
       default: 10000
       description: Number of instances to sample when discovering properties.
       visible-if:

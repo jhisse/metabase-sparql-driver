@@ -49,6 +49,19 @@
        (string? uri)
        (not (str/starts-with? uri default-graph))))
 
+(defn- ->long
+  "Coerce a manifest connection-property value to a Long (manifest props are
+   type: string; legacy configs may hold a number). nil if blank/unparseable
+   so callers can fall back to defaults.
+
+   NOTE: this coercion only exists because Metabase's manifest spec
+   (`build-drivers.lint-manifest-file/property-types`) rejects `integer`/`select`.
+   If a future Metabase core accepts those types again, the limit/timeout fields
+   can go back to `type: integer` and this helper can be removed."
+  [v]
+  (when (some? v)
+    (parse-long (str/trim (str v)))))
+
 (defn- parse-schema-config
   "Parses the schema configuration JSON string.
    Returns a map with a :tables key containing a list of table definitions, or nil if parsing fails or config is empty."
@@ -132,8 +145,8 @@
         options        {:insecure? (:use-insecure details)
                         :default-graph default-graph}
         class-uri      (uri/absolute-uri (:name table) default-graph)
-        property-limit (or (:property-limit details) 20)
-        sample-limit   (or (:sample-limit details) 10000)
+        property-limit (or (->long (:property-limit details)) 20)
+        sample-limit   (or (->long (:sample-limit details)) 10000)
         query          (templates/class-properties-query class-uri property-limit sample-limit)
         [success result] (execute/execute-sparql-query endpoint query options)]
     (if success
@@ -199,9 +212,9 @@
    Timeouts are configured in seconds and the size cap in megabytes; unset
    values are left `nil` so the SHACL extractor applies its own defaults."
   [details]
-  {:connect-timeout-ms (some-> (:shacl-connect-timeout details) (* 1000))
-   :socket-timeout-ms  (some-> (:shacl-socket-timeout details) (* 1000))
-   :max-bytes          (some-> (:shacl-max-size-mb details) (* 1024 1024))})
+  {:connect-timeout-ms (some-> (:shacl-connect-timeout details) ->long (* 1000))
+   :socket-timeout-ms  (some-> (:shacl-socket-timeout details) ->long (* 1000))
+   :max-bytes          (some-> (:shacl-max-size-mb details) ->long (* 1024 1024))})
 
 (defn- shacl-shapes
   "Fetch and cache SHACL shapes for `database`. Returns `nil` if no URL is
@@ -347,7 +360,7 @@
         endpoint      (:endpoint details)
         options       {:insecure? (:use-insecure details)
                        :default-graph default-graph}
-        class-limit   (or (:class-limit details) 100)
+        class-limit   (or (->long (:class-limit details)) 100)
         [success result] (execute/execute-sparql-query endpoint (templates/classes-discovery-query class-limit) options)]
     (if success
       (let [classes-with-counts (cond->> (get-in result [:results :bindings])
