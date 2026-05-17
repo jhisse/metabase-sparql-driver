@@ -66,7 +66,7 @@ jobs:
         uses: actions/checkout@v6
         with:
           submodules: 'recursive'
-      
+
       - name: Setup Java
         uses: actions/setup-java@v5
         with:
@@ -92,7 +92,7 @@ jobs:
 
       - name: Run Tests
         run: make test
-      
+
       - name: Run Coverage
         run: make coverage
 
@@ -144,7 +144,7 @@ jobs:
           path: target/sparql.metabase-driver.jar
           if-no-files-found: error
 
-        - name: Save Clojure dependencies cache
+      - name: Save Clojure dependencies cache
         if: always() && steps.cache-clojure.outputs.cache-hit != 'true'
         uses: actions/cache/save@v5
         with:
@@ -182,7 +182,7 @@ jobs:
             --title="Metabase SPARQL Driver ${TAG#v}" \
             --generate-notes \
             'target/sparql.metabase-driver.jar#sparql.metabase-driver.jar'
-    
+
   build-and-push-docker-image:
     name: Build and push Docker image
     runs-on: ubuntu-latest
