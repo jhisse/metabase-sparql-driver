@@ -46,7 +46,17 @@ jobs:
 
       - name: Run Static Analysis
         run: make splint
-  
+
+        - name: Save Clojure dependencies cache
+        if: always() && steps.cache-clojure.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v5
+        with:
+          path: |
+            ~/.m2/repository
+            ~/.gitlibs
+            ~/.deps.clj
+          key: ${{ steps.cache-clojure.outputs.cache-primary-key }}
+
   tests:
     name: Run Tests
     runs-on: ubuntu-latest
