@@ -55,7 +55,7 @@ jobs:
             ~/.m2/repository
             ~/.gitlibs
             ~/.deps.clj
-          key: ${{ steps.cache-clojure.outputs.cache-primary-key }}
+          key: ${{ runner.os }}-clojure-${{ hashFiles('deps.edn', 'metabase/deps.edn') }}-${{ github.run_id }}
 
   tests:
     name: Run Tests
@@ -104,7 +104,7 @@ jobs:
             ~/.m2/repository
             ~/.gitlibs
             ~/.deps.clj
-          key: ${{ steps.cache-clojure.outputs.cache-primary-key }}
+          key: ${{ runner.os }}-clojure-${{ hashFiles('deps.edn', 'metabase/deps.edn') }}-${{ github.run_id }}
 
   build:
     name: Build Driver
@@ -152,7 +152,7 @@ jobs:
             ~/.m2/repository
             ~/.gitlibs
             ~/.deps.clj
-          key: ${{ steps.cache-clojure.outputs.cache-primary-key }}
+          key: ${{ runner.os }}-clojure-${{ hashFiles('deps.edn', 'metabase/deps.edn') }}-${{ github.run_id }}
 
   release:
     name: Release Driver
