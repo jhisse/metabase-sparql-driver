@@ -43,10 +43,9 @@
         (log/debugf "[database-supports?] - now() function is not supported (query failed: %s)" result)
         false))))
 
-;; Example of how to add support for another feature in the future:
-;; 
-;; (defmethod database-supports? :basic-aggregation
-;;   [_driver _feature database]
-;;   (log/debugf "[database-supports?] - Checking COUNT aggregation support")
-;;   ;; Specific implementation to verify support for COUNT aggregation
-;;   )
+;; Basic aggregations (count, count-distinct, sum, avg, min, max) are compiled to
+;; SPARQL aggregate functions with an optional GROUP BY. SPARQL 1.1 endpoints all
+;; support these, so we report the feature as available unconditionally.
+(defmethod database-supports? :basic-aggregations
+  [_driver _feature _database]
+  true)

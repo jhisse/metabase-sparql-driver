@@ -1,11 +1,106 @@
 info:
   name: Metabase SPARQL Driver
-  version: 0.0.10
+  version: 0.0.11
   description: Driver for connecting to SPARQL endpoints
 driver:
   name: sparql
   display-name: SPARQL
   lazy-load: true
+  connection-properties:
+    - name: endpoint
+      display-name: SPARQL Endpoint
+      placeholder: https://dbpedia.org/sparql
+      required: true
+    - name: use-insecure
+      display-name: Ignore SSL Certificate Errors
+      type: boolean
+      default: false
+    - name: default-graph
+      display-name: Default Graph URI
+      placeholder: http://dbpedia.org
+    - name: default-language
+      display-name: Default Language
+      placeholder: nl
+      description: 'BCP-47 language tag (e.g. nl, en). When set, queries against rdf:langString columns include a FILTER restricting to this language tag (plus untagged literals), and SHACL sh:name / sh:description literals are picked using this language first. Leave blank to disable.'
+    - name: hide-foreign-uris
+      display-name: Hide URIs outside the Default Graph
+      type: boolean
+      default: false
+      description: When enabled, RDF classes and properties whose URI does not start with the Default Graph URI are skipped during sync.
+    - advanced-options-start
+    - name: metadata-sync-strategy
+      display-name: Metadata Sync Strategy
+      type: string
+      default: auto
+      description: 'How Metabase discovers tables and fields. One of: auto (discover from endpoint), none (don''t sync), explicit (use JSON configuration), shacl (fetch from URL).'
+      visible-if:
+        advanced-options: true
+    - name: shacl-url
+      display-name: SHACL URL
+      placeholder: https://example.org/schema.ttl
+      description: URL serving a SHACL document in Turtle. Fetched at sync time when Metadata Sync Strategy is set to SHACL. HTTPS is recommended; plain HTTP is allowed for local testing.
+      visible-if:
+        metadata-sync-strategy: shacl
+    - name: shacl-connect-timeout
+      display-name: SHACL Connect Timeout (seconds)
+      type: string
+      default: 10
+      description: Maximum time to wait when establishing a connection to the SHACL URL.
+      visible-if:
+        metadata-sync-strategy: shacl
+    - name: shacl-socket-timeout
+      display-name: SHACL Read Timeout (seconds)
+      type: string
+      default: 30
+      description: Maximum time to wait for data while reading the SHACL document.
+      visible-if:
+        metadata-sync-strategy: shacl
+    - name: shacl-max-size-mb
+      display-name: SHACL Max Document Size (MB)
+      type: string
+      default: 10
+      description: Reject SHACL documents larger than this size.
+      visible-if:
+        metadata-sync-strategy: shacl
+    - name: schema-config
+      display-name: Schema Configuration (JSON)
+      type: text
+      placeholder: |-
+        {
+          "tables": [
+            {
+              "name": "http://example.org/Person",
+              "fields": [
+                "http://xmlns.com/foaf/0.1/givenName",
+                "http://xmlns.com/foaf/0.1/familyName"
+              ]
+            }
+          ]
+        }
+      description: 'Explicitly define tables and fields to skip discovery. Format: JSON object with a tables array.'
+      visible-if:
+        metadata-sync-strategy: explicit
+    - name: class-limit
+      display-name: Class Discovery Limit
+      type: string
+      default: 100
+      description: Maximum number of RDF classes (tables) to discover.
+      visible-if:
+        metadata-sync-strategy: auto
+    - name: property-limit
+      display-name: Property Discovery Limit
+      type: string
+      default: 20
+      description: Maximum number of properties (fields) to discover per class.
+      visible-if:
+        metadata-sync-strategy: auto
+    - name: sample-limit
+      display-name: Discovery Sample Size
+      type: string
+      default: 10000
+      description: Number of instances to sample when discovering properties.
+      visible-if:
+        metadata-sync-strategy: auto
 init:
   - step: load-namespace
     namespace: metabase.driver.sparql

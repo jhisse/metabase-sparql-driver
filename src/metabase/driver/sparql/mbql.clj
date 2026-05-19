@@ -1,10 +1,12 @@
 (ns metabase.driver.sparql.mbql
-  "Simple MBQL → SPARQL transpilation. No aggregations or complex functions."
+  "Simple MBQL → SPARQL transpilation. Supports projection, filters, ordering,
+   implicit joins, and aggregations."
   (:require
    [clojure.string :as str]
    [clojure.set :as set]
-   [metabase.query-processor.store :as qp.store]
-   [metabase.lib.metadata :as lib.metadata]
+   [metabase.driver-api.core :as driver-api]
+   [metabase.driver.sparql.uri :as uri]
+   [metabase.lib.metadata.result-metadata :as result-metadata]
    [metabase.util.log :as log]))
 
 (defn- sanitize-var-name
@@ -22,24 +24,74 @@
              (= :field (first field-token)))
     (second field-token)))
 
+(defn- field-token->opts
+  "Extract the options map from a [:field id opts] token, if any."
+  [field-token]
+  (when (and (vector? field-token) (= :field (first field-token)))
+    (let [opts (nth field-token 2 nil)]
+      (when (map? opts) opts))))
+
+(defn- field-token->join-alias
+  "Return the `:join-alias` on a field token (the marker that the field is reached via an implicit join)."
+  [field-token]
+  (:join-alias (field-token->opts field-token)))
+
 (defn- field-id->metadata
-  "Resolve field metadata by ID."
+  "Resolve field metadata by numeric ID. Returns nil for non-numeric field refs
+   (e.g. string column names produced by nested-query / aggregation outputs) so
+   they never reach the application DB as a malformed `field.id` lookup."
   [field-id]
-  (when field-id
-    (lib.metadata/field (qp.store/metadata-provider) field-id)))
+  (when (integer? field-id)
+    (driver-api/field (driver-api/metadata-provider) field-id)))
+
 
 (defn- id-field?
-  "Return true if the field-id represents the subject (id) column."
+  "Return true if the field-id represents the synthetic subject column.
+
+   The only reliable signal is the reserved name `subject` that
+   `build-pk-field` hardcodes. We must NOT use `:semantic-type :type/PK`:
+   Metabase's name-based classifier auto-stamps `:type/PK` on *any* field
+   literally named `id`, and after Default-Graph URI shortening a real RDF
+   property `<base>/id` becomes a column named `id`. Treating it as the
+   subject would silently drop it from the SELECT."
   [field-id]
-  (let [m (field-id->metadata field-id)]
-    (or (= "id" (:name m))
-        (:pk? m))))
+  (= "subject" (:name (field-id->metadata field-id))))
+
+(defn- database-default-graph
+  "Read the Default Graph URI from the connection details of the current database."
+  []
+  (some-> (driver-api/database (driver-api/metadata-provider))
+          :details
+          :default-graph))
+
+(defn- database-default-language
+  "Read the Default Language (BCP-47 tag) from connection details. May be blank."
+  []
+  (some-> (driver-api/database (driver-api/metadata-provider))
+          :details
+          :default-language))
+
+(defn- lang-string-field?
+  "True when the field's `:database-type` indicates an `rdf:langString` property
+   (set during SHACL sync). Other sync strategies always emit `\"string\"`, so
+   this is effectively a SHACL-only signal."
+  [field-id]
+  (= "langString" (:database-type (field-id->metadata field-id))))
+
+(defn- lang-filter-line
+  "Render the LANG filter clause for one variable. Guards against unbound
+   variables (left joins) and accepts untagged literals alongside the target
+   language."
+  [var-name lang]
+  (format "  FILTER(!BOUND(?%s) || LANG(?%s) = \"%s\" || LANG(?%s) = \"\")"
+          var-name var-name lang var-name))
 
 (defn- table-id->class-uri
   "Resolve RDF class URI (table name) from :source-table."
   [table-id]
-  (let [uri (some-> (lib.metadata/table (qp.store/metadata-provider) table-id)
-                    :name)]
+  (let [nm  (some-> (driver-api/table (driver-api/metadata-provider) table-id)
+                    :name)
+        uri (uri/absolute-uri nm (database-default-graph))]
     (log/debugf "[mbql] Resolved class URI for table-id %s: %s" table-id uri)
     uri))
 
@@ -60,10 +112,59 @@
                 (count ids-from-fields) (count ids-from-order) (count ids-from-filter) (count all-ids))
     all-ids))
 
-(defn- var-for-field-id
-  "Return SPARQL var for a field-id (handles subject)."
-  [field-id field-id->var]
-  (if (id-field? field-id) "subject" (get field-id->var field-id)))
+(defn- var-for-token
+  "Resolve the SPARQL variable name for a `[:field id opts]` token.
+
+   - If the token carries `:join-alias`, look up the joined target var via
+     `pair->target-var` keyed by `[field-id alias]`.
+   - Otherwise the subject (PK) field always maps to `?subject`.
+   - Otherwise look up the regular alias from `field-id->var`."
+  [field-token field-id->var pair->target-var]
+  (let [fid   (field-token->id field-token)
+        alias (field-token->join-alias field-token)]
+    (cond
+      (and fid alias) (get pair->target-var [fid alias])
+      (and fid (id-field? fid)) "subject"
+      fid (get field-id->var fid))))
+
+(defn- condition->fk-ref
+  "Extract the *current-table* field token (`[:field …]` without a `:join-alias`)
+   from a join `:condition`. The condition is a legacy-MBQL filter clause,
+   normally `[:= [:field A] [:field B {:join-alias …}]]` (a `[:and …]` wrapper
+   for multi-column joins is unwrapped to its first `:=`)."
+  [condition]
+  (when (sequential? condition)
+    (when-let [eq (condp = (first condition)
+                    := condition
+                    :and (first (filter #(and (sequential? %) (= := (first %)))
+                                        (rest condition)))
+                    nil)]
+      (->> (rest eq)
+           (filter #(and (vector? %) (= :field (first %))))
+           (remove field-token->join-alias)
+           first))))
+
+(defn- condition->fk-field-id
+  "Field-id of the current-table side of a join `:condition` (see [[condition->fk-ref]])."
+  [condition]
+  (field-token->id (condition->fk-ref condition)))
+
+(defn- collect-joined-pairs
+  "Walk a legacy-MBQL stage and return the set of `[field-id alias]` pairs for every
+   `[:field id {:join-alias \"...\"}]` token that appears in `:fields`, `:order-by`,
+   or `:filter`."
+  [{:keys [fields order-by] filter-clause :filter}]
+  (letfn [(walk [x]
+            (cond
+              (and (vector? x) (= :field (first x)))
+              (when-let [a (field-token->join-alias x)]
+                [[(field-token->id x) a]])
+              (sequential? x) (mapcat walk x)
+              (map? x) (mapcat walk (vals x))
+              :else []))]
+    (set (concat (mapcat walk (or fields []))
+                 (mapcat walk (mapcat (fn [[_dir fld & _]] [fld]) (or order-by [])))
+                 (walk filter-clause)))))
 
 (defn- literal->sparql
   "Convert a value to a SPARQL literal."
@@ -77,22 +178,22 @@
 
 (defn- compile-filter-expr
   "Compile a filter clause to a SPARQL boolean expression string."
-  [filter-clause field-id->var]
+  [filter-clause field-id->var pair->target-var]
   (when (sequential? filter-clause)
     (let [[op lhs rhs maybe-opts & more] filter-clause]
       (case op
         :and (let [parts (->> (concat [lhs rhs] more)
-                              (keep #(compile-filter-expr % field-id->var)))]
+                              (keep #(compile-filter-expr % field-id->var pair->target-var)))]
                (when (seq parts)
                  (str "(" (str/join " && " parts) ")")))
         :or  (let [parts (->> (concat [lhs rhs] more)
-                              (keep #(compile-filter-expr % field-id->var)))]
+                              (keep #(compile-filter-expr % field-id->var pair->target-var)))]
                (when (seq parts)
                  (str "(" (str/join " || " parts) ")")))
-        :not (when-let [inner (compile-filter-expr lhs field-id->var)]
+        :not (when-let [inner (compile-filter-expr lhs field-id->var pair->target-var)]
                (str "(!" inner ")"))
         (let [fid (field-token->id lhs)
-              var (some-> fid (var-for-field-id field-id->var))
+              var (var-for-token lhs field-id->var pair->target-var)
               opts (when (map? maybe-opts) maybe-opts)
               insensitive? (false? (:case-sensitive opts))
               v (let [x rhs]
@@ -150,17 +251,16 @@
 
 (defn- compile-basic-filter
   "Compile a filter clause to one or more FILTER lines."
-  [filter-clause field-id->var _field-id->prop]
-  (when-let [expr (compile-filter-expr filter-clause field-id->var)]
+  [filter-clause field-id->var pair->target-var]
+  (when-let [expr (compile-filter-expr filter-clause field-id->var pair->target-var)]
     [(str "  FILTER " expr)]))
 
 (defn- compile-order-by
   "Compile :order-by to ORDER BY."
-  [order-by field-id->var]
+  [order-by field-id->var pair->target-var]
   (when (seq order-by)
     (let [parts (for [[dir fld & _] order-by
-                      :let [fid (field-token->id fld)
-                            var (if (id-field? fid) "subject" (some-> fid field-id->var))]]
+                      :let [var (var-for-token fld field-id->var pair->target-var)]]
                   (when var
                     (str (str/upper-case (name dir)) "(?" var ")")))
           parts (remove nil? parts)]
@@ -169,75 +269,541 @@
           (log/debugf "[mbql] Order clause: %s" clause)
           clause)))))
 
-(defn mbql->native
-  "Compile outer MBQL to a native SPARQL map."
-  [_driver outer-query]
-  (let [inner        (:query outer-query)
-        table-id     (:source-table inner)
-        class-uri    (table-id->class-uri table-id)
-        fields       (:fields inner)
-        order-by     (:order-by inner)
-        limit        (:limit inner)
+(defn- unwrap-aggregation
+  "Strip an `:aggregation-options` wrapper, returning the inner aggregation clause."
+  [agg]
+  (if (and (sequential? agg) (= :aggregation-options (first agg)))
+    (second agg)
+    agg))
+
+(defn- aggregation-arg-token
+  "Return the `[:field …]` token an aggregation operates on, or nil for arg-less
+   aggregations such as `[:count]`."
+  [agg]
+  (let [agg (unwrap-aggregation agg)
+        arg (when (sequential? agg) (second agg))]
+    (when (and (vector? arg) (= :field (first arg)))
+      arg)))
+
+(defn- aggregation->projection
+  "Compile one aggregation clause to a SPARQL projection
+   `{:select \"(EXPR AS ?ag_N)\" :var \"ag_N\"}`. `token->var` resolves a field
+   token to its SPARQL variable. Returns nil for unsupported aggregations.
+
+   `[:count]` with no argument becomes `COUNT(DISTINCT ?subject)` in a base
+   stage (so the multi-valued OPTIONAL fan-out does not inflate entity counts);
+   when `count-all?` is true (derived stage, no `?subject` var) it becomes
+   `COUNT(*)`."
+  ([agg index token->var]
+   (aggregation->projection agg index token->var false))
+  ([agg index token->var count-all?]
+   (let [agg     (unwrap-aggregation agg)
+        op      (when (sequential? agg) (first agg))
+        out     (str "ag_" index)
+        arg     (aggregation-arg-token agg)
+        arg-var (when arg (token->var arg))
+        expr    (case op
+                  :count    (cond
+                              arg-var    (format "COUNT(?%s)" arg-var)
+                              count-all? "COUNT(*)"
+                              :else      "COUNT(DISTINCT ?subject)")
+                  :distinct (when arg-var (format "COUNT(DISTINCT ?%s)" arg-var))
+                  :sum      (when arg-var (format "SUM(?%s)" arg-var))
+                  :avg      (when arg-var (format "AVG(?%s)" arg-var))
+                  :min      (when arg-var (format "MIN(?%s)" arg-var))
+                  :max      (when arg-var (format "MAX(?%s)" arg-var))
+                  nil)]
+     (when expr
+       {:select (format "(%s AS ?%s)" expr out)
+        :var    out}))))
+
+(defn- compile-agg-order-by
+  "Compile `:order-by` for an aggregation query. Order terms may reference a
+   breakout field (`[:field …]`) or an aggregation by index (`[:aggregation N]`)."
+  [order-by field-id->var pair->target-var]
+  (when (seq order-by)
+    (let [parts (for [[dir tok & _] order-by
+                      :let [v (cond
+                                (and (vector? tok) (= :aggregation (first tok)))
+                                (str "ag_" (second tok))
+                                (and (vector? tok) (= :field (first tok)))
+                                (var-for-token tok field-id->var pair->target-var)
+                                :else nil)]
+                      :when v]
+                  (str (str/upper-case (name dir)) "(?" v ")"))]
+      (when (seq parts)
+        (str "ORDER BY " (str/join " " parts))))))
+
+(declare compile-stage)
+
+(defn- resolve-expected-var
+  "Resolve the SPARQL variable a stage already projects for one Lib expected column,
+   using the variable maps the stage compiler has built. Returns nil when the stage
+   compiler did not project that column (so the caller must synthesize it)."
+  [col field-id->var pair->target-var]
+  (let [fid   (:id col)
+        alias (:lib/join-alias col)]
+    (cond
+      (and fid alias)           (get pair->target-var [fid alias])
+      (and fid (id-field? fid)) "subject"
+      fid                       (get field-id->var fid))))
+
+(defn- reconcile-base-projection
+  "Build the SELECT variable list (plus any extra OPTIONAL triples) for a base stage so
+   it projects exactly one variable per Lib `expected-cols` entry, in Lib's order.
+
+   `expected-cols` is the authoritative column list from Metabase's result-metadata
+   (`metabase.lib.metadata.result-metadata/returned-columns`) — the same calculation the
+   `annotate` middleware uses. Columns the stage compiler already covers reuse their
+   variable; columns it missed (e.g. an FK-remap layered on another FK-remap target)
+   are synthesized here so the driver's column count can never drift from Lib's.
+
+   Returns `{:vars [...] :triples [...]}`."
+  [expected-cols {:keys [field-id->var pair->target-var alias->intermediate-var default-graph]}]
+  (let [placeholder (atom 0)]
+    (reduce
+     (fn [acc col]
+       (let [fid      (:id col)
+             alias    (:lib/join-alias col)
+             existing (resolve-expected-var col field-id->var pair->target-var)]
+         (cond
+           existing
+           (update acc :vars conj existing)
+
+           ;; Joined column the compiler missed: bind it off the join's intermediate var.
+           (and fid alias (get alias->intermediate-var alias))
+           (let [inter (get alias->intermediate-var alias)]
+             (if (id-field? fid)
+               (update acc :vars conj inter)
+               (let [nm   (:name (field-id->metadata fid))
+                     v    (sanitize-var-name (str alias "__" (or nm (str "f_" fid))))
+                     prop (uri/absolute-uri nm default-graph)]
+                 (-> acc
+                     (update :vars conj v)
+                     (update :triples conj
+                             (format "  OPTIONAL { ?%s <%s> ?%s . }" inter prop v))))))
+
+           ;; Direct column the compiler missed: bind it off ?subject.
+           (and fid (not alias) (not (id-field? fid)) (:name (field-id->metadata fid)))
+           (let [nm   (:name (field-id->metadata fid))
+                 v    (sanitize-var-name nm)
+                 prop (uri/absolute-uri nm default-graph)]
+             (-> acc
+                 (update :vars conj v)
+                 (update :triples conj
+                         (format "  OPTIONAL { ?subject <%s> ?%s . }" prop v))))
+
+           (and fid (id-field? fid))
+           (update acc :vars conj "subject")
+
+           ;; Unresolvable column (e.g. an expression): project an unbound placeholder
+           ;; so the column count still matches Lib; the value comes back as nil.
+           :else
+           (update acc :vars conj (str "undefined_" (swap! placeholder inc))))))
+     {:vars [] :triples []}
+     expected-cols)))
+
+(defn- compile-base-stage
+  "Compile a base MBQL stage (one with `:source-table`) to a SPARQL query.
+
+   Left-joins (added by `add-implicit-joins` for FK-remap dimensions) are
+   emitted as a pair of independent OPTIONALs:
+
+     OPTIONAL { ?subject <fk-prop> ?<alias>_subject . }
+     OPTIONAL { ?<alias>_subject <target-prop> ?<alias>__<target-var> . }
+
+   Aggregation queries (`:aggregation` present) project only breakout columns
+   and aggregate expressions, with a `GROUP BY` over the breakouts. `[:count]`
+   compiles to `COUNT(DISTINCT ?subject)`.
+
+   When `expected-cols` (Lib's authoritative column list) is supplied for a
+   non-aggregation stage, the SELECT projection is reconciled against it so the
+   driver's column count and order always match what the `annotate` middleware
+   expects — see [[reconcile-base-projection]].
+
+   Returns `{:sparql <query string> :vars <SELECT var names, in order>}`."
+  [inner expected-cols]
+  (let [limit         (:limit inner)
+        table-id      (:source-table inner)
+        class-uri     (table-id->class-uri table-id)
+        default-graph (database-default-graph)
+        fields        (:fields inner)
+        order-by      (:order-by inner)
         filter-clause (:filter inner)
-        _            (log/debugf "[mbql] Start compile: table-id=%s fields=%d order-by=%d limit=%s has-filter=%s"
-                                 table-id (count fields) (count order-by) (pr-str limit) (boolean filter-clause))
-        field-ids    (collect-field-ids inner)
+        joins         (:joins inner)
+        aggregations  (:aggregation inner)
+        breakout      (:breakout inner)
+        agg?          (boolean (seq aggregations))
+        ;; In aggregation mode raw :fields are not projected; the columns that
+        ;; need WHERE triples are the breakout columns and the aggregated columns.
+        output-tokens (if agg?
+                        (vec (concat breakout (keep aggregation-arg-token aggregations)))
+                        (vec (or fields [])))
+        ;; A synthetic inner query so collect-field-ids / collect-joined-pairs
+        ;; pick up breakout + aggregation-arg fields the same way they do :fields.
+        triple-inner  (assoc inner :fields output-tokens)
+        _             (log/debugf "[mbql] Start compile: table-id=%s agg?=%s output-fields=%d breakout=%d order-by=%d joins=%d"
+                                  table-id agg? (count output-tokens) (count breakout) (count order-by) (count joins))
+        ;; Joined-field references: `[field-id alias]` pairs that appear anywhere in the stage.
+        joined-pairs   (collect-joined-pairs triple-inner)
+        joined-fids    (set (map first joined-pairs))
+        ;; Per-join intermediate var: ?<alias>_subject — binds the joined entity URI.
+        alias->intermediate-var (into {}
+                                      (for [j joins]
+                                        [(:alias j) (sanitize-var-name (str (:alias j) "_subject"))]))
+        ;; FK property to reach the joined entity. Implicit joins carry `:fk-field-id`;
+        ;; explicit joins only have a `:condition`, so fall back to that.
+        alias->fk-prop (into {}
+                             (for [j joins
+                                   :let [alias (:alias j)
+                                         fk-id (or (:fk-field-id j)
+                                                   (condition->fk-field-id (:condition j)))
+                                         nm    (when fk-id (:name (field-id->metadata fk-id)))]
+                                   :when nm]
+                               [alias (uri/absolute-uri nm default-graph)]))
+        ;; Per joined-pair: the SPARQL var that carries the value. The joined entity's
+        ;; own subject column IS the intermediate var (no extra triple needed); every
+        ;; other joined column gets a unique `<alias>__<field-name>` var.
+        pair->target-var (into {}
+                               (for [[fid alias] joined-pairs]
+                                 [[fid alias]
+                                  (if (id-field? fid)
+                                    (get alias->intermediate-var alias)
+                                    (sanitize-var-name
+                                     (str alias "__" (or (:name (field-id->metadata fid))
+                                                          (str "f_" fid)))))]))
+        ;; All field-ids referenced anywhere in the stage; we only build direct triples for
+        ;; those that aren't reached via a join.
+        field-ids     (collect-field-ids triple-inner)
         field-id->prop (into {}
                              (for [fid field-ids
                                    :let [nm (:name (field-id->metadata fid))]
                                    :when (and nm (not (id-field? fid)))]
-                               [fid nm]))
+                               [fid (uri/absolute-uri nm default-graph)]))
         field-id->var  (build-var-aliases field-ids)
-        triples-for-fields (->> fields
-                                (keep field-token->id)
-                                (keep (fn [fid]
-                                        (when-let [prop (and (not (id-field? fid))
-                                                             (get field-id->prop fid))]
-                                          (ensure-triple-for-field prop (get field-id->var fid))))))
-        extra-field-ids (letfn [(collect-field-tokens [x]
-                                  (cond
-                                    (and (vector? x) (= :field (first x))) [x]
-                                    (sequential? x) (mapcat collect-field-tokens x)
-                                    (map? x) (mapcat collect-field-tokens (vals x))
-                                    :else []))]
-                          (->> (concat (map #(nth % 1 nil) (or order-by []))
-                                       (collect-field-tokens filter-clause))
-                               (keep field-token->id)
-                               set
-                               (remove (set (keep field-token->id fields)))))
-        triples-for-extras (for [fid extra-field-ids
+        token->var     (fn [tok] (var-for-token tok field-id->var pair->target-var))
+        triples-for-fields (->> output-tokens
+                                (keep (fn [tok]
+                                        (let [fid   (field-token->id tok)
+                                              alias (field-token->join-alias tok)]
+                                          (when (and fid
+                                                     (not alias)
+                                                     (not (id-field? fid))
+                                                     (get field-id->prop fid))
+                                            (ensure-triple-for-field (get field-id->prop fid)
+                                                                     (get field-id->var fid)))))))
+        ;; Field tokens appearing in order-by/filter but not in fields (still need their triple).
+        extra-direct-fids (letfn [(collect-field-tokens [x]
+                                    (cond
+                                      (and (vector? x) (= :field (first x))) [x]
+                                      (sequential? x) (mapcat collect-field-tokens x)
+                                      (map? x) (mapcat collect-field-tokens (vals x))
+                                      :else []))]
+                            (->> (concat (mapcat (fn [[_dir fld & _]] [fld]) (or order-by []))
+                                         (collect-field-tokens filter-clause))
+                                 (remove field-token->join-alias)
+                                 (keep field-token->id)
+                                 set
+                                 (remove (set (keep field-token->id (remove field-token->join-alias output-tokens))))
+                                 (remove joined-fids)
+                                 (remove id-field?)))
+        triples-for-extras (for [fid extra-direct-fids
                                  :let [prop (get field-id->prop fid)
                                        var  (get field-id->var fid)]
-                                 :when prop]
+                                 :when (and prop var)]
                              (ensure-triple-for-field prop var))
-        _                 (log/debugf "[mbql] Triples: fields=%d extras=%d" (count triples-for-fields) (count triples-for-extras))
+        ;; OPTIONAL triples introduced by left-joins.
+        join-fk-triples (for [j joins
+                              :let [alias (:alias j)
+                                    fk-prop (get alias->fk-prop alias)
+                                    inter-var (get alias->intermediate-var alias)]
+                              :when (and fk-prop inter-var)]
+                          (format "  OPTIONAL { ?subject <%s> ?%s . }" fk-prop inter-var))
+        ;; One triple per joined column. The joined entity's own subject column needs
+        ;; no triple — it IS the intermediate var, already bound by the FK triple.
+        join-target-triples (for [[fid alias] joined-pairs
+                                  :when (not (id-field? fid))
+                                  :let [nm (:name (field-id->metadata fid))
+                                        prop (uri/absolute-uri nm default-graph)
+                                        target-var (get pair->target-var [fid alias])
+                                        inter-var (get alias->intermediate-var alias)]
+                                  :when (and prop target-var inter-var)]
+                              (format "  OPTIONAL { ?%s <%s> ?%s . }" inter-var prop target-var))
+        _ (log/debugf "[mbql] Triples: fields=%d extras=%d join-fk=%d join-targets=%d"
+                      (count triples-for-fields) (count triples-for-extras)
+                      (count join-fk-triples) (count join-target-triples))
+        ;; LANG filters for `rdf:langString` columns, when a default-language is configured.
+        ;; One per referenced variable; covers direct fields, extras, and joined targets.
+        lang-filter-lines
+        (let [lang (database-default-language)]
+          (when-not (str/blank? lang)
+            (let [direct-lang-vars (->> (concat (keep field-token->id (remove field-token->join-alias output-tokens))
+                                                extra-direct-fids)
+                                        (filter lang-string-field?)
+                                        (keep #(get field-id->var %)))
+                  joined-lang-vars (->> joined-pairs
+                                        (filter (fn [[fid _]] (lang-string-field? fid)))
+                                        (keep (fn [pair] (get pair->target-var pair))))]
+              (mapv #(lang-filter-line % lang)
+                    (distinct (concat direct-lang-vars joined-lang-vars))))))
+        _ (log/debugf "[mbql] LANG filter lines: %d" (count (or lang-filter-lines [])))
         filters (when filter-clause
-                  (or (compile-basic-filter filter-clause field-id->var field-id->prop)
+                  (or (compile-basic-filter filter-clause field-id->var pair->target-var)
                       []))
-        _       (log/debugf "[mbql] Filters count: %d" (count filters))
-        order-clause (compile-order-by order-by field-id->var)
-        select-vars (->> (keep field-token->id fields)
-                         (remove id-field?)
-                         (map field-id->var)
-                         (remove nil?)
-                         distinct
-                         vec)
-        select-part (str "SELECT ?subject"
-                         (when (seq select-vars)
-                           (str " " (str/join " " (map #(str "?" %) select-vars)))))
+        _ (log/debugf "[mbql] Filters count: %d" (count filters))
+        ;; --- SELECT / GROUP BY / ORDER BY ------------------------------------
+        agg-projections (when agg?
+                          (keep-indexed (fn [i a] (aggregation->projection a i token->var))
+                                        aggregations))
+        breakout-vars   (when agg?
+                          (->> breakout (keep token->var) distinct vec))
+        ;; Non-aggregation SELECT var list: ?subject + direct fields + joined target vars.
+        direct-select-vars (when-not agg?
+                             (->> fields
+                                  (remove field-token->join-alias)
+                                  (keep field-token->id)
+                                  (remove id-field?)
+                                  (map field-id->var)
+                                  (remove nil?)
+                                  distinct
+                                  vec))
+        joined-select-vars (when-not agg?
+                             (->> fields
+                                  (keep (fn [tok]
+                                          (when-let [a (field-token->join-alias tok)]
+                                            (get pair->target-var [(field-token->id tok) a]))))
+                                  distinct
+                                  vec))
+        ;; When Lib's expected columns are known, reconcile the SELECT against them so
+        ;; the driver's column count/order can never drift from the `annotate` middleware.
+        reconciled  (when (and expected-cols (not agg?))
+                      (reconcile-base-projection
+                       expected-cols
+                       {:field-id->var           field-id->var
+                        :pair->target-var        pair->target-var
+                        :alias->intermediate-var alias->intermediate-var
+                        :default-graph           default-graph}))
+        result-vars (cond
+                      agg?       (vec (concat breakout-vars (keep :var agg-projections)))
+                      reconciled (vec (:vars reconciled))
+                      :else      (vec (concat ["subject"] direct-select-vars joined-select-vars)))
+        select-part (if agg?
+                      (str "SELECT "
+                           (str/join " " (concat (map #(str "?" %) breakout-vars)
+                                                 (map :select agg-projections))))
+                      (str "SELECT " (str/join " " (map #(str "?" %) result-vars))))
+        group-by-clause (when (and agg? (seq breakout-vars))
+                          (str "GROUP BY " (str/join " " (map #(str "?" %) breakout-vars))))
+        order-clause (if agg?
+                       (compile-agg-order-by order-by field-id->var pair->target-var)
+                       (compile-order-by order-by field-id->var pair->target-var))
         where-body  (->> (concat [(format "  ?subject a <%s> ." class-uri)]
                                  triples-for-fields
                                  triples-for-extras
+                                 join-fk-triples
+                                 join-target-triples
+                                 (or (:triples reconciled) [])
+                                 (or lang-filter-lines [])
                                  filters)
                          (str/join "\n"))
         where-part  (str "WHERE {\n" where-body "\n}")
         limit-part  (when (number? limit) (str "LIMIT " limit))
         query       (str (str/trim select-part) "\n"
                          where-part "\n"
+                         (when group-by-clause (str group-by-clause "\n"))
                          (when order-clause (str order-clause "\n"))
                          (when limit-part (str limit-part)))]
-    (log/debugf "[sparql.mbql->native] Compiled query: %s" query)
-    {:query query
+    (log/debugf "[sparql.mbql] Compiled base stage: %s" query)
+    {:sparql query
+     :vars   result-vars}))
+
+(defn- inner-var-for-ref
+  "Determine the SPARQL variable a base/inner stage projects for `fk-ref` — a
+   `[:field id-or-name …]` token referenced by an outer join condition. The
+   inner stage names variables by the sanitized field name, so this stays
+   consistent whether the outer condition kept the numeric id or degraded to a
+   source-query column name string."
+  [fk-ref]
+  (let [id (field-token->id fk-ref)]
+    (cond
+      (and (integer? id) (id-field? id)) "subject"
+      (integer? id) (sanitize-var-name (:name (field-id->metadata id)))
+      (string? id)  (sanitize-var-name id)
+      :else         nil)))
+
+(defn- compile-derived-stage
+  "Compile a derived MBQL stage (one with `:source-query`). The QP adds these
+   wrapper stages when a saved card / model is used as a source, or when an FK
+   display-value remap is layered on top of an aggregation.
+
+   The inner stage is compiled as a SPARQL sub-`SELECT`; the derived stage's
+   remap joins are emitted as OPTIONALs around it. The outer stage's own
+   `:aggregation`, `:breakout`, `:filter`, `:order-by`, and explicit `:fields`
+   projection are honored, resolved against the variables the sub-`SELECT`
+   already projects (no triple patterns are needed at this level).
+
+   When `expected-cols` (Lib's authoritative column list) is supplied for a
+   non-aggregation stage, the SELECT projection is reconciled against it so the
+   driver's column count and order always match what the `annotate` middleware
+   expects.
+
+   Returns `{:sparql … :vars …}`."
+  [stage expected-cols]
+  (let [default-graph (database-default-graph)
+        inner         (compile-stage (:source-query stage))
+        joins         (:joins stage)
+        alias->join   (into {} (for [j joins] [(:alias j) j]))
+        remap-entries (for [tok   (:fields stage)
+                            :let  [alias (field-token->join-alias tok)]
+                            :when alias
+                            :let  [tid    (field-token->id tok)
+                                   join   (get alias->join alias)
+                                   fk-var (some-> join :condition condition->fk-ref inner-var-for-ref)
+                                   nm     (when (integer? tid) (:name (field-id->metadata tid)))
+                                   prop   (when nm (uri/absolute-uri nm default-graph))
+                                   rvar   (sanitize-var-name (str alias "__" (or nm (str "f_" tid))))]
+                            :when (and fk-var prop)]
+                        {:optional (format "  OPTIONAL { ?%s <%s> ?%s . }" fk-var prop rvar)
+                         :var      rvar
+                         :tid      tid
+                         :alias    alias})
+        ;; Columns visible to the outer stage: inner sub-SELECT vars + remapped vars.
+        passthrough-vars (vec (concat (:vars inner) (map :var remap-entries)))
+        ;; The sub-SELECT already projects these by name, so resolving an outer
+        ;; field token (a string-named source-query column) is just sanitizing it.
+        field-id->var    (into {} (for [v passthrough-vars] [v (sanitize-var-name v)]))
+        pair->target-var (into {} (for [{:keys [tid alias var]} remap-entries]
+                                    [[tid alias] var]))
+        token->var       (fn [tok] (var-for-token tok field-id->var pair->target-var))
+        aggregations  (:aggregation stage)
+        breakout      (:breakout stage)
+        agg?          (boolean (seq aggregations))
+        filter-clause (:filter stage)
+        order-by      (:order-by stage)
+        limit         (:limit stage)
+        agg-projections (when agg?
+                          (vec (keep-indexed (fn [i a] (aggregation->projection a i token->var true))
+                                             aggregations)))
+        breakout-vars   (when agg?
+                          (->> breakout (keep token->var) distinct vec))
+        ;; Non-agg explicit projection: resolve every :fields token; fall back to
+        ;; passthrough if any token cannot be resolved.
+        projected-vars  (when (and (not agg?) (seq (:fields stage)))
+                          (let [vs (map token->var (:fields stage))]
+                            (when (every? some? vs)
+                              (vec (distinct vs)))))
+        ;; When Lib's expected columns are known, reconcile the SELECT against them:
+        ;; remap columns resolve via `pair->target-var` (or are synthesized as an extra
+        ;; OPTIONAL), every other column consumes the next inner sub-SELECT var in order.
+        reconciled    (when (and expected-cols (not agg?))
+                        (let [inner-vars  (atom (:vars inner))
+                              placeholder (atom 0)]
+                          (reduce
+                           (fn [acc col]
+                             (let [tid   (:id col)
+                                   alias (:lib/join-alias col)
+                                   join  (when alias (get alias->join alias))
+                                   fk-var (some-> join :condition condition->fk-ref inner-var-for-ref)
+                                   nm    (when (integer? tid) (:name (field-id->metadata tid)))]
+                               (cond
+                                 (and alias (get pair->target-var [tid alias]))
+                                 (update acc :vars conj (get pair->target-var [tid alias]))
+
+                                 (and alias join fk-var nm)
+                                 (let [rvar (sanitize-var-name (str alias "__" nm))
+                                       prop (uri/absolute-uri nm default-graph)]
+                                   (-> acc
+                                       (update :vars conj rvar)
+                                       (update :optionals conj
+                                               (format "  OPTIONAL { ?%s <%s> ?%s . }" fk-var prop rvar))))
+
+                                 (seq @inner-vars)
+                                 (let [v (first @inner-vars)]
+                                   (swap! inner-vars rest)
+                                   (update acc :vars conj v))
+
+                                 :else
+                                 (update acc :vars conj (str "undefined_" (swap! placeholder inc))))))
+                           {:vars [] :optionals []}
+                           expected-cols)))
+        result-vars   (cond
+                        agg?           (vec (concat breakout-vars (keep :var agg-projections)))
+                        reconciled     (vec (:vars reconciled))
+                        projected-vars projected-vars
+                        :else          passthrough-vars)
+        select-part   (if agg?
+                        (str "SELECT "
+                             (str/join " " (concat (map #(str "?" %) breakout-vars)
+                                                   (map :select agg-projections))))
+                        (str "SELECT " (str/join " " (map #(str "?" %) result-vars))))
+        group-by-clause (when (and agg? (seq breakout-vars))
+                          (str "GROUP BY " (str/join " " (map #(str "?" %) breakout-vars))))
+        order-clause  (if agg?
+                        (compile-agg-order-by order-by field-id->var pair->target-var)
+                        (compile-order-by order-by field-id->var pair->target-var))
+        filters       (when filter-clause
+                        (or (compile-basic-filter filter-clause field-id->var pair->target-var) []))
+        query         (str (str/trim select-part) "\n"
+                           "WHERE {\n"
+                           "  {\n" (:sparql inner) "\n  }\n"
+                           (when (seq remap-entries)
+                             (str (str/join "\n" (map :optional remap-entries)) "\n"))
+                           (when (seq (:optionals reconciled))
+                             (str (str/join "\n" (:optionals reconciled)) "\n"))
+                           (when (seq filters)
+                             (str (str/join "\n" filters) "\n"))
+                           "}\n"
+                           (when group-by-clause (str group-by-clause "\n"))
+                           (when order-clause (str order-clause "\n"))
+                           (when (number? limit) (str "LIMIT " limit)))]
+    (log/debugf "[sparql.mbql] Compiled derived stage: %s" query)
+    {:sparql query
+     :vars   result-vars}))
+
+(defn- compile-stage
+  "Compile one MBQL stage, recursing through `:source-query` wrappers.
+
+   `expected-cols` (Lib's authoritative column list) is only supplied for the
+   outermost stage — the one whose SELECT becomes the query's result columns.
+   Inner sub-`SELECT`s recurse with `nil`."
+  ([stage] (compile-stage stage nil))
+  ([stage expected-cols]
+   (if (:source-query stage)
+     (compile-derived-stage stage expected-cols)
+     (compile-base-stage stage expected-cols))))
+
+(defn- expected-result-columns
+  "Lib's authoritative result columns for `outer-query` (pMBQL) — the same calculation
+   the `annotate` middleware uses to decide how many columns the query should return.
+   Returns nil if Lib cannot compute them, in which case the compiler falls back to
+   deriving the projection from the query's own `:fields`."
+  [outer-query]
+  (try
+    (not-empty (result-metadata/returned-columns outer-query []))
+    (catch Exception e
+      (log/warnf "[sparql.mbql] Could not compute expected columns from Lib: %s"
+                 (.getMessage e))
+      nil)))
+
+(defn mbql->native
+  "Compile a Metabase query into a native SPARQL map `{:query <string> :mbql? true}`.
+
+   Metabase passes pMBQL (Lib / MBQL 5). Before converting to legacy MBQL we ask Lib
+   for the query's authoritative result columns ([[expected-result-columns]]) and
+   reconcile the outermost SELECT against them, so the driver's column count and order
+   can never drift from what the `annotate` middleware expects.
+
+   Multi-stage queries (a saved card / model used as a source, or an FK
+   display-value remap layered on an aggregation) are compiled stage by stage:
+   the inner stage becomes a SPARQL sub-`SELECT` and the outer stage's remap
+   joins wrap it. See [[compile-base-stage]] for the per-stage details."
+  [_driver outer-query]
+  (let [expected-cols    (expected-result-columns outer-query)
+        legacy-query     (driver-api/->legacy-MBQL outer-query)
+        {:keys [sparql vars]} (compile-stage (:query legacy-query) expected-cols)]
+    (log/debugf "[sparql.mbql->native] Compiled query (%d projected columns): %s"
+                (count vars) sparql)
+    {:query sparql
      :mbql? true}))
 
 

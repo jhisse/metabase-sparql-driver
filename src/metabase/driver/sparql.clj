@@ -12,7 +12,6 @@
             [metabase.driver.sparql.parameters :as parameters]
             [metabase.driver.sparql.mbql :as mbql]
             [metabase.driver.sparql.features :as features]
-            [metabase.driver.sparql.properties :as properties]
             [metabase.driver.sparql.error :as error]
             [metabase.util.log :as log]))
 
@@ -20,10 +19,9 @@
 ;; No sql or sql-jdbc parent because it's a custom driver using clj-http
 (driver/register! :sparql)
 
-;; Define connection properties for the SPARQL driver
-(defmethod driver/connection-properties :sparql
-  [_]
-  properties/connection-properties)
+;; Connection properties are declared in the plugin manifest (resources/metabase-plugin.yaml).
+;; That manifest is parsed at driver-registration time so the connection form renders
+;; immediately, before the driver namespace is initialized.
 
 ;; Implements humanize-connection-error-message multimethod to provide user-friendly error messages.
 (defmethod driver/humanize-connection-error-message :sparql
@@ -31,7 +29,7 @@
   (error/humanize-connection-error-message message))
 
 ;; Implements database-supports? multimethod to define supported features.
-(doseq [[feature supported?] {:metadata/key-constraints false
+(doseq [[feature supported?] {:metadata/key-constraints true ;; FKs come from SHACL when configured; harmless when not
                               :nested-fields false
                               :nested-field-columns false
                               :set-timezone false
@@ -44,7 +42,7 @@
                               :persist-models-enabled false
                               :binning false
                               :case-sensitivity-string-filter-options true
-                              :left-join false
+                              :left-join true ;; needed for FK-remap implicit joins; emitted as OPTIONAL chains
                               :right-join false
                               :inner-join false
                               :full-join false
@@ -63,7 +61,7 @@
                               :connection-impersonation-requires-role false
                               :native-requires-specified-collection false
                               :index-info false
-                              :describe-fks false
+                              :describe-fks true ;; populated from SHACL when `metadata-sync-strategy = shacl`, empty otherwise
                               :describe-fields false ;; Can be slow in big datasets
                               :describe-indexes false
                               :upload-with-auto-pk false
@@ -135,6 +133,14 @@
   [_driver database table]
   (log/debugf "[describe-table] - Describing table. Database: %s, Table: %s" (:name database) (:name table))
   (database/describe-table _driver database table))
+
+;; Implements describe-fks multimethod. FKs are only known when the user has chosen the
+;; SHACL sync strategy and provided a SHACL URL. For other strategies `database/fks`
+;; returns an empty seq.
+(defmethod driver/describe-fks :sparql
+  [_driver database & _]
+  (log/debugf "[describe-fks] - Discovering FKs for database: %s" (:name database))
+  (database/fks database))
 
 ;; Implements substitute-native-parameters multimethod to handle native query parameters.
 (defmethod driver/substitute-native-parameters :sparql

@@ -27,6 +27,9 @@
     (log/debugf "Query: %s" query)
     (log/debugf "Template tags: %s" template-tags)
     (log/debugf "Parameters: %s" parameters)
+    ;; query->params-map lives in an internal Metabase namespace with no
+    ;; metabase.driver-api.core facade, so clj-kondo cannot resolve it statically.
+    #_{:clj-kondo/ignore [:unresolved-var]}
     (let [param->value (params.values/query->params-map inner-query)
           substituted-query (reduce (fn [q [k v]]
                                       (str/replace q (re-pattern (str "\\{\\{" k "\\}\\}"))

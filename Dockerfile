@@ -14,6 +14,6 @@ FROM builder-base AS builder
 
 RUN make build
 
-FROM metabase/metabase:v0.57.4.x
+FROM metabase/metabase:v0.61.1.x
 
 COPY --from=builder /app/target/sparql.metabase-driver.jar /plugins/

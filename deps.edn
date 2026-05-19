@@ -1,6 +1,8 @@
 {:paths ["src" "resources"]
  
- :deps {clj-http/clj-http {:mvn/version "3.13.0"}}
+ :deps {clj-http/clj-http {:mvn/version "3.13.0"}
+        ;; Turtle parser for the optional SHACL metadata-sync strategy.
+        org.eclipse.rdf4j/rdf4j-rio-turtle {:mvn/version "5.0.3"}}
 
  :mvn/repos
  {"metabase-maven-downloads" {:url "https://s3.amazonaws.com/metabase-maven-downloads"}
@@ -29,16 +31,22 @@
            ;; Use the same redux version as Metabase (their fork)
                 redux/redux {:git/url "https://github.com/metabase/redux"
                              :sha "4a37feaf817a2a6b5ef688c927f6fd4375964433"}
+           ;; Metabase ships a patched malli fork; declare it at the top level so
+           ;; tools.deps doesn't try to reconcile a git dep with the mvn artifact.
+                metosin/malli {:git/url "https://github.com/metabase/malli"
+                               :git/sha "b4a2d78647a049870b316753d7aae7fb4ade3ae5"}
                 io.github.cognitect-labs/test-runner {:git/tag "v0.5.1" :git/sha "dfb30dd"}}
    :main-opts ["-m" "cognitect.test-runner"]
    :exec-fn cognitect.test-runner.api/test
    :exec-args {:dirs ["test"]}}
-   
+
   :coverage
   {:extra-paths ["test"]
    :extra-deps {metabase/metabase-core {:local/root "./metabase" :exclusions [redux/redux]}
                 redux/redux {:git/url "https://github.com/metabase/redux"
                              :sha "4a37feaf817a2a6b5ef688c927f6fd4375964433"}
+                metosin/malli {:git/url "https://github.com/metabase/malli"
+                               :git/sha "b4a2d78647a049870b316753d7aae7fb4ade3ae5"}
                 cloverage/cloverage {:mvn/version "1.2.4"}}
    :main-opts ["-m" "cloverage.coverage" 
                "--src-ns-path" "src"

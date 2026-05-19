@@ -5,8 +5,7 @@
   (:require [metabase.util.log :as log]
             [clj-http.client :as http]
             [metabase.util.json :as json]
-            [metabase.query-processor.store :as qp.store]
-            [metabase.lib.metadata :as lib.metadata]
+            [metabase.driver-api.core :as driver-api]
             [metabase.driver.sparql.query-processor :as query-processor]))
 
 (defn- ^:private create-http-options
@@ -106,7 +105,7 @@
   On failure, it logs the error and returns an empty columns result."
   [native-query _context respond]
   (log/info "Executing SPARQL query:" (pr-str (select-keys native-query [:native])))
-  (let [database (lib.metadata/database (qp.store/metadata-provider))
+  (let [database (driver-api/database (driver-api/metadata-provider))
         endpoint (or (get-in native-query [:native :endpoint]) (-> database :details :endpoint))
         sparql-query (get-in native-query [:native :query])
         options {:default-graph (-> database :details :default-graph)

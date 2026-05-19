@@ -4,3 +4,8 @@ metabase.jar
 plugins/
 .DS_Store
 *.db
+.clj-kondo
+.claude
+.idea
+*.iml
+.vscode
