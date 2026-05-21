@@ -149,6 +149,43 @@ FILTER(!BOUND(?var) || LANG(?var) = "nl" || LANG(?var) = "")
 
 This keeps each row to the configured language (plus any untagged literals) and avoids the row fan-out that multilingual datasets otherwise produce. The `!BOUND(...)` guard preserves left-join semantics. Leaving **Default Language** blank disables this entirely — the driver behaves exactly as before.
 
+### Native Query Parameters
+
+Native SPARQL questions can use Metabase's `{{tag}}` template parameters. The driver renders each parameter value as a syntactically valid SPARQL term:
+
+| Parameter value                           | Rendered as                  |
+|:------------------------------------------|:-----------------------------|
+| Text — `Alice`                            | `"Alice"` (quoted, escaped)  |
+| URL-shaped — `https://data.example/Item`  | `<https://data.example/Item>` (IRI) |
+| Number — `25`                             | `25` (bare literal)          |
+| Boolean — `true`                          | `true` (bare literal)        |
+| Multi-value — `[A B C]`                   | `A, B, C` — wrap with `IN(...)` / `VALUES` |
+| Missing optional                          | `{{tag}}` left in place + warning logged |
+
+Whitespace inside `{{ tag }}` is tolerated. Embedded `"`, `\`, newlines, and regex meta-characters in values are escaped safely. **Field Filters**, **Referenced Card Queries**, and **Referenced Query Snippets** are SQL-shaped template tag types and are not rendered to SPARQL — using them logs a warning and leaves the placeholder untouched so the endpoint surfaces a clear parse error.
+
+Example:
+
+```sparql
+SELECT ?label WHERE {
+  ?s a {{ class }} ;
+     rdfs:label ?label .
+  FILTER (LANG(?label) = {{ lang }})
+}
+LIMIT {{ n }}
+```
+
+With parameters `class = https://data.example/Item`, `lang = nl`, `n = 100`, the driver emits:
+
+```sparql
+SELECT ?label WHERE {
+  ?s a <https://data.example/Item> ;
+     rdfs:label ?label .
+  FILTER (LANG(?label) = "nl")
+}
+LIMIT 100
+```
+
 ### Explicit Schema Configuration Example (DBpedia)
 
 If you choose **Explicit** as the Metadata Sync Strategy, you can use the following JSON to define tables for DBpedia:
@@ -276,10 +313,55 @@ The driver understands three predicates from this namespace:
 |:--------------------------------|:------------------|:---------------------------------------------------------------------------------------------------------------------------------------------------------|
 | `metabase:hide true`            | NodeShape *or* PropertyShape | Skip the shape (table) or the property (column) entirely during sync.                                                                                  |
 | `metabase:semanticType "type/URL"` | PropertyShape | Override Metabase's semantic type. Accepts any valid `type/…` keyword (`type/URL`, `type/Category`, `type/Email`, `type/Description`, …).                |
-| `metabase:displayValueProperty <P>` | PropertyShape (on a FK property, i.e. one that also has `sh:class`) | Hints the property on the target shape that should display as the FK's human-readable label. The hint is surfaced in the field description so you can pick it from Metabase's **Display values** dropdown. |
+| `metabase:displayValueProperty <P>` | PropertyShape (on a FK property, i.e. one that also has `sh:class`) | Marks the property on the target shape that should display as the FK's human-readable label. After every metadata sync the driver writes (and idempotently updates) the matching external-remap `Dimension` row, so Metabase automatically renders the human label without any click-through in the column-settings panel. |
 
-> [!NOTE]
-> Auto-applying the FK display value (writing Metabase's `dimension` row directly) is on the roadmap. For now, after sync you still click the FK column → **Display values** → **Use foreign key** and pick the property the SHACL points you at.
+#### `metabase:displayValueProperty` — picking the human-readable label
+
+`metabase:displayValueProperty` answers one question: *when a row points at a related entity via a foreign key, which property of the target should Metabase show instead of the raw URI?*
+
+It belongs on the **FK property** (the one with `sh:class`), and its value is the URI of a property defined on the **target shape**. It is not a magic keyword — it's just a regular property URI that exists on the target class.
+
+Example. A `Person` has a `birthPlace` foreign key pointing at `Place`. We want Metabase to display the place's `rdfs:label` (e.g. "Brussels") instead of the raw IRI (`http://dbpedia.org/resource/Brussels`):
+
+```turtle
+dbo:PlaceShape a sh:NodeShape ;
+  sh:targetClass dbo:Place ;
+  sh:property [ sh:path     rdfs:label ;
+                sh:datatype rdf:langString ;
+                sh:name     "label"@nl, "label"@en ;
+                sh:order    1 ] ;
+  sh:property [ sh:path     dbo:populationTotal ;
+                sh:datatype xsd:integer ;
+                sh:order    2 ] .
+
+dbo:PersonShape a sh:NodeShape ;
+  sh:targetClass dbo:Person ;
+  sh:property [ sh:path  dbo:birthPlace ;
+                sh:class dbo:Place ;
+                metabase:displayValueProperty rdfs:label ] .   # ← points at Place.label
+```
+
+Read the FK property out loud: *"`birthPlace` is a foreign key to `Place`. When you display a value, show `rdfs:label`."* The driver writes a `Dimension` row at sync time so Metabase renders `?birthPlace` as the joined `?Place__via__birthPlace__label` value, no manual click in the column-settings panel.
+
+##### What can go in `metabase:displayValueProperty`?
+
+**Any property URI defined on the FK target shape** (or one inherited via `sh:node`). `rdfs:label` is just the most common choice; pick whatever your ontology actually uses for the human-readable form:
+
+| Property                     | When it fits                                                  |
+|:-----------------------------|:--------------------------------------------------------------|
+| `rdfs:label`                 | Generic human-readable label (DBpedia-style ontologies).      |
+| `skos:prefLabel`             | SKOS-based vocabularies (thesauri, controlled lists).         |
+| `dc:title` / `dcterms:title` | Bibliographic / document-oriented data.                       |
+| `foaf:name`                  | People / agents.                                              |
+| `schema:name`                | schema.org data.                                              |
+| any custom IRI               | Whatever property holds the human-readable form in your data — e.g. `odis:waarde` for a code-table value, `ex:displayName`, `ex:title`. |
+
+**Two practical requirements:**
+
+1. The property you name must be declared on the target NodeShape (directly, or via `sh:node` inheritance). If the driver can't find a synced field by that name on the target table, no `Dimension` row is written — the next sync resolves it once the field appears.
+2. The target property must actually carry triples on the linked instances. If it's declared but empty in the data, the display column will simply come back blank.
+
+**Note on `langString` targets.** When the display property is `rdf:langString` and a **Default Language** is configured, the per-row `FILTER(LANG(?x) = "nl" || LANG(?x) = "")` still applies, so multilingual labels resolve to the right language automatically.
 
 ### Foreign Keys
 
@@ -322,6 +404,16 @@ dbo:AgentShape a sh:NodeShape ;
                 sh:name "wikiPageID"@nl, "wikiPageID"@en ;
                 sh:description "Wikipedia-pagina-ID"@nl, "Wikipedia page ID"@en ] .
 
+dbo:PlaceShape a sh:NodeShape ;
+  sh:targetClass dbo:Place ;
+  sh:property [ sh:path     rdfs:label ;
+                sh:datatype rdf:langString ;
+                sh:name     "label"@nl, "label"@en ;
+                sh:order    1 ] ;
+  sh:property [ sh:path     dbo:populationTotal ;
+                sh:datatype xsd:integer ;
+                sh:order    2 ] .
+
 dbo:PersonShape a sh:NodeShape ;
   sh:targetClass dbo:Person ;
   sh:node        dbo:AgentShape ;
@@ -331,7 +423,7 @@ dbo:PersonShape a sh:NodeShape ;
                 sh:order 2 ] ;
   sh:property [ sh:path  dbo:birthPlace ;
                 sh:class dbo:Place ;
-                metabase:displayValueProperty rdfs:label ;
+                metabase:displayValueProperty rdfs:label ;   # ← Place.label, declared in PlaceShape above
                 sh:order 3 ] ;
   sh:property [ sh:path dbo:wikiPageRevisionID ;
                 sh:datatype xsd:anyURI ;
@@ -340,18 +432,18 @@ dbo:PersonShape a sh:NodeShape ;
 
 With **Default Graph URI** = `http://dbpedia.org/ontology/` and **Default Language** = `nl`, this produces:
 
+- A table **Place** with columns `subject`, `label`, `populationTotal`.
 - A table **Person** with columns `subject`, `wikiPageID` (inherited from Agent), `birthName`, `birthPlace`.
 - `birthName` is `langString`, so queries get `FILTER(... LANG(?birthName) = "nl" || LANG(?birthName) = "")`.
-- `birthPlace` is marked **Foreign Key** pointing to `Place.subject`. Field description includes "Display via `http://www.w3.org/2000/01/rdf-schema#label`" as a hint.
+- `birthPlace` is marked **Foreign Key** pointing to `Place.subject`. After sync the driver writes a `Dimension` row pairing `Person.birthPlace` → `Place.label`, so the FK column renders as the place's Dutch label automatically — no manual "Display values" click in the column-settings panel.
 - `wikiPageRevisionID` is absent (`metabase:hide`).
 - The synced Dutch description ("Wikipedia-pagina-ID") is preferred over the English one.
 
 ## :warning: Limitations and Known Issues
 
 - **Aggregations**: Basic aggregations in Query Builder's "Summarize" are supported — **Count**, **Count distinct**, **Sum**, **Average**, **Minimum**, **Maximum** — with an optional group-by (breakout). `Count` compiles to `COUNT(DISTINCT ?subject)`, so grouping by a multi-valued property counts *entities* per group rather than fanned-out solution rows. Advanced aggregations (standard deviation, percentiles, cumulative sum/count, expression aggregations) and post-aggregation filtering (`HAVING`) are not supported.
-- **Joins**: Implicit foreign-key joins (the "Display values" remap on a FK column) are emitted as nested `OPTIONAL` chains and work for one-hop relationships. Multi-hop joins, explicit inner/right/full joins from Query Builder are not supported — only `:left-join` is enabled.
+- **Joins**: Implicit foreign-key joins (the "Display values" remap on a FK column) are emitted as nested `OPTIONAL` chains. Multi-hop chains (e.g. `Item → Provider → Owner → owner_name`) are supported — each hop is anchored on the previous join's intermediate var, not on `?subject`. Explicit inner/right/full joins from Query Builder are not supported — only `:left-join` is enabled.
 - **Saved cards / models as a source**: When a saved card or model is used as the source of another question, the inner query is compiled as a SPARQL sub-`SELECT` and the outer stage's FK display-value remaps wrap it. Outer stages that add their *own* aggregation, filter, or breakout on top of the inner query are not supported — only passthrough + remap wrappers.
-- **FK display value setup**: When SHACL declares `metabase:displayValueProperty`, the driver stashes the suggestion in the field description but does **not** yet write Metabase's `dimension` row automatically. After sync you still pick the display field manually in the column settings panel.
 - **Auto-mode language tagging**: The `FILTER(LANG(?x) = …)` clause only fires for columns whose `rdf:langString` datatype was declared in SHACL. The `auto` sync strategy can't see datatypes by sampling alone, so multilingual fan-out can still happen there.
 - **Performance**: Fetching large result sets or performing metadata discovery on extensive endpoints can be resource-intensive. Use **Configurable Limits** (Class/Property/Sample Size) in `auto`, or move to `shacl` / `explicit` / `none` for control.
 - **Filter Support**: Basic filtering works in Query Builder. Complex Metabase filter expressions or custom expressions might not be fully translated to SPARQL.

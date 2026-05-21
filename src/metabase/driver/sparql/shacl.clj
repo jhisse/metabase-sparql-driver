@@ -216,10 +216,7 @@
         sem-type    (or (coerce-semantic-type mb-sem)
                         (when (iri? target-cls) :type/FK)
                         (semantic-type-from-datatype datatype-iri))
-        descr       (->> [name-text
-                          desc-text
-                          (when (iri? mb-display)
-                            (str "Display via " (:value mb-display)))]
+        descr       (->> [name-text desc-text]
                          (remove str/blank?)
                          (str/join " — "))]
     (when (iri? path)

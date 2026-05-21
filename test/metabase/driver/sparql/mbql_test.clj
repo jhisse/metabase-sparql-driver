@@ -226,6 +226,152 @@
         (is (str/includes? sparql
                            (str "OPTIONAL { ?Plaats_subject <" base "label> ?Plaats__label . }")))))))
 
+(deftest compile-base-stage-implicit-join-projection-test
+  (testing "Lib's result-metadata strips :lib/join-alias from implicit-joinable
+            columns (only `:fk-field-id` remains). The compiler must still project
+            the qualified `?<Alias>__<prop>` var, not the unqualified `?prop` —
+            otherwise FK display values come back empty in the UI."
+    (let [persoon-tid 100
+          geslacht-tid 200
+          fields {1  {:name "subject"      :table-id persoon-tid}
+                  20 {:name "geslacht"     :table-id persoon-tid}
+                  40 {:name "waarde"       :table-id geslacht-tid}}]
+      (with-redefs-fn
+        {#'mbql/field-id->metadata        (fn [id] (get fields id))
+         #'mbql/table-id->class-uri       (constantly (str base "Persoon"))
+         #'mbql/database-default-graph    (constantly base)
+         #'mbql/database-default-language (constantly "")}
+        (fn []
+          (let [stage {:source-table persoon-tid
+                       :fields       [[:field 1 nil]
+                                      [:field 20 nil]
+                                      [:field 40 {:join-alias "Geslacht__via__geslacht"}]]
+                       :joins        [{:alias        "Geslacht__via__geslacht"
+                                       :source-table geslacht-tid
+                                       :fk-field-id  20}]}
+                ;; Lib's expected-cols for the remap column: `:fk-field-id` only,
+                ;; no `:lib/join-alias`.
+                expected [{:id 1}
+                          {:id 20}
+                          {:id 40 :fk-field-id 20}]
+                {:keys [sparql vars]} (@#'mbql/compile-base-stage stage expected)]
+            (testing "the remap column resolves to the qualified join target var"
+              (is (= ["subject" "geslacht" "Geslacht__via__geslacht__waarde"] vars))
+              (is (str/includes? sparql "?Geslacht__via__geslacht__waarde")))
+            (testing "no bogus direct triple is emitted for the joined waarde fid"
+              (is (not (str/includes? sparql
+                                      (str "OPTIONAL { ?subject <" base "waarde> ?waarde . }")))))))))))
+
+(deftest compile-base-stage-explicit-chained-join-test
+  (testing "Two-hop EXPLICIT joins from the notebook editor (Item → Provider → Owner).
+            The second join's :condition has :join-alias on BOTH sides, so the
+            FK side is identified by 'alias ≠ this join's alias'."
+    (let [item-tid     100
+          provider-tid 200
+          owner-tid    300
+          fields {1  {:name "subject" :table-id item-tid}
+                  20 {:name "provider" :table-id item-tid}
+                  21 {:name "subject" :table-id provider-tid}
+                  30 {:name "owner" :table-id provider-tid}
+                  31 {:name "subject" :table-id owner-tid}
+                  40 {:name "owner_name" :table-id owner-tid}}]
+      (with-redefs-fn
+        {#'mbql/field-id->metadata        (fn [id] (get fields id))
+         #'mbql/table-id->class-uri       (constantly (str base "Item"))
+         #'mbql/database-default-graph    (constantly base)
+         #'mbql/database-default-language (constantly "")}
+        (fn []
+          (let [{:keys [sparql]}
+                (compile-stage*
+                 {:source-table item-tid
+                  :aggregation  [[:distinct [:field 1 nil]]]
+                  :breakout     [[:field 40 {:join-alias "Owner"}]]
+                  :joins        [{:alias        "Provider"
+                                  :source-table provider-tid
+                                  :condition    [:= [:field 20 nil]
+                                                 [:field 21 {:join-alias "Provider"}]]}
+                                 {:alias        "Owner"
+                                  :source-table owner-tid
+                                  :condition    [:= [:field 30 {:join-alias "Provider"}]
+                                                 [:field 31 {:join-alias "Owner"}]]}]})]
+            (testing "Item → Provider hop"
+              (is (str/includes? sparql
+                                 (str "OPTIONAL { ?subject <" base "provider> ?Provider_subject . }"))))
+            (testing "Provider → Owner hop (the bug fix — explicit-join chained case)"
+              (is (str/includes? sparql
+                                 (str "OPTIONAL { ?Provider_subject <" base "owner> ?Owner_subject . }"))))
+            (testing "leaf property triple"
+              (is (str/includes? sparql
+                                 (str "OPTIONAL { ?Owner_subject <" base "owner_name> ?Owner__owner_name . }"))))))))))
+
+(deftest compile-base-stage-explicit-chained-join-without-table-id-test
+  (testing "Same chained explicit join, but `field-id->metadata` returns NO `:table-id`
+            (mirrors a real Metabase metadata-provider result). The FK source alias
+            must still be recovered from the condition's `:join-alias` on the FK token,
+            not from the metadata's table-id."
+    (let [item-tid     100
+          provider-tid 200
+          owner-tid    300
+          ;; No :table-id on any of these — only :name.
+          fields {1  {:name "subject"}
+                  20 {:name "provider"}
+                  21 {:name "subject"}
+                  30 {:name "owner"}
+                  31 {:name "subject"}
+                  40 {:name "owner_name"}}]
+      (with-redefs-fn
+        {#'mbql/field-id->metadata        (fn [id] (get fields id))
+         #'mbql/table-id->class-uri       (constantly (str base "Item"))
+         #'mbql/database-default-graph    (constantly base)
+         #'mbql/database-default-language (constantly "")}
+        (fn []
+          (let [{:keys [sparql]}
+                (compile-stage*
+                 {:source-table item-tid
+                  :aggregation  [[:distinct [:field 1 nil]]]
+                  :breakout     [[:field 40 {:join-alias "Owner"}]]
+                  :joins        [{:alias        "Provider"
+                                  :source-table provider-tid
+                                  :condition    [:= [:field 20 nil]
+                                                 [:field 21 {:join-alias "Provider"}]]}
+                                 {:alias        "Owner"
+                                  :source-table owner-tid
+                                  :condition    [:= [:field 30 {:join-alias "Provider"}]
+                                                 [:field 31 {:join-alias "Owner"}]]}]})]
+            (is (str/includes? sparql
+                               (str "OPTIONAL { ?Provider_subject <" base "owner> ?Owner_subject . }"))
+                "Owner FK triple must be anchored on ?Provider_subject even without :table-id metadata")))))))
+
+(deftest compile-base-stage-chained-fk-join-test
+  (testing "a 2-hop implicit join chain (Item → Provider → Owner) anchors the second
+            join's FK triple to the first join's intermediate var, not ?subject"
+    (let [fields {1  {:name "subject"}
+                  20 {:name "provider"   :table-id 100}
+                  30 {:name "owner"      :table-id 200}
+                  40 {:name "owner_name" :table-id 300}}]
+      (with-redefs-fn
+        {#'mbql/field-id->metadata        (fn [id] (get fields id))
+         #'mbql/table-id->class-uri       (constantly (str base "Item"))
+         #'mbql/database-default-graph    (constantly base)
+         #'mbql/database-default-language (constantly "")}
+        (fn []
+          (let [{:keys [sparql]}
+                (compile-stage*
+                 {:source-table 100
+                  :aggregation  [[:count]]
+                  :breakout     [[:field 40 {:join-alias "Owner"}]]
+                  :joins        [{:alias "Provider" :source-table 200 :fk-field-id 20}
+                                 {:alias "Owner"    :source-table 300 :fk-field-id 30}]})]
+            (testing "Item → Provider hop is anchored on ?subject"
+              (is (str/includes? sparql
+                                 (str "OPTIONAL { ?subject <" base "provider> ?Provider_subject . }"))))
+            (testing "Provider → Owner hop is anchored on ?Provider_subject (the bug fix)"
+              (is (str/includes? sparql
+                                 (str "OPTIONAL { ?Provider_subject <" base "owner> ?Owner_subject . }"))))
+            (testing "leaf property triple anchors on ?Owner_subject"
+              (is (str/includes? sparql
+                                 (str "OPTIONAL { ?Owner_subject <" base "owner_name> ?Owner__owner_name . }"))))))))))
+
 (deftest compile-derived-stage-aggregation-test
   (with-fixture
     (testing "an aggregation layered on a saved card compiles to a single column"
