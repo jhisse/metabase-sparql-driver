@@ -347,14 +347,14 @@ Read the FK property out loud: *"`birthPlace` is a foreign key to `Place`. When 
 
 **Any property URI defined on the FK target shape** (or one inherited via `sh:node`). `rdfs:label` is just the most common choice; pick whatever your ontology actually uses for the human-readable form:
 
-| Property                     | When it fits                                                  |
-|:-----------------------------|:--------------------------------------------------------------|
-| `rdfs:label`                 | Generic human-readable label (DBpedia-style ontologies).      |
-| `skos:prefLabel`             | SKOS-based vocabularies (thesauri, controlled lists).         |
-| `dc:title` / `dcterms:title` | Bibliographic / document-oriented data.                       |
-| `foaf:name`                  | People / agents.                                              |
-| `schema:name`                | schema.org data.                                              |
-| any custom IRI               | Whatever property holds the human-readable form in your data — e.g. `odis:waarde` for a code-table value, `ex:displayName`, `ex:title`. |
+| Property                     | When it fits                                                                                                                       |
+|:-----------------------------|:-----------------------------------------------------------------------------------------------------------------------------------|
+| `rdfs:label`                 | Generic human-readable label (DBpedia-style ontologies).                                                                           |
+| `skos:prefLabel`             | SKOS-based vocabularies (thesauri, controlled lists).                                                                              |
+| `dc:title` / `dcterms:title` | Bibliographic / document-oriented data.                                                                                            |
+| `foaf:name`                  | People / agents.                                                                                                                   |
+| `schema:name`                | schema.org data.                                                                                                                   |
+| any custom IRI               | Whatever property holds the human-readable form in your data — e.g. `ex:value` for a code-table value, `ex:displayName`, `ex:title`. |
 
 **Two practical requirements:**
 
