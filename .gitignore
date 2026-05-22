@@ -4,7 +4,7 @@ metabase.jar
 plugins/
 .DS_Store
 *.db
-.clj-kondo
+.clj-kondo/.cache/
 .claude
 .idea
 *.iml
