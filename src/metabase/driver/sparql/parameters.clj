@@ -56,12 +56,14 @@
     ;; Date — a single date string (`:s`).
     (instance? metabase.driver.common.parameters.Date v)         (:s v)
     ;; DateRange / DateTimeRange — render as ISO "start/end".
-    (instance? metabase.driver.common.parameters.DateRange v)    (str (:start v) "/" (:end v))
-    (instance? metabase.driver.common.parameters.DateTimeRange v) (str (:start v) "/" (:end v))
+    (or (instance? metabase.driver.common.parameters.DateRange v)
+        (instance? metabase.driver.common.parameters.DateTimeRange v))
+    (str (:start v) "/" (:end v))
     ;; TemporalUnit wraps a raw scalar in `:value`.
-    (params/TemporalUnit? v)             (:value v)
     ;; Plain map shape `{:type … :value …}` occasionally surfaces.
-    (and (map? v) (contains? v :value))  (:value v)
+    (or (params/TemporalUnit? v)
+        (and (map? v) (contains? v :value)))
+    (:value v)
     :else                                v))
 
 (declare ->sparql-term)
@@ -73,15 +75,13 @@
   [v]
   (let [v (record-value v)]
     (cond
-      (nil? v)              nil
-      (= params/no-value v) nil
+      (or (nil? v) (= params/no-value v)) nil
       (= :unsupported v)    (do (log/warnf "[sparql.params] Unsupported parameter type; placeholder left untouched")
                                 nil)
       (sequential? v)       (let [terms (keep ->sparql-term v)]
                               (when (seq terms)
                                 (str/join ", " terms)))
-      (boolean? v)          (str v)
-      (number? v)           (str v)
+      (or (boolean? v) (number? v)) (str v)
       (iri-shaped? v)       (str "<" v ">")
       (string? v)           (str "\"" (escape-sparql-string v) "\"")
       :else                 (do (log/warnf "[sparql.params] Unrecognized parameter value class %s; falling back to (str v)"

@@ -102,7 +102,7 @@
           :else
           (try
             (upsert-dimension! (:id src-field) src-field-name (:id tgt-field))
-            (catch Throwable t
+            (catch Exception t
               (log/warnf t "[sparql.dimensions] Failed to upsert dimension for %s.%s"
                          src-table-name src-field-name))))))))
 
@@ -119,5 +119,5 @@
                                             :id database_id))]
       (when (= :sparql (keyword (:engine database)))
         (sync-display-dimensions! database)))
-    (catch Throwable t
+    (catch Exception t
       (log/warnf t "[sparql.dimensions] Error handling sync-metadata-end event"))))
