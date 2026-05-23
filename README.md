@@ -542,6 +542,15 @@ java --add-opens java.base/java.nio=ALL-UNNAMED -Dlog4j.configurationFile=file:.
 
 Found a bug or want to contribute? Open an issue or submit a PR!
 
+Before opening a PR, please:
+
+- Run `make init-metabase` if you have not initialized the submodule yet.
+- Run `make lint`, `make splint`, and `make test` and make sure all pass.
+- Run `make format` to apply the project's code style.
+- Avoid bumping the `metabase/` submodule unless that is the explicit point of the PR — call it out in the description if so.
+
+Use the [pull request template](.github/pull_request_template.md) checklist when opening your PR.
+
 ## :page_facing_up: License
 
 This driver is licensed under the AGPLv3 license. See the [LICENSE](LICENSE) file for details.
