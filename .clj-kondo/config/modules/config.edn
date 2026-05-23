@@ -1,0 +1,2 @@
+;; Metabase modules config, required in dev/test, replaced by a JAR resource in builds.
+{:metabase/modules {}}
