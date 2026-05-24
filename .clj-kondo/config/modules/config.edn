@@ -1,2 +1,3 @@
 ;; Metabase modules config, required in dev/test, replaced by a JAR resource in builds.
-{:metabase/modules {}}
+{:metabase/modules {}
+ :lint-as {methodical.core/defmethod clojure.core/defmethod}}
