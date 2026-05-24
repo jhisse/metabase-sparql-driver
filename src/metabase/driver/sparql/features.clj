@@ -4,6 +4,7 @@
    This namespace provides functions to detect supported features in SPARQL endpoints.
    It implements tests for specific SPARQL features by executing test queries and analyzing results."
   (:require [metabase.util.log :as log]
+            [metabase.driver.sparql.auth :as auth]
             [metabase.driver.sparql.execute :as execute]
             [metabase.driver.sparql.templates :as templates]))
 
@@ -23,9 +24,11 @@
 (defmethod database-supports? :now
   [_driver _feature database]
   (log/debugf "[database-supports?] - Checking now() function support")
-  (let [endpoint         (-> database :details :endpoint)
-        options          {:default-graph (-> database :details :default-graph)
-                          :insecure?    (-> database :details :use-insecure)}
+  (let [details          (:details database)
+        endpoint         (:endpoint details)
+        options          {:default-graph (:default-graph details)
+                          :insecure?     (:use-insecure details)
+                          :auth          (auth/http-options details)}
         [success result] (execute/execute-sparql-query endpoint
                                                        (templates/now-function-support-query)
                                                        options)]
