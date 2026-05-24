@@ -44,7 +44,6 @@
   (when (integer? field-id)
     (driver-api/field (driver-api/metadata-provider) field-id)))
 
-
 (defn- id-field?
   "Return true if the field-id represents the synthetic subject column.
 
@@ -321,21 +320,21 @@
    (aggregation->projection agg index token->var false))
   ([agg index token->var count-all?]
    (let [agg     (unwrap-aggregation agg)
-        op      (when (sequential? agg) (first agg))
-        out     (str "ag_" index)
-        arg     (aggregation-arg-token agg)
-        arg-var (when arg (token->var arg))
-        expr    (case op
-                  :count    (cond
-                              arg-var    (format "COUNT(?%s)" arg-var)
-                              count-all? "COUNT(*)"
-                              :else      "COUNT(DISTINCT ?subject)")
-                  :distinct (when arg-var (format "COUNT(DISTINCT ?%s)" arg-var))
-                  :sum      (when arg-var (format "SUM(?%s)" arg-var))
-                  :avg      (when arg-var (format "AVG(?%s)" arg-var))
-                  :min      (when arg-var (format "MIN(?%s)" arg-var))
-                  :max      (when arg-var (format "MAX(?%s)" arg-var))
-                  nil)]
+         op      (when (sequential? agg) (first agg))
+         out     (str "ag_" index)
+         arg     (aggregation-arg-token agg)
+         arg-var (when arg (token->var arg))
+         expr    (case op
+                   :count    (cond
+                               arg-var    (format "COUNT(?%s)" arg-var)
+                               count-all? "COUNT(*)"
+                               :else      "COUNT(DISTINCT ?subject)")
+                   :distinct (when arg-var (format "COUNT(DISTINCT ?%s)" arg-var))
+                   :sum      (when arg-var (format "SUM(?%s)" arg-var))
+                   :avg      (when arg-var (format "AVG(?%s)" arg-var))
+                   :min      (when arg-var (format "MIN(?%s)" arg-var))
+                   :max      (when arg-var (format "MAX(?%s)" arg-var))
+                   nil)]
      (when expr
        {:select (format "(%s AS ?%s)" expr out)
         :var    out}))))
@@ -392,7 +391,7 @@
 
    Returns `{:vars [...] :triples [...]}`."
   [expected-cols {:keys [field-id->var pair->target-var alias->intermediate-var
-                          fk-fid->alias default-graph]}]
+                         fk-fid->alias default-graph]}]
   (let [placeholder (atom 0)]
     (reduce
      (fn [acc col]
