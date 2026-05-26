@@ -6,6 +6,7 @@
    to communicate with SPARQL endpoints. The driver supports secure and insecure
    connections with optional default graph specification."
   (:require [metabase.driver :as driver]
+            [metabase.driver.sparql.auth :as auth]
             [metabase.driver.sparql.connection :as connection]
             [metabase.driver.sparql.database :as database]
             [metabase.driver.sparql.dimensions]
@@ -109,7 +110,8 @@
   (log/debugf "[can-connect?] - Testing connection for endpoint: %s" (:endpoint details))
   (connection/can-connect? (:endpoint details)
                            {:default-graph (:default-graph details)
-                            :insecure? (:use-insecure details)}))
+                            :insecure?     (:use-insecure details)
+                            :auth          (auth/http-options details)}))
 
 ;; Implements dbms-version multimethod to define the version of the SPARQL endpoint.
 (defmethod driver/dbms-version :sparql

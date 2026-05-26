@@ -1,6 +1,6 @@
 info:
   name: Metabase SPARQL Driver
-  version: 0.0.12
+  version: 0.0.13
   description: Driver for connecting to SPARQL endpoints
 driver:
   name: sparql
@@ -15,6 +15,28 @@ driver:
       display-name: Ignore SSL Certificate Errors
       type: boolean
       default: false
+    - name: auth-type
+      display-name: Authentication
+      type: string
+      default: none
+      description: 'How to authenticate to the SPARQL endpoint. One of: none, basic (HTTP Basic), bearer (Authorization: Bearer <token>).'
+    - name: auth-username
+      display-name: Username
+      description: Username for HTTP Basic authentication.
+      visible-if:
+        auth-type: basic
+    - name: auth-password
+      display-name: Password
+      type: password
+      description: Password for HTTP Basic authentication.
+      visible-if:
+        auth-type: basic
+    - name: auth-bearer-token
+      display-name: Bearer Token
+      type: password
+      description: 'Token sent as `Authorization: Bearer <token>`. Paste a static JWT or API key issued for this Metabase instance.'
+      visible-if:
+        auth-type: bearer
     - name: default-graph
       display-name: Default Graph URI
       placeholder: http://dbpedia.org

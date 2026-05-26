@@ -4,6 +4,7 @@
    This namespace manages connections to SPARQL endpoints.
    Provides functions to test connectivity and manage connection details."
   (:require [metabase.util.log :as log]
+            [metabase.driver.sparql.auth :as auth]
             [metabase.driver.sparql.execute :as execute]
             [metabase.driver.sparql.templates :as templates]))
 
@@ -36,9 +37,11 @@
      A map with the key :version and the detected version as value, e.g. {:version \"SPARQL 1.1\"}.
      If the version cannot be determined, returns {:version \"SPARQL 1.0\"}."
   [_driver database]
-  (let [endpoint         (-> database :details :endpoint)
-        options          {:default-graph (-> database :details :default-graph)
-                          :insecure?    (-> database :details :use-insecure)}
+  (let [details          (:details database)
+        endpoint         (:endpoint details)
+        options          {:default-graph (:default-graph details)
+                          :insecure?     (:use-insecure details)
+                          :auth          (auth/http-options details)}
         [ok-bind res-bind]     (execute/execute-sparql-query endpoint (templates/sparql-1-1-bind-version-query) options)
         [ok-values res-values] (execute/execute-sparql-query endpoint (templates/sparql-1-1-values-version-query) options)
         result  (cond
