@@ -44,7 +44,6 @@
   (when (integer? field-id)
     (driver-api/field (driver-api/metadata-provider) field-id)))
 
-
 (defn- id-field?
   "Return true if the field-id represents the synthetic subject column.
 
@@ -128,26 +127,35 @@
       fid (get field-id->var fid))))
 
 (defn- condition->fk-ref
-  "Extract the *current-table* field token (`[:field …]` without a `:join-alias`)
-   from a join `:condition`. The condition is a legacy-MBQL filter clause,
-   normally `[:= [:field A] [:field B {:join-alias …}]]` (a `[:and …]` wrapper
-   for multi-column joins is unwrapped to its first `:=`)."
-  [condition]
-  (when (sequential? condition)
-    (when-let [eq (condp = (first condition)
-                    := condition
-                    :and (first (filter #(and (sequential? %) (= := (first %)))
-                                        (rest condition)))
-                    nil)]
-      (->> (rest eq)
-           (filter #(and (vector? %) (= :field (first %))))
-           (remove field-token->join-alias)
-           first))))
+  "Extract the FK-source field token from a join `:condition`. The condition is
+   a legacy-MBQL filter clause, normally `[:= <fk> <target>]` (or wrapped in
+   `[:and …]`, in which case we unwrap to the first `:=`).
+
+   - In a single-hop join the FK side has no `:join-alias` and the target side
+     does, so picking the non-join-alias token works.
+   - In a chained explicit join (e.g. Item → Provider → Owner from the notebook
+     editor), BOTH sides carry a `:join-alias`. When `this-alias` is provided,
+     we pick the side whose alias is NOT this join's own alias — that side
+     refers to a previously-joined table and is the real FK source."
+  ([condition] (condition->fk-ref condition nil))
+  ([condition this-alias]
+   (when (sequential? condition)
+     (when-let [eq (condp = (first condition)
+                     := condition
+                     :and (first (filter #(and (sequential? %) (= := (first %)))
+                                         (rest condition)))
+                     nil)]
+       (let [fields (->> (rest eq) (filter #(and (vector? %) (= :field (first %)))))]
+         (or (->> fields (remove field-token->join-alias) first)
+             (when this-alias
+               (->> fields
+                    (remove #(= this-alias (field-token->join-alias %)))
+                    first))))))))
 
 (defn- condition->fk-field-id
-  "Field-id of the current-table side of a join `:condition` (see [[condition->fk-ref]])."
-  [condition]
-  (field-token->id (condition->fk-ref condition)))
+  "Field-id of the FK-source side of a join `:condition` (see [[condition->fk-ref]])."
+  ([condition] (field-token->id (condition->fk-ref condition)))
+  ([condition this-alias] (field-token->id (condition->fk-ref condition this-alias))))
 
 (defn- collect-joined-pairs
   "Walk a legacy-MBQL stage and return the set of `[field-id alias]` pairs for every
@@ -242,10 +250,24 @@
     (log/debugf "[mbql] Built %d var aliases" (count aliases))
     aliases))
 
+(defn- emit-optional-triple
+  "Render a SPARQL `OPTIONAL { ?source <property> ?target . }` line.
+   Single-arity defaults the source var to the synthetic subject (`?subject`)."
+  ([property-uri target-var]
+   (emit-optional-triple "subject" property-uri target-var))
+  ([source-var property-uri target-var]
+   (format "  OPTIONAL { ?%s <%s> ?%s . }" source-var property-uri target-var)))
+
+(defn- joined-var-name
+  "Build a SPARQL var name for a joined column: `<alias>__<field-name>`,
+   sanitized. `field-name` may be nil; falls back to `f`."
+  [alias field-name]
+  (sanitize-var-name (str alias "__" (or field-name "f"))))
+
 (defn- ensure-triple-for-field
   "Build OPTIONAL triple pattern for property and var."
   [property-uri var-alias]
-  (let [triple (format "  OPTIONAL { ?subject <%s> ?%s . }" property-uri var-alias)]
+  (let [triple (emit-optional-triple property-uri var-alias)]
     (log/debugf "[mbql] OPTIONAL triple: property=%s var=?%s" property-uri var-alias)
     triple))
 
@@ -298,21 +320,21 @@
    (aggregation->projection agg index token->var false))
   ([agg index token->var count-all?]
    (let [agg     (unwrap-aggregation agg)
-        op      (when (sequential? agg) (first agg))
-        out     (str "ag_" index)
-        arg     (aggregation-arg-token agg)
-        arg-var (when arg (token->var arg))
-        expr    (case op
-                  :count    (cond
-                              arg-var    (format "COUNT(?%s)" arg-var)
-                              count-all? "COUNT(*)"
-                              :else      "COUNT(DISTINCT ?subject)")
-                  :distinct (when arg-var (format "COUNT(DISTINCT ?%s)" arg-var))
-                  :sum      (when arg-var (format "SUM(?%s)" arg-var))
-                  :avg      (when arg-var (format "AVG(?%s)" arg-var))
-                  :min      (when arg-var (format "MIN(?%s)" arg-var))
-                  :max      (when arg-var (format "MAX(?%s)" arg-var))
-                  nil)]
+         op      (when (sequential? agg) (first agg))
+         out     (str "ag_" index)
+         arg     (aggregation-arg-token agg)
+         arg-var (when arg (token->var arg))
+         expr    (case op
+                   :count    (cond
+                               arg-var    (format "COUNT(?%s)" arg-var)
+                               count-all? "COUNT(*)"
+                               :else      "COUNT(DISTINCT ?subject)")
+                   :distinct (when arg-var (format "COUNT(DISTINCT ?%s)" arg-var))
+                   :sum      (when arg-var (format "SUM(?%s)" arg-var))
+                   :avg      (when arg-var (format "AVG(?%s)" arg-var))
+                   :min      (when arg-var (format "MIN(?%s)" arg-var))
+                   :max      (when arg-var (format "MAX(?%s)" arg-var))
+                   nil)]
      (when expr
        {:select (format "(%s AS ?%s)" expr out)
         :var    out}))))
@@ -339,12 +361,21 @@
 (defn- resolve-expected-var
   "Resolve the SPARQL variable a stage already projects for one Lib expected column,
    using the variable maps the stage compiler has built. Returns nil when the stage
-   compiler did not project that column (so the caller must synthesize it)."
-  [col field-id->var pair->target-var]
-  (let [fid   (:id col)
-        alias (:lib/join-alias col)]
+   compiler did not project that column (so the caller must synthesize it).
+
+   Lib's `result-metadata/returned-columns` strips `:lib/join-alias` from columns
+   that came from implicit joins and stamps `:fk-field-id` instead. We use
+   `fk-fid->alias` (built from the stage's `:joins`) to recover the originating
+   alias and look the qualified var up via `pair->target-var`."
+  [col field-id->var pair->target-var fk-fid->alias]
+  (let [fid     (:id col)
+        alias   (:lib/join-alias col)
+        fk-fid  (:fk-field-id col)
+        recovered-alias (when (and (not alias) fk-fid)
+                          (get fk-fid->alias fk-fid))]
     (cond
       (and fid alias)           (get pair->target-var [fid alias])
+      (and fid recovered-alias) (get pair->target-var [fid recovered-alias])
       (and fid (id-field? fid)) "subject"
       fid                       (get field-id->var fid))))
 
@@ -359,13 +390,16 @@
    are synthesized here so the driver's column count can never drift from Lib's.
 
    Returns `{:vars [...] :triples [...]}`."
-  [expected-cols {:keys [field-id->var pair->target-var alias->intermediate-var default-graph]}]
+  [expected-cols {:keys [field-id->var pair->target-var alias->intermediate-var
+                         fk-fid->alias default-graph]}]
   (let [placeholder (atom 0)]
     (reduce
      (fn [acc col]
        (let [fid      (:id col)
-             alias    (:lib/join-alias col)
-             existing (resolve-expected-var col field-id->var pair->target-var)]
+             alias    (or (:lib/join-alias col)
+                          (when-let [fk-fid (:fk-field-id col)]
+                            (get fk-fid->alias fk-fid)))
+             existing (resolve-expected-var col field-id->var pair->target-var fk-fid->alias)]
          (cond
            existing
            (update acc :vars conj existing)
@@ -376,12 +410,12 @@
              (if (id-field? fid)
                (update acc :vars conj inter)
                (let [nm   (:name (field-id->metadata fid))
-                     v    (sanitize-var-name (str alias "__" (or nm (str "f_" fid))))
+                     v    (joined-var-name alias (or nm (str "f_" fid)))
                      prop (uri/absolute-uri nm default-graph)]
                  (-> acc
                      (update :vars conj v)
                      (update :triples conj
-                             (format "  OPTIONAL { ?%s <%s> ?%s . }" inter prop v))))))
+                             (emit-optional-triple inter prop v))))))
 
            ;; Direct column the compiler missed: bind it off ?subject.
            (and fid (not alias) (not (id-field? fid)) (:name (field-id->metadata fid)))
@@ -391,7 +425,7 @@
              (-> acc
                  (update :vars conj v)
                  (update :triples conj
-                         (format "  OPTIONAL { ?subject <%s> ?%s . }" prop v))))
+                         (emit-optional-triple prop v))))
 
            (and fid (id-field? fid))
            (update acc :vars conj "subject")
@@ -409,8 +443,13 @@
    Left-joins (added by `add-implicit-joins` for FK-remap dimensions) are
    emitted as a pair of independent OPTIONALs:
 
-     OPTIONAL { ?subject <fk-prop> ?<alias>_subject . }
+     OPTIONAL { ?<src> <fk-prop> ?<alias>_subject . }
      OPTIONAL { ?<alias>_subject <target-prop> ?<alias>__<target-var> . }
+
+   `?<src>` is `?subject` for joins reached directly from the source table.
+   For chained implicit joins (e.g. Item → Provider → Owner), the FK field
+   lives on a previously joined table; `alias->source-var` resolves `?<src>`
+   to that prior join's intermediate var so the chain stays connected.
 
    Aggregation queries (`:aggregation` present) project only breakout columns
    and aggregate expressions, with a `GROUP BY` over the breakouts. `[:count]`
@@ -457,10 +496,55 @@
                              (for [j joins
                                    :let [alias (:alias j)
                                          fk-id (or (:fk-field-id j)
-                                                   (condition->fk-field-id (:condition j)))
+                                                   (condition->fk-field-id (:condition j) alias))
                                          nm    (when fk-id (:name (field-id->metadata fk-id)))]
                                    :when nm]
                                [alias (uri/absolute-uri nm default-graph)]))
+        ;; LHS of each join's FK triple. Chained joins (e.g. Item → Provider → Owner)
+        ;; carry an FK field that lives on a *previously joined* table; emitting the
+        ;; triple off `?subject` would silently produce an unbound chain. Resolution
+        ;; (most specific first):
+        ;;   1. The FK field token in the condition has `:join-alias "Prev"` set —
+        ;;      that's the source join's alias directly. (Explicit chained joins.)
+        ;;   2. The FK field's `:table-id` matches a previously joined `:source-table`.
+        ;;      (Implicit chained joins, where the FK token has no alias.)
+        ;;   3. Fallback: `?subject` (single-hop joins anchored on the source table).
+        table-id->alias (into {} (for [j joins :when (:source-table j)]
+                                   [(:source-table j) (:alias j)]))
+        alias->source-var
+        (into {}
+              (for [j joins
+                    :let [alias        (:alias j)
+                          fk-ref       (condition->fk-ref (:condition j) alias)
+                          fk-tok-alias (field-token->join-alias fk-ref)
+                          fk-id        (or (:fk-field-id j) (field-token->id fk-ref))
+                          parent-tid   (some-> fk-id field-id->metadata :table-id)
+                          src-alias    (or fk-tok-alias
+                                           (when (and parent-tid (not= parent-tid table-id))
+                                             (get table-id->alias parent-tid)))
+                          src-var      (cond
+                                         (and src-alias (not= src-alias alias))
+                                         (get alias->intermediate-var src-alias)
+
+                                         (and parent-tid
+                                              (not= parent-tid table-id)
+                                              (nil? src-alias))
+                                         (do (log/warnf
+                                              "[mbql] FK chain: join %s references table-id %s but no prior join produces it; defaulting source to ?subject"
+                                              alias parent-tid)
+                                             "subject")
+
+                                         :else "subject")]]
+                [alias src-var]))
+        ;; `:fk-field-id` → join alias. Lib's result-metadata strips `:lib/join-alias`
+        ;; from implicitly-joinable columns and stamps `:fk-field-id` instead; we use
+        ;; this map to recover the originating join from an expected-cols entry.
+        fk-fid->alias (into {}
+                            (for [j joins
+                                  :let [fk-id (or (:fk-field-id j)
+                                                  (condition->fk-field-id (:condition j) (:alias j)))]
+                                  :when fk-id]
+                              [fk-id (:alias j)]))
         ;; Per joined-pair: the SPARQL var that carries the value. The joined entity's
         ;; own subject column IS the intermediate var (no extra triple needed); every
         ;; other joined column gets a unique `<alias>__<field-name>` var.
@@ -469,12 +553,19 @@
                                  [[fid alias]
                                   (if (id-field? fid)
                                     (get alias->intermediate-var alias)
-                                    (sanitize-var-name
-                                     (str alias "__" (or (:name (field-id->metadata fid))
-                                                          (str "f_" fid)))))]))
+                                    (joined-var-name alias
+                                                     (or (:name (field-id->metadata fid))
+                                                         (str "f_" fid))))]))
         ;; All field-ids referenced anywhere in the stage; we only build direct triples for
-        ;; those that aren't reached via a join.
-        field-ids     (collect-field-ids triple-inner)
+        ;; those that aren't reached via a join. Field tokens whose parent `:table-id`
+        ;; isn't the base table are also excluded: they belong to a joined entity and
+        ;; would otherwise emit a bogus `?subject <foreign-prop> ?var` triple. The
+        ;; tolerated nil case keeps the test fixtures (no `:table-id`) working.
+        field-ids     (->> (collect-field-ids triple-inner)
+                           (remove joined-fids)
+                           (remove (fn [fid]
+                                     (when-let [tid (some-> fid field-id->metadata :table-id)]
+                                       (not= tid table-id)))))
         field-id->prop (into {}
                              (for [fid field-ids
                                    :let [nm (:name (field-id->metadata fid))]
@@ -516,9 +607,10 @@
         join-fk-triples (for [j joins
                               :let [alias (:alias j)
                                     fk-prop (get alias->fk-prop alias)
-                                    inter-var (get alias->intermediate-var alias)]
+                                    inter-var (get alias->intermediate-var alias)
+                                    src-var (get alias->source-var alias "subject")]
                               :when (and fk-prop inter-var)]
-                          (format "  OPTIONAL { ?subject <%s> ?%s . }" fk-prop inter-var))
+                          (emit-optional-triple src-var fk-prop inter-var))
         ;; One triple per joined column. The joined entity's own subject column needs
         ;; no triple — it IS the intermediate var, already bound by the FK triple.
         join-target-triples (for [[fid alias] joined-pairs
@@ -528,7 +620,7 @@
                                         target-var (get pair->target-var [fid alias])
                                         inter-var (get alias->intermediate-var alias)]
                                   :when (and prop target-var inter-var)]
-                              (format "  OPTIONAL { ?%s <%s> ?%s . }" inter-var prop target-var))
+                              (emit-optional-triple inter-var prop target-var))
         _ (log/debugf "[mbql] Triples: fields=%d extras=%d join-fk=%d join-targets=%d"
                       (count triples-for-fields) (count triples-for-extras)
                       (count join-fk-triples) (count join-target-triples))
@@ -582,6 +674,7 @@
                        {:field-id->var           field-id->var
                         :pair->target-var        pair->target-var
                         :alias->intermediate-var alias->intermediate-var
+                        :fk-fid->alias           fk-fid->alias
                         :default-graph           default-graph}))
         result-vars (cond
                       agg?       (vec (concat breakout-vars (keep :var agg-projections)))
@@ -661,9 +754,9 @@
                                    fk-var (some-> join :condition condition->fk-ref inner-var-for-ref)
                                    nm     (when (integer? tid) (:name (field-id->metadata tid)))
                                    prop   (when nm (uri/absolute-uri nm default-graph))
-                                   rvar   (sanitize-var-name (str alias "__" (or nm (str "f_" tid))))]
+                                   rvar   (joined-var-name alias (or nm (str "f_" tid)))]
                             :when (and fk-var prop)]
-                        {:optional (format "  OPTIONAL { ?%s <%s> ?%s . }" fk-var prop rvar)
+                        {:optional (emit-optional-triple fk-var prop rvar)
                          :var      rvar
                          :tid      tid
                          :alias    alias})
@@ -710,12 +803,12 @@
                                  (update acc :vars conj (get pair->target-var [tid alias]))
 
                                  (and alias join fk-var nm)
-                                 (let [rvar (sanitize-var-name (str alias "__" nm))
+                                 (let [rvar (joined-var-name alias nm)
                                        prop (uri/absolute-uri nm default-graph)]
                                    (-> acc
                                        (update :vars conj rvar)
                                        (update :optionals conj
-                                               (format "  OPTIONAL { ?%s <%s> ?%s . }" fk-var prop rvar))))
+                                               (emit-optional-triple fk-var prop rvar))))
 
                                  (seq @inner-vars)
                                  (let [v (first @inner-vars)]

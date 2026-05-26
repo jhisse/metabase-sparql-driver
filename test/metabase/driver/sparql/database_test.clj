@@ -7,8 +7,8 @@
             [metabase.driver.sparql.uri :as uri]))
 
 (def ^:private extract-class-name @#'database/extract-class-name)
-(def ^:private shorten-uri @#'database/shorten-uri)
-(def ^:private foreign-uri? @#'database/foreign-uri?)
+(def ^:private shorten-uri uri/shorten-uri)
+(def ^:private foreign-uri? uri/foreign-uri?)
 (def ^:private absolute-uri uri/absolute-uri)
 (def ^:private parse-schema-config @#'database/parse-schema-config)
 (def ^:private build-pk-field @#'database/build-pk-field)

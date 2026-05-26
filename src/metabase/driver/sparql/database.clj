@@ -28,27 +28,6 @@
       class-uri
       last-part)))
 
-(defn- shorten-uri
-  "When `uri` starts with `default-graph`, strip that prefix; otherwise return `uri`.
-   Blank `default-graph` is treated as a no-op so behavior is unchanged when the user
-   hasn't configured a Default Graph URI. If stripping would produce a blank string
-   (i.e. `uri` equals `default-graph` exactly), the original `uri` is returned to keep
-   `:name` non-blank as required by Metabase's field schema."
-  [uri default-graph]
-  (if (and (not (str/blank? default-graph))
-           (string? uri)
-           (str/starts-with? uri default-graph))
-    (let [tail (subs uri (count default-graph))]
-      (if (str/blank? tail) uri tail))
-    uri))
-
-(defn- foreign-uri?
-  "True when `default-graph` is configured and `uri` does not start with it."
-  [uri default-graph]
-  (and (not (str/blank? default-graph))
-       (string? uri)
-       (not (str/starts-with? uri default-graph))))
-
 (defn- ->long
   "Coerce a manifest connection-property value to a Long (manifest props are
    type: string; legacy configs may hold a number). nil if blank/unparseable
@@ -92,7 +71,7 @@
    name in Metabase is the short local name (e.g. `naam`) instead of the
    full URI. The full URI is reconstructed at query-compile time."
   [default-graph idx field-uri]
-  {:name (shorten-uri field-uri default-graph)
+  {:name (uri/shorten-uri field-uri default-graph)
    :database-type "string"
    :base-type :type/Text
    :pk? false
@@ -103,7 +82,7 @@
   [default-graph hide-foreign? explicit-table]
   (let [pk-field     (build-pk-field)
         candidates   (cond->> (:fields explicit-table)
-                       hide-foreign? (remove #(foreign-uri? % default-graph)))
+                       hide-foreign? (remove #(uri/foreign-uri? % default-graph)))
         other-fields (map-indexed (partial build-field-from-uri default-graph) candidates)]
     (set (cons pk-field other-fields))))
 
@@ -112,7 +91,7 @@
   [default-graph hide-foreign? bindings]
   (let [pk-field   (build-pk-field)
         candidates (cond->> bindings
-                     hide-foreign? (remove #(foreign-uri? (get-in % [:property :value]) default-graph)))
+                     hide-foreign? (remove #(uri/foreign-uri? (get-in % [:property :value]) default-graph)))
         other-fields (map-indexed
                       (fn [idx binding]
                         (build-field-from-uri default-graph idx (get-in binding [:property :value])))
@@ -163,9 +142,9 @@
   "Convert one SHACL property descriptor into a Metabase TableMetadataField."
   [default-graph hide-foreign? idx prop]
   (let [uri      (:property-uri prop)
-        foreign? (foreign-uri? uri default-graph)]
+        foreign? (uri/foreign-uri? uri default-graph)]
     (when-not (and foreign? hide-foreign?)
-      (cond-> {:name              (shorten-uri uri default-graph)
+      (cond-> {:name              (uri/shorten-uri uri default-graph)
                :database-type     (if (:lang-string? prop) "langString" "string")
                :base-type         (or (:base-type prop) :type/Text)
                :pk?               false
@@ -177,7 +156,7 @@
 (defn- shacl-shape->table
   "Convert one SHACL shape into a Metabase TableMetadata `:table` entry."
   [default-graph {:keys [class-uri description]}]
-  {:name         (shorten-uri class-uri default-graph)
+  {:name         (uri/shorten-uri class-uri default-graph)
    :schema       nil
    :display-name (extract-class-name class-uri)
    :description  (or description (str "RDF Class: " class-uri " (SHACL)"))})
@@ -191,13 +170,13 @@
   [default-graph hide-foreign? {:keys [class-uri properties]}]
   (let [pk-field   (build-pk-field)
         candidates (cond->> properties
-                     hide-foreign? (remove #(foreign-uri? (:property-uri %) default-graph))
+                     hide-foreign? (remove #(uri/foreign-uri? (:property-uri %) default-graph))
                      :always       (sort-by (juxt #(or (:order %) Long/MAX_VALUE)
                                                   :property-uri)))
         fields     (->> candidates
                         (map-indexed (fn [idx p] (shacl-prop->field default-graph hide-foreign? idx p)))
                         (remove nil?))]
-    {:name   (shorten-uri class-uri default-graph)
+    {:name   (uri/shorten-uri class-uri default-graph)
      :schema nil
      :fields (set (cons pk-field fields))}))
 
@@ -248,13 +227,13 @@
                    prop-uri (:property-uri prop)]
             :when fk-class
             :when (not (and hide-foreign?
-                            (or (foreign-uri? fk-class default-graph)
-                                (foreign-uri? prop-uri default-graph)
-                                (foreign-uri? (:class-uri shape) default-graph))))]
-        {:fk-table-name   (shorten-uri (:class-uri shape) default-graph)
+                            (or (uri/foreign-uri? fk-class default-graph)
+                                (uri/foreign-uri? prop-uri default-graph)
+                                (uri/foreign-uri? (:class-uri shape) default-graph))))]
+        {:fk-table-name   (uri/shorten-uri (:class-uri shape) default-graph)
          :fk-table-schema nil
-         :fk-column-name  (shorten-uri prop-uri default-graph)
-         :pk-table-name   (shorten-uri fk-class default-graph)
+         :fk-column-name  (uri/shorten-uri prop-uri default-graph)
+         :pk-table-name   (uri/shorten-uri fk-class default-graph)
          :pk-table-schema nil
          :pk-column-name  "subject"}))))
 
@@ -268,7 +247,7 @@
       (log/warnf "[shacl] No shapes available for database %s; returning empty table set" (:name database)))
     {:tables (->> (or shapes [])
                   (remove (fn [s] (and hide-foreign?
-                                       (foreign-uri? (:class-uri s) default-graph))))
+                                       (uri/foreign-uri? (:class-uri s) default-graph))))
                   (map #(shacl-shape->table default-graph %))
                   set)}))
 
@@ -322,7 +301,7 @@
   "Builds a table definition from schema configuration."
   [default-graph table]
   (let [uri        (:name table)
-        short-name (shorten-uri uri default-graph)]
+        short-name (uri/shorten-uri uri default-graph)]
     {:name short-name
      :schema nil
      :display-name (extract-class-name uri)
@@ -332,7 +311,7 @@
 (defn- build-table-from-sparql-result
   "Builds a table definition from SPARQL query results."
   [default-graph {:keys [uri count]}]
-  {:name (shorten-uri uri default-graph)
+  {:name (uri/shorten-uri uri default-graph)
    :schema nil
    :display-name (extract-class-name uri)
    :description (str "RDF Class: " uri " (Instances: " count ")")})
@@ -348,7 +327,7 @@
   [default-graph hide-foreign? database schema-config]
   (log/info "Using explicit schema configuration for database:" (:name database))
   (let [tables (cond->> (:tables schema-config)
-                 hide-foreign? (remove #(foreign-uri? (:name %) default-graph)))]
+                 hide-foreign? (remove #(uri/foreign-uri? (:name %) default-graph)))]
     {:tables (set (map #(build-table-from-config default-graph %) tables))}))
 
 (defn- describe-database-auto
@@ -367,7 +346,7 @@
                                   :always (map (fn [binding]
                                                  {:uri   (get-in binding [:class :value])
                                                   :count (bigint (get-in binding [:count :value]))}))
-                                  hide-foreign? (remove #(foreign-uri? (:uri %) default-graph)))]
+                                  hide-foreign? (remove #(uri/foreign-uri? (:uri %) default-graph)))]
         {:tables (set (map #(build-table-from-sparql-result default-graph %) classes-with-counts))})
       (do
         (log/error "Error describing SPARQL database:" result)

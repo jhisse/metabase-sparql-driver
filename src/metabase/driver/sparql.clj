@@ -8,6 +8,7 @@
   (:require [metabase.driver :as driver]
             [metabase.driver.sparql.connection :as connection]
             [metabase.driver.sparql.database :as database]
+            [metabase.driver.sparql.dimensions]
             [metabase.driver.sparql.execute :as execute]
             [metabase.driver.sparql.parameters :as parameters]
             [metabase.driver.sparql.mbql :as mbql]

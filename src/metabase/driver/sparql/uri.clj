@@ -14,3 +14,23 @@
           (str/blank? default-graph))
     nm
     (str default-graph nm)))
+
+(defn shorten-uri
+  "When `uri` starts with `default-graph`, strip that prefix; otherwise return `uri`.
+   Blank `default-graph` is treated as a no-op. If stripping would produce a blank
+   string (i.e. `uri` equals `default-graph` exactly), the original `uri` is
+   returned to keep `:name` non-blank as required by Metabase's field schema."
+  [uri default-graph]
+  (if (and (not (str/blank? default-graph))
+           (string? uri)
+           (str/starts-with? uri default-graph))
+    (let [tail (subs uri (count default-graph))]
+      (if (str/blank? tail) uri tail))
+    uri))
+
+(defn foreign-uri?
+  "True when `default-graph` is configured and `uri` does not start with it."
+  [uri default-graph]
+  (and (not (str/blank? default-graph))
+       (string? uri)
+       (not (str/starts-with? uri default-graph))))
