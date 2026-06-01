@@ -103,7 +103,8 @@
   "Executes a SPARQL query and processes the results for Metabase.
   
   Arguments:
-    - native-query: map containing at least :query and optionally :endpoint under :native
+    - native-query: map containing at least :query under :native. The endpoint is
+      always taken from the database details and cannot be overridden by the query.
     - respond: callback function to handle the processed results
 
   This function retrieves database details, executes the SPARQL query, and processes the response.
@@ -112,7 +113,10 @@
   (log/info "Executing SPARQL query:" (pr-str (select-keys native-query [:native])))
   (let [database (driver-api/database (driver-api/metadata-provider))
         details  (:details database)
-        endpoint (or (get-in native-query [:native :endpoint]) (:endpoint details))
+        ;; Always use the admin-configured endpoint. A native query must not be
+        ;; able to override it, otherwise stored auth credentials would be sent
+        ;; to an arbitrary, query-controlled endpoint.
+        endpoint (:endpoint details)
         sparql-query (get-in native-query [:native :query])
         options {:default-graph (:default-graph details)
                  :insecure?     (:use-insecure details)
