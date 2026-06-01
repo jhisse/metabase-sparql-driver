@@ -6,6 +6,7 @@
   (:require [metabase.util.log :as log]
             [clojure.string :as str]
             [metabase.util.json :as json]
+            [metabase.driver.sparql.auth :as auth]
             [metabase.driver.sparql.execute :as execute]
             [metabase.driver.sparql.shacl :as shacl]
             [metabase.driver.sparql.templates :as templates]
@@ -121,8 +122,9 @@
         default-graph  (:default-graph details)
         hide-foreign?  (boolean (:hide-foreign-uris details))
         endpoint       (:endpoint details)
-        options        {:insecure? (:use-insecure details)
-                        :default-graph default-graph}
+        options        {:insecure?     (:use-insecure details)
+                        :default-graph default-graph
+                        :auth          (auth/http-options details)}
         class-uri      (uri/absolute-uri (:name table) default-graph)
         property-limit (or (->long (:property-limit details)) 20)
         sample-limit   (or (->long (:sample-limit details)) 10000)
@@ -337,8 +339,9 @@
         default-graph (:default-graph details)
         hide-foreign? (boolean (:hide-foreign-uris details))
         endpoint      (:endpoint details)
-        options       {:insecure? (:use-insecure details)
-                       :default-graph default-graph}
+        options       {:insecure?     (:use-insecure details)
+                       :default-graph default-graph
+                       :auth          (auth/http-options details)}
         class-limit   (or (->long (:class-limit details)) 100)
         [success result] (execute/execute-sparql-query endpoint (templates/classes-discovery-query class-limit) options)]
     (if success

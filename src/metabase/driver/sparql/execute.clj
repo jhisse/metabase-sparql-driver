@@ -6,6 +6,7 @@
             [clj-http.client :as http]
             [metabase.util.json :as json]
             [metabase.driver-api.core :as driver-api]
+            [metabase.driver.sparql.auth :as auth]
             [metabase.driver.sparql.query-processor :as query-processor]))
 
 (defn- ^:private create-http-options
@@ -16,16 +17,20 @@
      options - Map containing configuration options:
        :insecure? - Boolean flag to ignore SSL certificate validation
        :default-graph - URI of the default graph to query
-       
+       :auth - clj-http fragment with auth keys (e.g. :basic-auth or :headers).
+               Built by `metabase.driver.sparql.auth/http-options` from
+               connection details. Optional.
+
    Returns:
      A map of HTTP options for clj-http client."
-  [query {:keys [insecure? default-graph]}]
+  [query {:keys [insecure? default-graph auth]}]
   (cond-> {:accept :json
            :cookie-policy :none
            :throw-exceptions false
            :form-params {:query query}}
     insecure? (assoc :insecure? true)
-    default-graph (assoc :query-params {:default-graph-uri default-graph})))
+    default-graph (assoc :query-params {:default-graph-uri default-graph})
+    (seq auth) (merge auth)))
 
 (defn- ^:private parse-json-response
   "Parse JSON response body from SPARQL endpoint.
@@ -106,10 +111,12 @@
   [native-query _context respond]
   (log/info "Executing SPARQL query:" (pr-str (select-keys native-query [:native])))
   (let [database (driver-api/database (driver-api/metadata-provider))
-        endpoint (or (get-in native-query [:native :endpoint]) (-> database :details :endpoint))
+        details  (:details database)
+        endpoint (or (get-in native-query [:native :endpoint]) (:endpoint details))
         sparql-query (get-in native-query [:native :query])
-        options {:default-graph (-> database :details :default-graph)
-                 :insecure? (-> database :details :use-insecure)}
+        options {:default-graph (:default-graph details)
+                 :insecure?     (:use-insecure details)
+                 :auth          (auth/http-options details)}
         [success result] (execute-sparql-query endpoint sparql-query options)]
     (if success
       (query-processor/process-query-results result respond)
