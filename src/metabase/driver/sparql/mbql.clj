@@ -184,6 +184,31 @@
     (nil? v) ""
     :else (str "\"" (str/replace (str v) "\"" "\\\"") "\"")))
 
+(defn- url-shaped?
+  "True when `v` is a string carrying a URI scheme (`http:`, `https:`, `urn:`, …).
+   Uses the same scheme regex as [[uri/absolute-uri]]."
+  [v]
+  (boolean (and (string? v) (re-find #"^[A-Za-z][A-Za-z0-9+.-]*:" v))))
+
+(defn- iri-valued-field?
+  "True when the field's metadata marks it as carrying an RDF IRI value — a
+   foreign key (`:type/FK`) or a URL column (`:type/URL`). These are bound to IRI
+   nodes in SPARQL, so an equality filter must compare against `<iri>`, not a
+   quoted string literal."
+  [field-id]
+  (let [meta (field-id->metadata field-id)]
+    (or (contains? #{:type/FK :type/URL} (:semantic-type meta))
+        (= :type/URL (:base-type meta)))))
+
+(defn- value->term
+  "Render a filter RHS value as a SPARQL term for an equality comparison.
+   When the field is IRI-valued and the value is a URL-shaped string, emit an
+   IRI `<…>` so it matches the bound node; otherwise fall back to a literal."
+  [field-id v]
+  (if (and (iri-valued-field? field-id) (string? v) (url-shaped? v))
+    (str "<" v ">")
+    (literal->sparql v)))
+
 (defn- compile-filter-expr
   "Compile a filter clause to a SPARQL boolean expression string."
   [filter-clause field-id->var pair->target-var]
@@ -212,10 +237,10 @@
             (case op
               := (if (nil? v)
                    (format "(!BOUND(?%s))" var)
-                   (format "(?%s = %s)" var (literal->sparql v)))
+                   (format "(?%s = %s)" var (value->term fid v)))
               :!= (if (nil? v)
                     (format "(BOUND(?%s))" var)
-                    (format "(?%s != %s)" var (literal->sparql v)))
+                    (format "(?%s != %s)" var (value->term fid v)))
               :> (and (some? v) (format "(?%s > %s)" var (literal->sparql v)))
               :>= (and (some? v) (format "(?%s >= %s)" var (literal->sparql v)))
               :< (and (some? v) (format "(?%s < %s)" var (literal->sparql v)))
@@ -276,6 +301,75 @@
   [filter-clause field-id->var pair->target-var]
   (when-let [expr (compile-filter-expr filter-clause field-id->var pair->target-var)]
     [(str "  FILTER " expr)]))
+
+(defn- filter-clause-value
+  "Unwrap the RHS of a binary filter clause, stripping a `[:value v opts]` wrapper."
+  [clause]
+  (let [rhs (nth clause 2 nil)]
+    (if (and (vector? rhs) (= :value (first rhs)))
+      (second rhs)
+      rhs)))
+
+(defn- anchorable-clause?
+  "True when `clause` is a `[:= <direct-field> <const>]` that can be pushed up into
+   a mandatory BGP triple: a direct (no `:join-alias`) field with a resolvable
+   property, not the synthetic subject, not a `langString` column (language
+   equality semantics differ), and a non-nil concrete constant."
+  [clause field-id->prop]
+  (and (sequential? clause)
+       (= := (first clause))
+       (let [lhs   (second clause)
+             fid   (field-token->id lhs)
+             alias (field-token->join-alias lhs)
+             v     (filter-clause-value clause)]
+         (boolean
+          (and fid
+               (not alias)
+               (not (id-field? fid))
+               (not (lang-string-field? fid))
+               (some? v)
+               (contains? field-id->prop fid))))))
+
+(defn- clause->anchor
+  "Build the anchor map `{:fid :var :prop :term}` for an anchorable clause."
+  [clause field-id->prop field-id->var]
+  (let [fid (field-token->id (second clause))
+        v   (filter-clause-value clause)]
+    {:fid  fid
+     :var  (get field-id->var fid)
+     :prop (get field-id->prop fid)
+     :term (value->term fid v)}))
+
+(defn- extract-anchors
+  "Pull pushable equality constraints out of `filter-clause`. Returns
+   `{:anchors [{:fid :var :prop :term} …] :residual <clause-or-nil>}`.
+
+   Anchors are taken from a top-level `:=` or from the `:=` children of a
+   top-level `:and`; never from inside `:or`, where pushing would change
+   semantics. `:residual` is `filter-clause` with the anchored clauses removed
+   (an `:and` is unwrapped to its single remaining child, or `nil` when every
+   child was pulled)."
+  [filter-clause field-id->prop field-id->var]
+  (cond
+    (nil? filter-clause)
+    {:anchors [] :residual nil}
+
+    (anchorable-clause? filter-clause field-id->prop)
+    {:anchors  [(clause->anchor filter-clause field-id->prop field-id->var)]
+     :residual nil}
+
+    (and (sequential? filter-clause) (= :and (first filter-clause)))
+    (let [children (rest filter-clause)
+          anchored (filter #(anchorable-clause? % field-id->prop) children)
+          other    (remove #(anchorable-clause? % field-id->prop) children)]
+      {:anchors  (mapv #(clause->anchor % field-id->prop field-id->var) anchored)
+       :residual (cond
+                   (empty? other)      nil
+                   (= 1 (count other)) (first other)
+                   :else               (vec (cons :and other)))})
+
+    :else
+    {:anchors [] :residual filter-clause}))
 
 (defn- compile-order-by
   "Compile :order-by to ORDER BY."
@@ -573,6 +667,11 @@
                                [fid (uri/absolute-uri nm default-graph)]))
         field-id->var  (build-var-aliases field-ids)
         token->var     (fn [tok] (var-for-token tok field-id->var pair->target-var))
+        ;; Push selective equality constraints into mandatory BGP triples (Principle 1):
+        ;; instead of an OPTIONAL + trailing FILTER, anchor the constant directly so the
+        ;; engine can do an index lookup. `:residual` is what's left for a bottom FILTER.
+        {:keys [anchors residual]} (extract-anchors filter-clause field-id->prop field-id->var)
+        anchored-fids  (set (keep :fid anchors))
         triples-for-fields (->> output-tokens
                                 (keep (fn [tok]
                                         (let [fid   (field-token->id tok)
@@ -580,6 +679,7 @@
                                           (when (and fid
                                                      (not alias)
                                                      (not (id-field? fid))
+                                                     (not (contains? anchored-fids fid))
                                                      (get field-id->prop fid))
                                             (ensure-triple-for-field (get field-id->prop fid)
                                                                      (get field-id->var fid)))))))
@@ -597,6 +697,7 @@
                                  set
                                  (remove (set (keep field-token->id (remove field-token->join-alias output-tokens))))
                                  (remove joined-fids)
+                                 (remove anchored-fids)
                                  (remove id-field?)))
         triples-for-extras (for [fid extra-direct-fids
                                  :let [prop (get field-id->prop fid)
@@ -639,8 +740,16 @@
               (mapv #(lang-filter-line % lang)
                     (distinct (concat direct-lang-vars joined-lang-vars))))))
         _ (log/debugf "[mbql] LANG filter lines: %d" (count (or lang-filter-lines [])))
-        filters (when filter-clause
-                  (or (compile-basic-filter filter-clause field-id->var pair->target-var)
+        ;; Mandatory anchor triples (with the constant inlined) plus a BIND so the
+        ;; projected/ordered column var stays available — see [[extract-anchors]].
+        anchor-triples (for [{:keys [prop term]} anchors]
+                         (format "  ?subject <%s> %s ." prop term))
+        anchor-binds   (for [{:keys [term var]} anchors
+                             :when var]
+                         (format "  BIND(%s AS ?%s)" term var))
+        _ (log/debugf "[mbql] Anchor triples: %d" (count anchor-triples))
+        filters (when residual
+                  (or (compile-basic-filter residual field-id->var pair->target-var)
                       []))
         _ (log/debugf "[mbql] Filters count: %d" (count filters))
         ;; --- SELECT / GROUP BY / ORDER BY ------------------------------------
@@ -691,6 +800,8 @@
                        (compile-agg-order-by order-by field-id->var pair->target-var)
                        (compile-order-by order-by field-id->var pair->target-var))
         where-body  (->> (concat [(format "  ?subject a <%s> ." class-uri)]
+                                 anchor-triples
+                                 anchor-binds
                                  triples-for-fields
                                  triples-for-extras
                                  join-fk-triples

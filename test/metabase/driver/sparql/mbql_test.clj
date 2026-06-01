@@ -114,7 +114,25 @@
       (is (= "((?naam = \"Jan\") && (?leeftijd > 18))"
              (f [:and [:= [:field "naam" nil] "Jan"] [:> [:field "leeftijd" nil] 18]])))
       (is (= "((?naam = \"Jan\") || (?naam = \"Piet\"))"
-             (f [:or [:= [:field "naam" nil] "Jan"] [:= [:field "naam" nil] "Piet"]]))))))
+             (f [:or [:= [:field "naam" nil] "Jan"] [:= [:field "naam" nil] "Piet"]]))))
+    (testing "IRI-valued fields render a URL value as <IRI>, not a string literal"
+      (with-redefs [mbql/field-id->metadata {5 {:name "archiefcode" :semantic-type :type/FK}
+                                             6 {:name "homepage" :semantic-type :type/URL}
+                                             2 {:name "naam" :database-type "string"}}]
+        (let [g #(@#'mbql/compile-filter-expr % {5 "archiefcode" 6 "homepage" 2 "naam"} {})
+              iri "https://odis.q.libis.be/archiefcodes/AC28-7090"]
+          (is (= (str "(?archiefcode = <" iri ">)")
+                 (g [:= [:field 5 nil] iri]))
+              "FK field + URL value → IRI term")
+          (is (= (str "(?homepage != <" iri ">)")
+                 (g [:!= [:field 6 nil] iri]))
+              "URL field + URL value → IRI term")
+          (is (= "(?archiefcode = \"AC-123\")"
+                 (g [:= [:field 5 nil] "AC-123"]))
+              "FK field + non-URL value stays a string literal")
+          (is (= (str "(?naam = \"" iri "\")")
+                 (g [:= [:field 2 nil] iri]))
+              "plain string field + URL-shaped value stays a string literal"))))))
 
 (deftest order-by-test
   (let [ob     #(@#'mbql/compile-order-by % {"naam" "naam" "leeftijd" "leeftijd"} {})
@@ -150,6 +168,9 @@
    2  {:name "naam" :database-type "string"}
    3  {:name "leeftijd" :database-type "string"}
    4  {:name "geboorteplaats" :database-type "string"}
+   5  {:name "archiefcode" :database-type "string"
+       :semantic-type :type/FK :fk-target-class (str base "Archiefcode")}
+   6  {:name "homepage" :database-type "string" :base-type :type/URL :semantic-type :type/URL}
    10 {:name "label" :database-type "string"}})
 
 (defn- compile-stage* [stage]
@@ -177,11 +198,51 @@
 
 (deftest compile-base-stage-filter-test
   (with-fixture
-    (let [{:keys [sparql]}
-          (compile-stage* {:source-table 100
-                           :fields [[:field 1 nil] [:field 2 nil]]
-                           :filter [:= [:field 2 nil] "Jan"]})]
-      (is (str/includes? sparql "FILTER (?naam = \"Jan\")")))))
+    (testing "a non-equality filter (e.g. >) stays a bottom FILTER"
+      (let [{:keys [sparql]}
+            (compile-stage* {:source-table 100
+                             :fields [[:field 1 nil] [:field 3 nil]]
+                             :filter [:> [:field 3 nil] 18]})]
+        (is (str/includes? sparql "FILTER (?leeftijd > 18)"))
+        (is (str/includes? sparql (str "OPTIONAL { ?subject <" base "leeftijd> ?leeftijd . }")))))
+    (testing "a direct equality is pushed into a mandatory anchor triple + BIND (Principle 1)"
+      (let [{:keys [sparql]}
+            (compile-stage* {:source-table 100
+                             :fields [[:field 1 nil] [:field 2 nil]]
+                             :filter [:= [:field 2 nil] "Jan"]})]
+        (is (str/includes? sparql (str "?subject <" base "naam> \"Jan\" .")))
+        (is (str/includes? sparql "BIND(\"Jan\" AS ?naam)"))
+        (is (not (str/includes? sparql "FILTER")))
+        (is (not (str/includes? sparql (str "OPTIONAL { ?subject <" base "naam> ?naam . }"))))))))
+
+(deftest compile-base-stage-anchor-test
+  (testing "an equality on a direct FK field with a URL value is pushed into a mandatory anchor triple"
+    (with-fixture
+      (let [iri "https://odis.q.libis.be/archiefcodes/AC28-7090"
+            {:keys [sparql vars]}
+            (compile-stage* {:source-table 100
+                             :fields [[:field 1 nil] [:field 5 nil]]
+                             :filter [:= [:field 5 nil] iri]})]
+        (is (str/includes? sparql (str "?subject <" base "archiefcode> <" iri "> .")))
+        (is (str/includes? sparql (str "BIND(<" iri "> AS ?archiefcode)")))
+        (is (not (str/includes? sparql (str "OPTIONAL { ?subject <" base "archiefcode> ?archiefcode . }"))))
+        (is (not (str/includes? sparql "FILTER")))
+        (is (= ["subject" "archiefcode"] vars))))))
+
+(deftest compile-base-stage-anchor-and-residual-test
+  (testing ":and pushes the anchorable := and keeps the rest as a bottom FILTER"
+    (with-fixture
+      (let [iri "https://odis.q.libis.be/archiefcodes/AC28-7090"
+            {:keys [sparql]}
+            (compile-stage* {:source-table 100
+                             :fields [[:field 1 nil] [:field 3 nil] [:field 5 nil]]
+                             :filter [:and
+                                      [:= [:field 5 nil] iri]
+                                      [:> [:field 3 nil] 18]]})]
+        (is (str/includes? sparql (str "?subject <" base "archiefcode> <" iri "> .")))
+        (is (str/includes? sparql (str "BIND(<" iri "> AS ?archiefcode)")))
+        (is (str/includes? sparql "FILTER (?leeftijd > 18)"))
+        (is (not (str/includes? sparql "?archiefcode =")))))))
 
 (deftest compile-base-stage-order-limit-test
   (with-fixture
