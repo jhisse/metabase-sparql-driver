@@ -42,7 +42,7 @@
                               :native-parameter-card-reference false ;; Can be possible in the future if careful implementation
                               :persist-models false
                               :persist-models-enabled false
-                              :binning false
+                              :binning true ;; numeric/coordinate binning -> FLOOR bucket BIND (enables grid/heat maps)
                               :case-sensitivity-string-filter-options true
                               :left-join true ;; needed for FK-remap implicit joins; emitted as OPTIONAL chains
                               :right-join false
@@ -67,7 +67,7 @@
                               :describe-fields false ;; Can be slow in big datasets
                               :describe-indexes false
                               :upload-with-auto-pk false
-                              :fingerprint false
+                              :fingerprint true ;; required by binning: its middleware needs a column min/max
                               :connection/multiple-databases false
                               :identifiers-with-spaces false
                               :uuid-type false

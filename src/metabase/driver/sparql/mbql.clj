@@ -36,6 +36,19 @@
   [field-token]
   (:join-alias (field-token->opts field-token)))
 
+(defn- field-token->binning
+  "Return the resolved `:binning` options map on a field token, if any. After the
+   QP's binning middleware these carry concrete `:bin-width` and `:min-value`."
+  [field-token]
+  (:binning (field-token->opts field-token)))
+
+(defn- strip-binning
+  "Return `field-token` with its `:binning` option removed (other opts, e.g.
+   `:join-alias`, preserved) so the underlying column variable can be resolved."
+  [field-token]
+  (let [[t id opts] field-token]
+    [t id (not-empty (dissoc opts :binning))]))
+
 (declare collect-expression-tokens)
 
 (defn- expression-token?
@@ -141,8 +154,17 @@
    - Otherwise the subject (PK) field always maps to `?subject`.
    - Otherwise look up the regular alias from `field-id->var`."
   [field-token field-id->var pair->target-var]
-  (if (expression-token? field-token)
+  (cond
+    (expression-token? field-token)
     (sanitize-var-name (expression-token->name field-token))
+
+    ;; A binned field projects/groups by a derived bucket variable, bound by a
+    ;; FLOOR BIND over the underlying column var (see [[compile-base-stage]]).
+    (field-token->binning field-token)
+    (when-let [base (var-for-token (strip-binning field-token) field-id->var pair->target-var)]
+      (str base "_binned"))
+
+    :else
     (let [fid   (field-token->id field-token)
           alias (field-token->join-alias field-token)]
       (cond
@@ -824,6 +846,18 @@
          :bind   (format "  BIND(<%sdouble>(REPLACE(STR(?%s), %s, \"$%d\")) AS ?%s)"
                          xsd src-var (sparql-str-lit re) group coord-var)}))))
 
+(defn- bin-expr
+  "SPARQL expression that buckets `?base-var` into bins of `bin-width`, anchored at
+   `min-value`, matching Metabase's canonical formula
+   `floor((v - min) / width) * width + min`."
+  [base-var bin-width min-value]
+  (let [w (literal->sparql bin-width)
+        m (or min-value 0)]
+    (if (zero? m)
+      (format "(FLOOR(?%s / %s) * %s)" base-var w w)
+      (let [m (literal->sparql m)]
+        (format "((FLOOR((?%s - %s) / %s) * %s) + %s)" base-var m w w m)))))
+
 (defn- compile-base-stage
   "Compile a base MBQL stage (one with `:source-table`) to a SPARQL query.
 
@@ -984,6 +1018,21 @@
                                geo-coord-tokens)
         geo-coord-triples (distinct (map :triple geo-coord-emits))
         geo-coord-binds   (distinct (map :bind geo-coord-emits))
+        ;; Binned fields (grid/heat maps, numeric binning) bucket the underlying
+        ;; column var with a FLOOR BIND; the bucket var is what we group/select on.
+        ;; Resolved `:binning` opts carry concrete `:bin-width` + `:min-value`.
+        binned-tokens (->> (concat output-tokens
+                                   (mapcat (fn [[_dir fld & _]] [fld]) (or order-by []))
+                                   (collect-expression-tokens expressions))
+                           (filter #(and (vector? %) (= :field (first %)) (field-token->binning %)))
+                           distinct)
+        bin-binds     (distinct
+                       (for [tok  binned-tokens
+                             :let [b      (field-token->binning tok)
+                                   base   (var-for-token (strip-binning tok) field-id->var pair->target-var)
+                                   binned (var-for-token tok field-id->var pair->target-var)]
+                             :when (and base binned (:bin-width b))]
+                         (format "  BIND(%s AS ?%s)" (bin-expr base (:bin-width b) (:min-value b)) binned)))
         ;; Push selective equality constraints into mandatory BGP triples (Principle 1):
         ;; instead of an OPTIONAL + trailing FILTER, anchor the constant directly so the
         ;; engine can do an index lookup. `:residual` is what's left for a bottom FILTER.
@@ -1141,6 +1190,7 @@
                                  (or (:triples reconciled) [])
                                  geo-coord-triples
                                  geo-coord-binds
+                                 bin-binds
                                  expr-bind-lines
                                  (or lang-filter-lines [])
                                  filters)

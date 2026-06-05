@@ -492,6 +492,17 @@ Each is a `Float` extracted at query time with a capture-group `REPLACE` cast to
 FILTER ((?lokatie_lat <= 51.3) && (?lokatie_lat >= 51.0) && (?lokatie_lon >= 4.2) && (?lokatie_lon <= 4.5))
 ```
 
+**Pin map vs. grid map.** The lon/lat columns give you a **pin map** directly. For a **grid / heat map**, Metabase needs *binned* latitude and longitude (each coordinate bucketed into a grid cell) plus an aggregation. The driver supports binning: a binned breakout compiles to a `FLOOR` bucket and is grouped on, e.g. count of entities per 0.1° cell:
+
+```sparql
+BIND((FLOOR(?lokatie_lon / 0.1) * 0.1) AS ?lokatie_lon_binned)
+BIND((FLOOR(?lokatie_lat / 0.1) * 0.1) AS ?lokatie_lat_binned)
+...
+GROUP BY ?lokatie_lon_binned ?lokatie_lat_binned
+```
+
+> Binning needs a column min/max, which Metabase reads from the **fingerprint**. Fingerprinting is therefore **enabled** for this driver — sync samples each table to compute column stats. On very large endpoints this adds sync cost; if that's a problem you can set `:fingerprint false` in the driver feature list, but binning (and grid maps) will then only work when you also add a numeric range filter on the coordinate.
+
 If you need a different projection or a value WKT doesn't expose, you can always build a [custom column](#custom-columns-expressions) by hand (e.g. `float(regexextract([lokatie], "[-0-9.]+"))`).
 
 ## :warning: Limitations and Known Issues

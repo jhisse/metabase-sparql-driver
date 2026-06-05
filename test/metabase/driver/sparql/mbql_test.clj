@@ -821,3 +821,45 @@
         (is (str/includes?
              sparql
              "FILTER ((?lokatie_lat <= 51.0) && (?lokatie_lat >= 50.0) && (?lokatie_lon >= 4.0) && (?lokatie_lon <= 5.0))"))))))
+
+;; ---------------------------------------------------------------------------
+;; Binning (grid / heat maps, numeric bins)
+;; ---------------------------------------------------------------------------
+
+(deftest bin-expr-test
+  (let [f @#'mbql/bin-expr]
+    (testing "anchored at zero drops the min offset"
+      (is (= "(FLOOR(?lon / 0.1) * 0.1)" (f "lon" 0.1 0))))
+    (testing "non-zero min uses the full floor formula"
+      (is (= "((FLOOR((?leeftijd - 10) / 10) * 10) + 10)" (f "leeftijd" 10 10))))))
+
+(deftest binned-breakout-compile-test
+  (with-fixture
+    (testing "a binned numeric breakout buckets the column and groups by the bucket var"
+      (let [{:keys [sparql vars]}
+            (compile-stage* {:source-table 100
+                             :breakout    [[:field 3 {:binning {:strategy :bin-width :bin-width 10 :min-value 0}}]]
+                             :aggregation [[:count]]})]
+        (is (= ["leeftijd_binned" "ag_0"] vars))
+        (is (str/includes? sparql "OPTIONAL { ?subject <https://odis.q.libis.be/leeftijd> ?leeftijd . }"))
+        (is (str/includes? sparql "BIND((FLOOR(?leeftijd / 10) * 10) AS ?leeftijd_binned)"))
+        (is (str/includes? sparql "GROUP BY ?leeftijd_binned"))
+        (is (str/includes? sparql "(COUNT(DISTINCT ?subject) AS ?ag_0)"))))))
+
+(deftest grid-map-binned-coordinates-test
+  (with-fixture
+    (testing "grid map: binned synthesized lon/lat + count -> coordinate BINDs, bin BINDs, grouped"
+      (let [bin {:strategy :bin-width :bin-width 0.1 :min-value 0}
+            {:keys [sparql vars]}
+            (compile-stage* {:source-table 100
+                             :breakout    [[:field 12 {:binning bin}] [:field 13 {:binning bin}]]
+                             :aggregation [[:count]]})]
+        (is (= ["lokatie_lon_binned" "lokatie_lat_binned" "ag_0"] vars))
+        ;; one shared source geometry triple
+        (is (str/includes? sparql "OPTIONAL { ?subject <https://odis.q.libis.be/lokatie> ?lokatie . }"))
+        ;; coordinate extraction BINDs feed the bin BINDs
+        (is (str/includes? sparql "AS ?lokatie_lon)"))
+        (is (str/includes? sparql "AS ?lokatie_lat)"))
+        (is (str/includes? sparql "BIND((FLOOR(?lokatie_lon / 0.1) * 0.1) AS ?lokatie_lon_binned)"))
+        (is (str/includes? sparql "BIND((FLOOR(?lokatie_lat / 0.1) * 0.1) AS ?lokatie_lat_binned)"))
+        (is (str/includes? sparql "GROUP BY ?lokatie_lon_binned ?lokatie_lat_binned"))))))
