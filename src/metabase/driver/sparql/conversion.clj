@@ -3,7 +3,56 @@
 
    This namespace handles conversion of SPARQL data types to Metabase types.
    Provides functions to map SPARQL types to Metabase base types and convert values."
-  (:require [metabase.util.log :as log]))
+  (:require [clojure.string :as str]
+            [metabase.util.log :as log]))
+
+;; ---------------------------------------------------------------------------
+;; Geometry / WKT detection
+;; ---------------------------------------------------------------------------
+;; RDF geometry values arrive either as typed literals (Virtuoso's
+;; `virtrdf:Geometry`, or the standard `geo:wktLiteral`) or — as seen with ODIS
+;; `odis_geometry` POLYGONs — as a plain `xsd:string` whose lexical form is WKT.
+;; We flag both so the driver can (a) compile equality via STR() and (b) let
+;; users pull coordinates out with expressions.
+
+(def geometry-datatypes
+  "Datatype IRIs that denote an RDF geometry literal."
+  #{"http://www.openlinksw.com/schemas/virtrdf#Geometry"
+    "http://www.opengis.net/ont/geosparql#wktLiteral"
+    "http://www.opengis.net/ont/sf#wktLiteral"})
+
+(def ^:private wkt-prefix-re
+  #"(?i)^\s*(POINT|LINESTRING|POLYGON|MULTIPOINT|MULTILINESTRING|MULTIPOLYGON|GEOMETRYCOLLECTION|BOX|TRIANGLE|CIRCULARSTRING|TIN)\s*[(ZM]")
+
+(defn geometry-datatype?
+  "True when `datatype` (a datatype IRI string) denotes a geometry literal."
+  [datatype]
+  (boolean (and datatype (contains? geometry-datatypes datatype))))
+
+(defn wkt-string?
+  "True when `value` is a string whose lexical form looks like WKT/Virtuoso BOX
+   (e.g. `POINT(...)`, `POLYGON((...))`, `BOX(...)`). Catches geometry stored as
+   a plain `xsd:string`."
+  [value]
+  (boolean (and (string? value) (re-find wkt-prefix-re value))))
+
+(defn wkt-kind
+  "Classify a WKT/BOX lexical value into a keyword geometry kind
+   (`:point`, `:box`, `:polygon`, `:linestring`, `:multipoint`,
+   `:multipolygon`, `:multilinestring`, `:geometrycollection`, …) or nil when it
+   does not look like geometry. Used at sync to decide which coordinate columns to
+   synthesize (only `:point` and `:box` are extractable today)."
+  [value]
+  (when-let [[_ kw] (and (string? value) (re-find wkt-prefix-re value))]
+    (keyword (str/lower-case kw))))
+
+(defn geometry-binding?
+  "True when a SPARQL binding (with `:datatype`/`:value`) is a geometry literal,
+   by datatype or by WKT-shaped lexical value."
+  [binding]
+  (boolean (and binding
+                (or (geometry-datatype? (:datatype binding))
+                    (wkt-string? (:value binding))))))
 
 (defn sparql-type->base-type
   "Converts a SPARQL type to a Metabase base type.

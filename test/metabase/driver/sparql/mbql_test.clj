@@ -171,7 +171,16 @@
    5  {:name "archiefcode" :database-type "string"
        :semantic-type :type/FK :fk-target-class (str base "Archiefcode")}
    6  {:name "homepage" :database-type "string" :base-type :type/URL :semantic-type :type/URL}
-   10 {:name "label" :database-type "string"}})
+   10 {:name "label" :database-type "string"}
+   11 {:name "lokatie" :database-type "geometry"}
+   12 {:name "lokatie_lon" :database-type "geo-coord:point-lon:lokatie"
+       :base-type :type/Float :semantic-type :type/Longitude}
+   13 {:name "lokatie_lat" :database-type "geo-coord:point-lat:lokatie"
+       :base-type :type/Float :semantic-type :type/Latitude}
+   14 {:name "begrenzingsvak_min_lon" :database-type "geo-coord:box-min-lon:begrenzingsvak"
+       :base-type :type/Float :semantic-type :type/Coordinate}
+   15 {:name "begrenzingsvak_max_lat" :database-type "geo-coord:box-max-lat:begrenzingsvak"
+       :base-type :type/Float :semantic-type :type/Coordinate}})
 
 (defn- compile-stage* [stage]
   (@#'mbql/compile-stage stage))
@@ -608,3 +617,182 @@
           (is (str/includes?
                sparql
                "FILTER(!BOUND(?naam) || LANG(?naam) = \"nl\" || LANG(?naam) = \"\")")))))))
+
+;; ---------------------------------------------------------------------------
+;; Geometry / WKT filtering
+;; ---------------------------------------------------------------------------
+
+(deftest geometry-equality-uses-str-test
+  (with-fixture
+    (testing "= on a geometry field compares lexical form via STR() (typed literal never = plain string)"
+      (let [{:keys [sparql]}
+            (compile-stage* {:source-table 100
+                             :fields [[:field 1 nil] [:field 11 nil]]
+                             :filter [:= [:field 11 nil] "POINT(4.70 50.88)"]})]
+        (is (str/includes? sparql "FILTER (STR(?lokatie) = \"POINT(4.70 50.88)\")"))
+        (is (not (str/includes? sparql "(?lokatie = ")))))
+    (testing "!= on a geometry field also uses STR()"
+      (let [{:keys [sparql]}
+            (compile-stage* {:source-table 100
+                             :fields [[:field 1 nil] [:field 11 nil]]
+                             :filter [:!= [:field 11 nil] "POINT(4.70 50.88)"]})]
+        (is (str/includes? sparql "FILTER (STR(?lokatie) != \"POINT(4.70 50.88)\")"))))
+    (testing "a geometry equality is NOT pushed into a mandatory BGP anchor triple"
+      (let [{:keys [sparql]}
+            (compile-stage* {:source-table 100
+                             :fields [[:field 1 nil] [:field 11 nil]]
+                             :filter [:= [:field 11 nil] "POINT(4.70 50.88)"]})]
+        (is (not (str/includes? sparql "?subject <https://odis.q.libis.be/lokatie> \"POINT")))))))
+
+;; ---------------------------------------------------------------------------
+;; Custom expressions (custom columns) → SPARQL
+;; ---------------------------------------------------------------------------
+
+(deftest compile-expression-test
+  (let [resolve-token (fn [tok]
+                        (if (= :expression (first tok))
+                          (@#'mbql/sanitize-var-name (second tok))
+                          (get {1 "a" 2 "b"} (second tok) (str (second tok)))))
+        f (fn [clause] (@#'mbql/compile-expression clause resolve-token))]
+    (testing "arithmetic"
+      (is (= "(?a + 1)" (f [:+ [:field 1 nil] 1])))
+      (is (= "(?a - ?b)" (f [:- [:field 1 nil] [:field 2 nil]])))
+      (is (= "(?a * 2)" (f [:* [:field 1 nil] 2]))))
+    (testing "string functions coerce args with STR()"
+      (is (= "LCASE(STR(?a))" (f [:lower [:field 1 nil]])))
+      (is (= "STRLEN(STR(?a))" (f [:length [:field 1 nil]])))
+      (is (= "CONCAT(STR(?a), STR(?b))" (f [:concat [:field 1 nil] [:field 2 nil]]))))
+    (testing "trim compiles to a REPLACE"
+      (is (= "REPLACE(STR(?a), \"^\\\\s+|\\\\s+$\", \"\")" (f [:trim [:field 1 nil]]))))
+    (testing "regexextract compiles to a first-match REPLACE"
+      (is (= "REPLACE(STR(?a), \"^.*?([-0-9.]+).*$\", \"$1\")"
+             (f [:regex-match-first [:field 1 nil] "[-0-9.]+"]))))
+    (testing "substring is 1-based SUBSTR"
+      (is (= "SUBSTR(STR(?a), 2, 3)" (f [:substring [:field 1 nil] 2 3])))
+      (is (= "SUBSTR(STR(?a), 2)" (f [:substring [:field 1 nil] 2]))))
+    (testing "casts use the full xsd IRI constructor"
+      (is (= "<http://www.w3.org/2001/XMLSchema#double>(?a)" (f [:float [:field 1 nil]])))
+      (is (= "<http://www.w3.org/2001/XMLSchema#integer>(?a)" (f [:integer [:field 1 nil]]))))
+    (testing "coalesce / case"
+      (is (= "COALESCE(?a, \"x\")" (f [:coalesce [:field 1 nil] "x"])))
+      (is (= "IF((?a > 5), \"big\", \"small\")"
+             (f [:case [[[:> [:field 1 nil] 5] "big"]] {:default "small"}]))))
+    (testing "an unsupported function throws a clear error"
+      (is (thrown-with-msg? clojure.lang.ExceptionInfo #"Unsupported expression function"
+                            (f [:totally-bogus [:field 1 nil]]))))))
+
+(deftest compile-base-stage-expression-test
+  (with-fixture
+    (testing "a custom column emits a BIND and is projected"
+      (let [{:keys [sparql vars]}
+            (compile-stage* {:source-table 100
+                             :fields [[:field 1 nil] [:field 2 nil] [:expression "upper_naam"]]
+                             :expressions {"upper_naam" [:upper [:field 2 nil]]}})]
+        (is (some #{"upper_naam"} vars))
+        (is (str/includes? sparql "BIND(UCASE(STR(?naam)) AS ?upper_naam)"))
+        (is (str/includes? sparql "SELECT ?subject ?naam ?upper_naam"))))
+    (testing "a field referenced only inside an expression still gets its triple"
+      (let [{:keys [sparql]}
+            (compile-stage* {:source-table 100
+                             :fields [[:field 1 nil] [:expression "len"]]
+                             :expressions {"len" [:length [:field 3 nil]]}})]
+        (is (str/includes? sparql "OPTIONAL { ?subject <https://odis.q.libis.be/leeftijd> ?leeftijd . }"))
+        (is (str/includes? sparql "BIND(STRLEN(STR(?leeftijd)) AS ?len)"))))
+    (testing "filter and order-by can reference an expression"
+      (let [{:keys [sparql]}
+            (compile-stage* {:source-table 100
+                             :fields [[:field 1 nil] [:expression "len"]]
+                             :expressions {"len" [:length [:field 2 nil]]}
+                             :filter [:> [:expression "len"] 3]
+                             :order-by [[:desc [:expression "len"]]]})]
+        (is (str/includes? sparql "FILTER (?len > 3)"))
+        (is (str/includes? sparql "ORDER BY DESC(?len)"))))))
+
+(deftest compile-base-stage-lonlat-recipe-test
+  (with-fixture
+    (testing "the documented lon/lat recipe over a geometry column compiles end-to-end"
+      (let [{:keys [sparql vars]}
+            (compile-stage* {:source-table 100
+                             :fields [[:field 1 nil] [:expression "lon"] [:expression "lat"]]
+                             :expressions {"lon" [:float [:regex-match-first [:field 11 nil] "[-0-9.]+"]]
+                                           "lat" [:float [:trim [:regex-match-first [:field 11 nil] " [-0-9.]+"]]]}})]
+        (is (= #{"lon" "lat"} (set (filter #{"lon" "lat"} vars))))
+        (is (str/includes? sparql "OPTIONAL { ?subject <https://odis.q.libis.be/lokatie> ?lokatie . }"))
+        (is (str/includes?
+             sparql
+             "BIND(<http://www.w3.org/2001/XMLSchema#double>(REPLACE(STR(?lokatie), \"^.*?([-0-9.]+).*$\", \"$1\")) AS ?lon)"))
+        (testing "lat = float(trim(regexextract(...))) wraps the inner match in a trim REPLACE"
+          (is (str/includes? sparql "\"^\\\\s+|\\\\s+$\", \"\")"))
+          (is (str/includes? sparql "^.*?( [-0-9.]+).*$")))))))
+
+;; ---------------------------------------------------------------------------
+;; Synthesized geometry coordinate columns (auto lon/lat, BOX corners)
+;; ---------------------------------------------------------------------------
+
+(deftest geo-coord-marker-test
+  (with-fixture
+    (let [marker @#'mbql/geo-coord-marker
+          geo?   @#'mbql/geo-coord-field?]
+      (is (= {:axis "point-lon" :source "lokatie"} (marker 12)))
+      (is (= {:axis "box-min-lon" :source "begrenzingsvak"} (marker 14)))
+      (is (geo? 12))
+      (is (not (geo? 11)))   ;; raw geometry column is not itself a coordinate
+      (is (not (geo? 2))))))
+
+(deftest geo-coord-point-compile-test
+  (with-fixture
+    (testing "selecting synthesized lon/lat emits ONE source triple + two extraction BINDs"
+      (let [{:keys [sparql vars]}
+            (compile-stage* {:source-table 100
+                             :fields [[:field 1 nil] [:field 12 nil] [:field 13 nil]]})]
+        (is (= ["subject" "lokatie_lon" "lokatie_lat"] vars))
+        (is (str/includes? sparql "OPTIONAL { ?subject <https://odis.q.libis.be/lokatie> ?lokatie . }"))
+        (is (str/includes?
+             sparql
+             "BIND(<http://www.w3.org/2001/XMLSchema#double>(REPLACE(STR(?lokatie), "))
+        (is (str/includes? sparql "POINT"))
+        (is (str/includes? sparql "\"$1\")) AS ?lokatie_lon)"))
+        (is (str/includes? sparql "\"$2\")) AS ?lokatie_lat)"))
+        (testing "no bogus property triple for the coordinate columns themselves"
+          (is (not (str/includes? sparql "lokatie_lon>")))
+          (is (not (str/includes? sparql "lokatie_lat>"))))))
+    (testing "the source geometry triple is shared (emitted once) for lon+lat"
+      (let [{:keys [sparql]}
+            (compile-stage* {:source-table 100
+                             :fields [[:field 1 nil] [:field 12 nil] [:field 13 nil]]})]
+        (is (= 1 (count (re-seq #"<https://odis\.q\.libis\.be/lokatie> \?lokatie " sparql))))))))
+
+(deftest geo-coord-box-compile-test
+  (with-fixture
+    (testing "BOX corners extract via a 4-group REPLACE off the begrenzingsvak source"
+      (let [{:keys [sparql vars]}
+            (compile-stage* {:source-table 100
+                             :fields [[:field 1 nil] [:field 14 nil] [:field 15 nil]]})]
+        (is (= ["subject" "begrenzingsvak_min_lon" "begrenzingsvak_max_lat"] vars))
+        (is (str/includes? sparql "<https://odis.q.libis.be/begrenzingsvak> ?begrenzingsvak"))
+        (is (str/includes? sparql "BOX"))
+        (is (str/includes? sparql "\"$1\")) AS ?begrenzingsvak_min_lon)"))
+        (is (str/includes? sparql "\"$4\")) AS ?begrenzingsvak_max_lat)"))))))
+
+(deftest geo-coord-joined-compile-test
+  (with-fixture
+    (testing "a synthesized coordinate reached via an implicit join binds off the join var"
+      (let [{:keys [sparql]}
+            (compile-stage* {:source-table 100
+                             :fields [[:field 1 nil] [:field 12 {:join-alias "Plaats"}]]
+                             :joins  [{:alias "Plaats" :fk-field-id 4}]})]
+        ;; FK + joined source geometry triple, then the BIND off the joined source var
+        (is (str/includes? sparql "OPTIONAL { ?subject <https://odis.q.libis.be/geboorteplaats> ?Plaats_subject . }"))
+        (is (str/includes? sparql "OPTIONAL { ?Plaats_subject <https://odis.q.libis.be/lokatie> ?Plaats__lokatie . }"))
+        (is (str/includes? sparql "REPLACE(STR(?Plaats__lokatie), "))
+        (is (str/includes? sparql "AS ?Plaats__lokatie_lon)"))))))
+
+(deftest geo-coord-filter-test
+  (with-fixture
+    (testing "a synthesized coordinate can be filtered numerically (and its BIND is emitted)"
+      (let [{:keys [sparql]}
+            (compile-stage* {:source-table 100
+                             :fields [[:field 1 nil] [:field 12 nil]]
+                             :filter [:< [:field 12 nil] 5]})]
+        (is (str/includes? sparql "AS ?lokatie_lon)"))
+        (is (str/includes? sparql "FILTER (?lokatie_lon < 5)"))))))

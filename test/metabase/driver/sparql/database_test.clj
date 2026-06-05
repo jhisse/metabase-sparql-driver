@@ -161,3 +161,54 @@
   (testing "fks returns an empty seq for non-SHACL sync strategies"
     (is (= [] (database/fks {:details {:metadata-sync-strategy "auto"}})))
     (is (= [] (database/fks {:details {}})))))
+
+(def ^:private build-fields-from-sparql-query @#'database/build-fields-from-sparql-query)
+(def ^:private coordinate-fields @#'database/coordinate-fields)
+
+(deftest build-field-from-uri-geometry-test
+  (testing "a WKT-shaped sample marks the column as geometry"
+    (is (= "geometry" (:database-type (build-field-from-uri graph 0 (str graph "lokatie") "POINT(4.7 50.8)"))))
+    (is (= "geometry" (:database-type (build-field-from-uri graph 0 (str graph "vak") "BOX(1 2,3 4)"))))
+    (is (= "string"   (:database-type (build-field-from-uri graph 0 (str graph "naam") "Antwerpen"))))))
+
+(deftest coordinate-fields-test
+  (testing "POINT source → lon/lat typed Longitude/Latitude"
+    (let [fs (coordinate-fields [["lokatie" :point]] 5)
+          by-name (into {} (map (juxt :name identity)) fs)]
+      (is (= #{"lokatie_lon" "lokatie_lat"} (set (keys by-name))))
+      (is (= :type/Longitude (:semantic-type (by-name "lokatie_lon"))))
+      (is (= :type/Latitude  (:semantic-type (by-name "lokatie_lat"))))
+      (is (= "geo-coord:point-lon:lokatie" (:database-type (by-name "lokatie_lon"))))
+      (is (every? #(= :type/Float (:base-type %)) fs))))
+  (testing "BOX source → four corner columns typed Coordinate"
+    (let [fs (coordinate-fields [["vak" :box]] 0)]
+      (is (= ["vak_min_lon" "vak_max_lon" "vak_min_lat" "vak_max_lat"] (map :name fs)))
+      (is (every? #(= :type/Coordinate (:semantic-type %)) fs))
+      (is (= "geo-coord:box-max-lat:vak" (:database-type (last fs))))))
+  (testing "polygon / non-extractable kinds yield nothing"
+    (is (empty? (coordinate-fields [["geom" :polygon]] 0)))))
+
+(deftest build-fields-from-sparql-query-geometry-test
+  (testing "the sampling path synthesizes lon/lat for a POINT geometry property"
+    (let [bindings [{:property {:value (str graph "naam")}    :sample {:value "Antwerpen"}}
+                    {:property {:value (str graph "lokatie")} :sample {:value "POINT(4.7 50.8)"}}]
+          fields   (build-fields-from-sparql-query graph false bindings)
+          by-name  (into {} (map (juxt :name identity)) fields)]
+      (is (contains? by-name "lokatie"))
+      (is (= "geometry" (:database-type (by-name "lokatie"))))
+      (is (contains? by-name "lokatie_lon"))
+      (is (contains? by-name "lokatie_lat"))
+      (is (= :type/Longitude (:semantic-type (by-name "lokatie_lon"))))
+      (is (not (contains? by-name "naam_lon"))))))
+
+(deftest shacl-describe-table-geometry-test
+  (testing "the SHACL path synthesizes point lon/lat for a geometry property"
+    (let [{:keys [fields]}
+          (shacl-shape->describe-table
+           graph false
+           {:class-uri (str graph "GeografischeTrefwoord")
+            :properties [{:property-uri (str graph "lokatie") :base-type :type/Text :geometry? true :order 1}]})
+          by-name (into {} (map (juxt :name identity)) fields)]
+      (is (= "geometry" (:database-type (by-name "lokatie"))))
+      (is (= :type/Longitude (:semantic-type (by-name "lokatie_lon"))))
+      (is (= :type/Latitude  (:semantic-type (by-name "lokatie_lat")))))))

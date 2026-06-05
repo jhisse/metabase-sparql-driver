@@ -36,6 +36,18 @@
   [field-token]
   (:join-alias (field-token->opts field-token)))
 
+(declare collect-expression-tokens)
+
+(defn- expression-token?
+  "True for an `[:expression \"name\" opts?]` reference (a custom column)."
+  [token]
+  (and (vector? token) (= :expression (first token))))
+
+(defn- expression-token->name
+  "The expression name referenced by an `[:expression \"name\"]` token."
+  [token]
+  (when (expression-token? token) (second token)))
+
 (defn- field-id->metadata
   "Resolve field metadata by numeric ID. Returns nil for non-numeric field refs
    (e.g. string column names produced by nested-query / aggregation outputs) so
@@ -77,6 +89,15 @@
   [field-id]
   (= "langString" (:database-type (field-id->metadata field-id))))
 
+(defn- geometry-field?
+  "True when the field's `:database-type` marks it as an RDF geometry/WKT column
+   (set during sync — see `metabase.driver.sparql.conversion`). Equality on such
+   a field must compare the lexical form via `STR()`: the stored term is a typed
+   geometry literal (e.g. `\"POINT(...)\"^^virtrdf:Geometry`) that never compares
+   equal to a plain string literal, so a direct `=` silently returns no rows."
+  [field-id]
+  (= "geometry" (:database-type (field-id->metadata field-id))))
+
 (defn- lang-filter-line
   "Render the LANG filter clause for one variable. Guards against unbound
    variables (left joins) and accepts untagged literals alongside the target
@@ -95,8 +116,8 @@
     uri))
 
 (defn- collect-field-ids
-  "Collect referenced field IDs from fields/order-by/filter."
-  [{:keys [fields order-by] filter-clause :filter}]
+  "Collect referenced field IDs from fields/order-by/filter/expressions."
+  [{:keys [fields order-by expressions] filter-clause :filter}]
   (let [ids-from-fields (set (keep field-token->id fields))
         ids-from-order  (set (keep (fn [[_dir fld & _]] (field-token->id fld)) order-by))
         ids-from-filter (letfn [(collect-field-tokens [x]
@@ -106,7 +127,8 @@
                                     (map? x) (mapcat collect-field-tokens (vals x))
                                     :else []))]
                           (set (keep field-token->id (collect-field-tokens filter-clause))))
-        all-ids         (vec (set/union ids-from-fields ids-from-order ids-from-filter))]
+        ids-from-expr   (set (keep field-token->id (collect-expression-tokens expressions)))
+        all-ids         (vec (set/union ids-from-fields ids-from-order ids-from-filter ids-from-expr))]
     (log/debugf "[mbql] Collected field IDs: fields=%d order=%d filter=%d total=%d"
                 (count ids-from-fields) (count ids-from-order) (count ids-from-filter) (count all-ids))
     all-ids))
@@ -119,12 +141,14 @@
    - Otherwise the subject (PK) field always maps to `?subject`.
    - Otherwise look up the regular alias from `field-id->var`."
   [field-token field-id->var pair->target-var]
-  (let [fid   (field-token->id field-token)
-        alias (field-token->join-alias field-token)]
-    (cond
-      (and fid alias) (get pair->target-var [fid alias])
-      (and fid (id-field? fid)) "subject"
-      fid (get field-id->var fid))))
+  (if (expression-token? field-token)
+    (sanitize-var-name (expression-token->name field-token))
+    (let [fid   (field-token->id field-token)
+          alias (field-token->join-alias field-token)]
+      (cond
+        (and fid alias) (get pair->target-var [fid alias])
+        (and fid (id-field? fid)) "subject"
+        fid (get field-id->var fid)))))
 
 (defn- condition->fk-ref
   "Extract the FK-source field token from a join `:condition`. The condition is
@@ -161,7 +185,7 @@
   "Walk a legacy-MBQL stage and return the set of `[field-id alias]` pairs for every
    `[:field id {:join-alias \"...\"}]` token that appears in `:fields`, `:order-by`,
    or `:filter`."
-  [{:keys [fields order-by] filter-clause :filter}]
+  [{:keys [fields order-by expressions] filter-clause :filter}]
   (letfn [(walk [x]
             (cond
               (and (vector? x) (= :field (first x)))
@@ -172,6 +196,7 @@
               :else []))]
     (set (concat (mapcat walk (or fields []))
                  (mapcat walk (mapcat (fn [[_dir fld & _]] [fld]) (or order-by [])))
+                 (mapcat walk (collect-expression-tokens expressions))
                  (walk filter-clause)))))
 
 (defn- literal->sparql
@@ -233,14 +258,16 @@
                   (if (and (vector? x) (= :value (first x)))
                     (second x)
                     x))]
-          (when (and fid var)
+          (when var
             (case op
-              := (if (nil? v)
-                   (format "(!BOUND(?%s))" var)
-                   (format "(?%s = %s)" var (value->term fid v)))
-              :!= (if (nil? v)
-                    (format "(BOUND(?%s))" var)
-                    (format "(?%s != %s)" var (value->term fid v)))
+              := (cond
+                   (nil? v)              (format "(!BOUND(?%s))" var)
+                   (geometry-field? fid) (format "(STR(?%s) = %s)" var (literal->sparql v))
+                   :else                 (format "(?%s = %s)" var (value->term fid v)))
+              :!= (cond
+                    (nil? v)              (format "(BOUND(?%s))" var)
+                    (geometry-field? fid) (format "(STR(?%s) != %s)" var (literal->sparql v))
+                    :else                 (format "(?%s != %s)" var (value->term fid v)))
               :> (and (some? v) (format "(?%s > %s)" var (literal->sparql v)))
               :>= (and (some? v) (format "(?%s >= %s)" var (literal->sparql v)))
               :< (and (some? v) (format "(?%s < %s)" var (literal->sparql v)))
@@ -302,6 +329,148 @@
   (when-let [expr (compile-filter-expr filter-clause field-id->var pair->target-var)]
     [(str "  FILTER " expr)]))
 
+;; ---------------------------------------------------------------------------
+;; Custom expressions (Metabase "custom columns") → SPARQL
+;; ---------------------------------------------------------------------------
+
+(def ^:private xsd "http://www.w3.org/2001/XMLSchema#")
+
+(defn- sparql-str-lit
+  "Render `s` as a SPARQL string literal, escaping backslashes and double quotes
+   (needed for regex patterns, which carry backslashes)."
+  [s]
+  (str "\"" (-> (str s)
+                (str/replace "\\" "\\\\")
+                (str/replace "\"" "\\\""))
+       "\""))
+
+(defn- regex-escape
+  "Escape regex metacharacters so `s` matches literally inside a SPARQL REPLACE pattern."
+  [s]
+  (str/replace (str s) #"([\\.^$|?*+()\[\]{}])" "\\\\$1"))
+
+(declare compile-expression)
+
+(defn- expr-arg
+  "Compile one argument of an expression to a SPARQL expression string: a literal,
+   a `[:value v]` wrapper, a `[:field …]`/`[:expression …]` token (→ `?var`), or a
+   nested operation. `resolve-token` maps a field/expression token to its var name."
+  [arg resolve-token]
+  (cond
+    (number? arg)  (str arg)
+    (string? arg)  (sparql-str-lit arg)
+    (boolean? arg) (if arg "true" "false")
+    (nil? arg)     "\"\""
+    (and (vector? arg) (= :value (first arg)))      (expr-arg (second arg) resolve-token)
+    (and (vector? arg) (#{:field :expression} (first arg)))
+    (if-let [v (resolve-token arg)]
+      (str "?" v)
+      (throw (ex-info "Cannot resolve field/expression reference in expression"
+                      {:token arg})))
+    (sequential? arg) (compile-expression arg resolve-token)
+    :else (throw (ex-info "Unsupported expression argument" {:arg arg}))))
+
+(defn- compile-case
+  "Compile a `[:case [[pred val]…] {:default d}]` clause to nested SPARQL `IF()`."
+  [args resolve-token]
+  (let [clauses (first args)
+        opts    (second args)
+        default (when (map? opts) (:default opts))
+        a       #(expr-arg % resolve-token)
+        b       #(compile-expression % resolve-token)]
+    (reduce (fn [else [pred val]]
+              (format "IF(%s, %s, %s)" (b pred) (a val) else))
+            (if (some? default) (a default) "\"\"")
+            (reverse clauses))))
+
+(defn- compile-expression
+  "Compile a Metabase expression clause to a SPARQL expression string. Supports the
+   v1 function subset (arithmetic, string, regex, conditional, casts) plus the
+   comparison/logical operators used inside `:case` predicates. Throws `ex-info`
+   on an unsupported function so the query fails with a clear message rather than
+   silently dropping the column."
+  [clause resolve-token]
+  (let [a #(expr-arg % resolve-token)
+        s #(format "STR(%s)" (a %))
+        cast (fn [iri x] (format "<%s%s>(%s)" xsd iri (a x)))]
+    (if-not (sequential? clause)
+      (a clause)
+      (let [[op & args] clause]
+        (case op
+          :+ (str "(" (str/join " + " (map a args)) ")")
+          :- (if (= 1 (count args))
+               (str "(- " (a (first args)) ")")
+               (str "(" (str/join " - " (map a args)) ")"))
+          :* (str "(" (str/join " * " (map a args)) ")")
+          :/ (str "(" (str/join " / " (map a args)) ")")
+          :abs   (format "ABS(%s)" (a (first args)))
+          :ceil  (format "CEIL(%s)" (a (first args)))
+          :floor (format "FLOOR(%s)" (a (first args)))
+          :round (format "ROUND(%s)" (a (first args)))
+          :length (format "STRLEN(%s)" (s (first args)))
+          :lower  (format "LCASE(%s)" (s (first args)))
+          :upper  (format "UCASE(%s)" (s (first args)))
+          :trim   (format "REPLACE(%s, \"^\\\\s+|\\\\s+$\", \"\")" (s (first args)))
+          :ltrim  (format "REPLACE(%s, \"^\\\\s+\", \"\")" (s (first args)))
+          :rtrim  (format "REPLACE(%s, \"\\\\s+$\", \"\")" (s (first args)))
+          :concat (format "CONCAT(%s)" (str/join ", " (map s args)))
+          :coalesce (format "COALESCE(%s)" (str/join ", " (map a args)))
+          :substring (let [[txt start len] args]
+                       (if (some? len)
+                         (format "SUBSTR(%s, %s, %s)" (s txt) (a start) (a len))
+                         (format "SUBSTR(%s, %s)" (s txt) (a start))))
+          :replace (let [[txt find repl] args
+                         find-str (if (string? find) find (second find))
+                         repl-str (if (string? repl) repl (second repl))]
+                     (format "REPLACE(%s, \"%s\", %s)"
+                             (s txt)
+                             (regex-escape find-str)
+                             (sparql-str-lit (str/replace (str repl-str) "$" "\\$"))))
+          (:regex-match-first :regexextract)
+          (let [[txt pat] args
+                pat-str (if (string? pat) pat (second pat))]
+            (format "REPLACE(%s, %s, \"$1\")"
+                    (s txt)
+                    (sparql-str-lit (str "^.*?(" pat-str ").*$"))))
+          (:float :double) (cast "double" (first args))
+          :integer (cast "integer" (first args))
+          :text    (format "STR(%s)" (a (first args)))
+          ;; comparison / logical operators (used inside :case predicates)
+          :=  (format "(%s = %s)"  (a (first args)) (a (second args)))
+          :!= (format "(%s != %s)" (a (first args)) (a (second args)))
+          :>  (format "(%s > %s)"  (a (first args)) (a (second args)))
+          :>= (format "(%s >= %s)" (a (first args)) (a (second args)))
+          :<  (format "(%s < %s)"  (a (first args)) (a (second args)))
+          :<= (format "(%s <= %s)" (a (first args)) (a (second args)))
+          :and (str "(" (str/join " && " (map a args)) ")")
+          :or  (str "(" (str/join " || " (map a args)) ")")
+          :not (str "(!" (a (first args)) ")")
+          :case (compile-case args resolve-token)
+          (throw (ex-info (str "Unsupported expression function: " op)
+                          {:op op :clause clause})))))))
+
+(defn- collect-expression-tokens
+  "Collect every `[:field …]`/`[:expression …]` token appearing inside the values
+   of an `:expressions` map, so fields referenced only by a custom column still
+   get their triples emitted."
+  [expressions]
+  (letfn [(walk [x]
+            (cond
+              (and (vector? x) (#{:field :expression} (first x))) [x]
+              (sequential? x) (mapcat walk x)
+              (map? x) (mapcat walk (vals x))
+              :else []))]
+    (mapcat walk (vals (or expressions {})))))
+
+(defn- compile-expressions
+  "Compile a stage's `:expressions` map to SPARQL `BIND(… AS ?name)` lines.
+   `token->var` resolves field/expression tokens to their SPARQL variable.
+   Returns a vector of lines (one BIND per expression), in name order."
+  [expressions token->var]
+  (vec
+   (for [[ename clause] (sort-by key expressions)]
+     (str "  BIND(" (compile-expression clause token->var) " AS ?" (sanitize-var-name ename) ")"))))
+
 (defn- filter-clause-value
   "Unwrap the RHS of a binary filter clause, stripping a `[:value v opts]` wrapper."
   [clause]
@@ -327,6 +496,7 @@
                (not alias)
                (not (id-field? fid))
                (not (lang-string-field? fid))
+               (not (geometry-field? fid))
                (some? v)
                (contains? field-id->prop fid))))))
 
@@ -393,12 +563,12 @@
     agg))
 
 (defn- aggregation-arg-token
-  "Return the `[:field …]` token an aggregation operates on, or nil for arg-less
-   aggregations such as `[:count]`."
+  "Return the `[:field …]`/`[:expression …]` token an aggregation operates on, or
+   nil for arg-less aggregations such as `[:count]`."
   [agg]
   (let [agg (unwrap-aggregation agg)
         arg (when (sequential? agg) (second agg))]
-    (when (and (vector? arg) (= :field (first arg)))
+    (when (and (vector? arg) (#{:field :expression} (first arg)))
       arg)))
 
 (defn- aggregation-output-name
@@ -481,7 +651,7 @@
                       :let [v (cond
                                 (and (vector? tok) (= :aggregation (first tok)))
                                 (str "ag_" (second tok))
-                                (and (vector? tok) (= :field (first tok)))
+                                (and (vector? tok) (#{:field :expression} (first tok)))
                                 (var-for-token tok field-id->var pair->target-var)
                                 :else nil)]
                       :when v]
@@ -504,9 +674,12 @@
   (let [fid     (:id col)
         alias   (:lib/join-alias col)
         fk-fid  (:fk-field-id col)
+        expr-nm (or (:lib/expression-name col)
+                    (when (= :source/expressions (:lib/source col)) (:name col)))
         recovered-alias (when (and (not alias) fk-fid)
                           (get fk-fid->alias fk-fid))]
     (cond
+      expr-nm                   (sanitize-var-name expr-nm)
       (and fid alias)           (get pair->target-var [fid alias])
       (and fid recovered-alias) (get pair->target-var [fid recovered-alias])
       (and fid (id-field? fid)) "subject"
@@ -570,6 +743,68 @@
      {:vars [] :triples []}
      expected-cols)))
 
+;; ---------------------------------------------------------------------------
+;; Synthesized geometry coordinate columns (auto lon/lat, BOX corners)
+;; ---------------------------------------------------------------------------
+;; Sync stamps `:database-type "geo-coord:<axis>:<source>"` on driver-synthesized
+;; coordinate columns (see `metabase.driver.sparql.database`). At compile time we
+;; emit, instead of a property triple, the source geometry triple plus a
+;; capture-group REPLACE that pulls the coordinate out and casts it to double.
+
+(def ^:private wkt-point-regex
+  "Capture lon ($1) and lat ($2) from a `POINT(lon lat)` lexical form."
+  "^.*POINT *\\(([-0-9.eE+]+) ([-0-9.eE+]+).*")
+
+(def ^:private wkt-box-regex
+  "Capture minLon ($1) maxLon ($2) minLat ($3) maxLat ($4) from Virtuoso `BOX(...)`."
+  "^.*BOX *\\(([-0-9.eE+]+) ([-0-9.eE+]+),([-0-9.eE+]+) ([-0-9.eE+]+).*")
+
+(def ^:private geo-coord-axis->extract
+  {"point-lon"   {:re wkt-point-regex :group 1}
+   "point-lat"   {:re wkt-point-regex :group 2}
+   "box-min-lon" {:re wkt-box-regex   :group 1}
+   "box-max-lon" {:re wkt-box-regex   :group 2}
+   "box-min-lat" {:re wkt-box-regex   :group 3}
+   "box-max-lat" {:re wkt-box-regex   :group 4}})
+
+(defn- geo-coord-marker
+  "Parse a `geo-coord:<axis>:<source>` `:database-type` marker into
+   `{:axis … :source …}`, or nil when the field is not a synthesized coordinate."
+  [field-id]
+  (let [dt (:database-type (field-id->metadata field-id))]
+    (when (and (string? dt) (str/starts-with? dt "geo-coord:"))
+      (let [[_ axis source] (str/split dt #":" 3)]
+        {:axis axis :source source}))))
+
+(defn- geo-coord-field?
+  "True when the field is a synthesized geometry coordinate column."
+  [field-id]
+  (some? (geo-coord-marker field-id)))
+
+(defn- geo-coord-emit
+  "For a synthesized coordinate field `token`, return `{:triple :bind :var}`: the
+   shared source geometry triple (off `?subject`, or the join intermediate var when
+   the column is reached via a join) and the `BIND` that extracts + casts the
+   coordinate. Returns nil when the axis or source cannot be resolved."
+  [token {:keys [field-id->var pair->target-var alias->intermediate-var default-graph]}]
+  (let [fid                   (field-token->id token)
+        alias                 (field-token->join-alias token)
+        {:keys [axis source]} (geo-coord-marker fid)
+        {:keys [re group]}    (get geo-coord-axis->extract axis)
+        coord-var             (if alias
+                                (get pair->target-var [fid alias])
+                                (get field-id->var fid))]
+    (when (and re source coord-var)
+      (let [src-prop (uri/absolute-uri source default-graph)
+            src-var  (if alias (joined-var-name alias source) (sanitize-var-name source))
+            triple   (if alias
+                       (emit-optional-triple (get alias->intermediate-var alias) src-prop src-var)
+                       (emit-optional-triple src-prop src-var))]
+        {:triple triple
+         :var    coord-var
+         :bind   (format "  BIND(<%sdouble>(REPLACE(STR(?%s), %s, \"$%d\")) AS ?%s)"
+                         xsd src-var (sparql-str-lit re) group coord-var)}))))
+
 (defn- compile-base-stage
   "Compile a base MBQL stage (one with `:source-table`) to a SPARQL query.
 
@@ -605,6 +840,7 @@
         joins         (:joins inner)
         aggregations  (:aggregation inner)
         breakout      (:breakout inner)
+        expressions   (:expressions inner)
         agg?          (boolean (seq aggregations))
         ;; In aggregation mode raw :fields are not projected; the columns that
         ;; need WHERE triples are the breakout columns and the aggregated columns.
@@ -702,10 +938,33 @@
         field-id->prop (into {}
                              (for [fid field-ids
                                    :let [nm (:name (field-id->metadata fid))]
-                                   :when (and nm (not (id-field? fid)))]
+                                   :when (and nm (not (id-field? fid)) (not (geo-coord-field? fid)))]
                                [fid (uri/absolute-uri nm default-graph)]))
         field-id->var  (build-var-aliases field-ids)
         token->var     (fn [tok] (var-for-token tok field-id->var pair->target-var))
+        ;; Synthesized coordinate columns referenced anywhere in the stage. Each
+        ;; emits a shared source-geometry triple + an extraction BIND instead of a
+        ;; property triple.
+        geo-coord-tokens (let [walk (fn walk [x]
+                                      (cond
+                                        (and (vector? x) (= :field (first x))) [x]
+                                        (sequential? x) (mapcat walk x)
+                                        (map? x) (mapcat walk (vals x))
+                                        :else []))]
+                           (->> (concat output-tokens
+                                        (mapcat (fn [[_dir fld & _]] [fld]) (or order-by []))
+                                        (walk filter-clause)
+                                        (collect-expression-tokens expressions))
+                                (filter #(and (vector? %) (= :field (first %))
+                                              (geo-coord-field? (field-token->id %))))
+                                distinct))
+        geo-coord-emits  (keep #(geo-coord-emit % {:field-id->var           field-id->var
+                                                   :pair->target-var        pair->target-var
+                                                   :alias->intermediate-var alias->intermediate-var
+                                                   :default-graph           default-graph})
+                               geo-coord-tokens)
+        geo-coord-triples (distinct (map :triple geo-coord-emits))
+        geo-coord-binds   (distinct (map :bind geo-coord-emits))
         ;; Push selective equality constraints into mandatory BGP triples (Principle 1):
         ;; instead of an OPTIONAL + trailing FILTER, anchor the constant directly so the
         ;; engine can do an index lookup. `:residual` is what's left for a bottom FILTER.
@@ -730,7 +989,8 @@
                                       (map? x) (mapcat collect-field-tokens (vals x))
                                       :else []))]
                             (->> (concat (mapcat (fn [[_dir fld & _]] [fld]) (or order-by []))
-                                         (collect-field-tokens filter-clause))
+                                         (collect-field-tokens filter-clause)
+                                         (collect-expression-tokens expressions))
                                  (remove field-token->join-alias)
                                  (keep field-token->id)
                                  set
@@ -754,7 +1014,8 @@
         ;; One triple per joined column. The joined entity's own subject column needs
         ;; no triple — it IS the intermediate var, already bound by the FK triple.
         join-target-triples (for [[fid alias] joined-pairs
-                                  :when (not (id-field? fid))
+                                  :when (and (not (id-field? fid))
+                                             (not (geo-coord-field? fid)))
                                   :let [nm (:name (field-id->metadata fid))
                                         prop (uri/absolute-uri nm default-graph)
                                         target-var (get pair->target-var [fid alias])
@@ -787,6 +1048,11 @@
                              :when var]
                          (format "  BIND(%s AS ?%s)" term var))
         _ (log/debugf "[mbql] Anchor triples: %d" (count anchor-triples))
+        ;; Custom-column BINDs. Emitted after the triples that bind the variables
+        ;; they reference (direct fields, extras, joined targets) so the values are
+        ;; available; placed before filters/GROUP BY/ORDER BY which may use them.
+        expr-bind-lines (compile-expressions expressions token->var)
+        _ (log/debugf "[mbql] Expression BINDs: %d" (count expr-bind-lines))
         filters (when residual
                   (or (compile-basic-filter residual field-id->var pair->target-var)
                       []))
@@ -814,6 +1080,14 @@
                                             (get pair->target-var [(field-token->id tok) a]))))
                                   distinct
                                   vec))
+        ;; Expression columns explicitly projected via :fields (fallback path only;
+        ;; the reconcile path resolves them positionally against Lib's expected-cols).
+        expr-select-vars (when-not agg?
+                           (->> fields
+                                (filter expression-token?)
+                                (map token->var)
+                                distinct
+                                vec))
         ;; When Lib's expected columns are known, reconcile the SELECT against them so
         ;; the driver's column count/order can never drift from the `annotate` middleware.
         reconciled  (when (and expected-cols (not agg?))
@@ -827,7 +1101,7 @@
         result-vars (cond
                       agg?       (vec (concat breakout-vars (keep :var agg-projections)))
                       reconciled (vec (:vars reconciled))
-                      :else      (vec (concat ["subject"] direct-select-vars joined-select-vars)))
+                      :else      (vec (concat ["subject"] direct-select-vars joined-select-vars expr-select-vars)))
         select-part (if agg?
                       (str "SELECT "
                            (str/join " " (concat (map #(str "?" %) breakout-vars)
@@ -846,6 +1120,9 @@
                                  join-fk-triples
                                  join-target-triples
                                  (or (:triples reconciled) [])
+                                 geo-coord-triples
+                                 geo-coord-binds
+                                 expr-bind-lines
                                  (or lang-filter-lines [])
                                  filters)
                          (str/join "\n"))
@@ -951,8 +1228,13 @@
                                    alias (:lib/join-alias col)
                                    join  (when alias (get alias->join alias))
                                    fk-var (some-> join :condition condition->fk-ref inner-var-for-ref)
-                                   nm    (when (integer? tid) (:name (field-id->metadata tid)))]
+                                   nm    (when (integer? tid) (:name (field-id->metadata tid)))
+                                   expr-nm (or (:lib/expression-name col)
+                                               (when (= :source/expressions (:lib/source col)) (:name col)))]
                                (cond
+                                 expr-nm
+                                 (update acc :vars conj (sanitize-var-name expr-nm))
+
                                  (and alias (get pair->target-var [tid alias]))
                                  (update acc :vars conj (get pair->target-var [tid alias]))
 
@@ -987,6 +1269,11 @@
                                            expected-cols (:vars reconciled))))
         ;; The map used to resolve the outer stage's own filter/order-by clauses.
         outer-field-id->var (merge field-id->var expected-name->var)
+        ;; Custom columns defined on the derived stage, resolved against the inner
+        ;; sub-SELECT's columns (by Lib name too) and any remap vars.
+        expressions   (:expressions stage)
+        expr-token->var (fn [tok] (var-for-token tok outer-field-id->var pair->target-var))
+        expr-bind-lines (compile-expressions expressions expr-token->var)
         result-vars   (cond
                         agg?           (vec (concat breakout-vars (keep :var agg-projections)))
                         reconciled     (vec (:vars reconciled))
@@ -1011,6 +1298,8 @@
                              (str (str/join "\n" (map :optional remap-entries)) "\n"))
                            (when (seq (:optionals reconciled))
                              (str (str/join "\n" (:optionals reconciled)) "\n"))
+                           (when (seq expr-bind-lines)
+                             (str (str/join "\n" expr-bind-lines) "\n"))
                            (when (seq filters)
                              (str (str/join "\n" filters) "\n"))
                            "}\n"

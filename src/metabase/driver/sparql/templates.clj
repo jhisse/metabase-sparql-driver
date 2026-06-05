@@ -91,7 +91,7 @@
   ([class-uri limit]
    (class-properties-query class-uri limit 1000))
   ([class-uri limit sample-size]
-   (str "SELECT ?property (COUNT(?instance) AS ?count) WHERE { "
+   (str "SELECT ?property (COUNT(?instance) AS ?count) (SAMPLE(STR(?value)) AS ?sample) WHERE { "
         "  { SELECT ?instance WHERE { "
         "      ?instance a <" class-uri "> "
         "    } LIMIT " sample-size " "

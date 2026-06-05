@@ -36,7 +36,7 @@
                               :nested-field-columns false
                               :set-timezone false
                               :standard-deviation-aggregations false
-                              :expressions false ;; ToDo: set true when be able to implement
+                              :expressions true ;; custom columns; compiled to SPARQL BIND in mbql.clj
                               :native-parameters    true
                               :expression-literals false  ;; ToDo: set true when be able to implement
                               :native-parameter-card-reference false ;; Can be possible in the future if careful implementation
@@ -48,7 +48,7 @@
                               :right-join false
                               :inner-join false
                               :full-join false
-                              :regex false ;; ToDo: set true when be able to implement
+                              :regex true ;; regexextract -> SPARQL REPLACE; key to WKT coordinate extraction
                               :advanced-math-expressions false
                               :percentile-aggregations false
                               :convert-timezone false
@@ -79,10 +79,10 @@
                               :distinct-where false
                               :saved-question-sandboxing false
                               :expressions/integer true
-                              :expressions/text false
+                              :expressions/text true
                               :expressions/date false
                               :expressions/datetime false
-                              :expressions/float false
+                              :expressions/float true
                               :test/dynamic-dataset-loading false
                               :test/creates-db-on-connect false
                               :test/cannot-destroy-db true

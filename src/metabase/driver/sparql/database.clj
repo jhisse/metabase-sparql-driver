@@ -7,6 +7,7 @@
             [clojure.string :as str]
             [metabase.util.json :as json]
             [metabase.driver.sparql.auth :as auth]
+            [metabase.driver.sparql.conversion :as conversion]
             [metabase.driver.sparql.execute :as execute]
             [metabase.driver.sparql.shacl :as shacl]
             [metabase.driver.sparql.templates :as templates]
@@ -70,13 +71,53 @@
 
    `default-graph` is stripped from the URI when it matches, so the column
    name in Metabase is the short local name (e.g. `naam`) instead of the
-   full URI. The full URI is reconstructed at query-compile time."
-  [default-graph idx field-uri]
-  {:name (uri/shorten-uri field-uri default-graph)
-   :database-type "string"
-   :base-type :type/Text
-   :pk? false
-   :database-position (inc idx)})
+   full URI. The full URI is reconstructed at query-compile time.
+
+   `sample` is an example lexical value (from the discovery query); when it is
+   WKT-shaped the column is flagged as `geometry` so the compiler can filter it
+   via STR() and users can extract coordinates with expressions."
+  ([default-graph idx field-uri]
+   (build-field-from-uri default-graph idx field-uri nil))
+  ([default-graph idx field-uri sample]
+   {:name (uri/shorten-uri field-uri default-graph)
+    :database-type (if (conversion/wkt-string? sample) "geometry" "string")
+    :base-type :type/Text
+    :pk? false
+    :database-position (inc idx)}))
+
+(defn- geo-coord-field-specs
+  "Per-axis specs `[name-suffix marker-axis semantic-type]` for a geometry `kind`.
+   Only POINT and BOX are extractable into coordinates today."
+  [kind]
+  (case kind
+    :point [["lon" "point-lon" :type/Longitude]
+            ["lat" "point-lat" :type/Latitude]]
+    ;; Virtuoso BOX(minLon maxLon, minLat maxLat) → four corner coordinates. Typed
+    ;; :type/Coordinate (not Latitude/Longitude) so the map picker doesn't default a
+    ;; pin to a box corner; corners are for range / :inside filtering.
+    :box   [["min_lon" "box-min-lon" :type/Coordinate]
+            ["max_lon" "box-max-lon" :type/Coordinate]
+            ["min_lat" "box-min-lat" :type/Coordinate]
+            ["max_lat" "box-max-lat" :type/Coordinate]]
+    nil))
+
+(defn- coordinate-fields
+  "Synthesized coordinate columns for geometry sources. `sources` is a seq of
+   `[src-name kind]` (kind from [[conversion/wkt-kind]]). Each becomes a Float field
+   named `<src>_<suffix>`, carrying a `geo-coord:<axis>:<src>` `:database-type`
+   marker the query compiler reads to emit the extraction BIND. `:database-position`
+   numbers continue from `start-pos` so they sort after the real columns."
+  [sources start-pos]
+  (->> sources
+       (mapcat (fn [[src kind]] (map (fn [spec] [src spec]) (geo-coord-field-specs kind))))
+       (map-indexed
+        (fn [i [src [suffix axis sem]]]
+          {:name              (str src "_" suffix)
+           :database-type     (str "geo-coord:" axis ":" src)
+           :base-type         :type/Float
+           :semantic-type     sem
+           :pk?               false
+           :database-position (+ start-pos i)}))))
 
 (defn- build-fields-from-explicit-config
   "Builds field set from explicit schema configuration."
@@ -95,9 +136,18 @@
                      hide-foreign? (remove #(uri/foreign-uri? (get-in % [:property :value]) default-graph)))
         other-fields (map-indexed
                       (fn [idx binding]
-                        (build-field-from-uri default-graph idx (get-in binding [:property :value])))
-                      candidates)]
-    (set (cons pk-field other-fields))))
+                        (build-field-from-uri default-graph idx
+                                              (get-in binding [:property :value])
+                                              (get-in binding [:sample :value])))
+                      candidates)
+        ;; POINT/BOX geometry columns get synthesized coordinate columns so maps
+        ;; work without the user hand-writing extraction expressions.
+        geo-sources  (for [b candidates
+                           :let [kind (conversion/wkt-kind (get-in b [:sample :value]))]
+                           :when kind]
+                       [(uri/shorten-uri (get-in b [:property :value]) default-graph) kind])
+        coord-fields (coordinate-fields geo-sources (inc (count candidates)))]
+    (set (concat [pk-field] other-fields coord-fields))))
 
 (defn- describe-table-none
   "Handles describe-table when sync strategy is 'none'."
@@ -147,7 +197,10 @@
         foreign? (uri/foreign-uri? uri default-graph)]
     (when-not (and foreign? hide-foreign?)
       (cond-> {:name              (uri/shorten-uri uri default-graph)
-               :database-type     (if (:lang-string? prop) "langString" "string")
+               :database-type     (cond
+                                    (:geometry? prop)    "geometry"
+                                    (:lang-string? prop) "langString"
+                                    :else                "string")
                :base-type         (or (:base-type prop) :type/Text)
                :pk?               false
                :database-position (inc idx)}
@@ -177,10 +230,15 @@
                                                   :property-uri)))
         fields     (->> candidates
                         (map-indexed (fn [idx p] (shacl-prop->field default-graph hide-foreign? idx p)))
-                        (remove nil?))]
+                        (remove nil?))
+        ;; Geometry columns get synthesized coordinate columns. SHACL carries no
+        ;; sampled value, so default to POINT extraction (the common case).
+        geo-sources  (for [f fields :when (= "geometry" (:database-type f))]
+                       [(:name f) :point])
+        coord-fields (coordinate-fields geo-sources (inc (count fields)))]
     {:name   (uri/shorten-uri class-uri default-graph)
      :schema nil
-     :fields (set (cons pk-field fields))}))
+     :fields (set (concat [pk-field] fields coord-fields))}))
 
 (defn- shape-for-table
   "Find the SHACL shape whose class matches `table` (after URI reconstruction)."

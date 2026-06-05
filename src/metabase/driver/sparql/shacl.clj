@@ -15,6 +15,7 @@
    per-URL with a short TTL so a single sync run only fetches once."
   (:require [clj-http.client :as http]
             [clojure.string :as str]
+            [metabase.driver.sparql.conversion :as conversion]
             [metabase.util.log :as log])
   (:import (java.io StringReader)
            (org.eclipse.rdf4j.model BNode IRI Literal Resource Statement Value)
@@ -209,6 +210,7 @@
         mb-display  (single spo prop-node (str mb "displayValueProperty"))
         datatype-iri (when (iri? datatype) (:value datatype))
         lang-string? (= datatype-iri lang-string-datatype)
+        geometry?    (conversion/geometry-datatype? datatype-iri)
         base-type   (or (xsd-base-type datatype-iri)
                         (when lang-string? :type/Text)
                         (when (iri? target-cls) :type/Text)
@@ -232,6 +234,7 @@
                                                 Long/parseLong
                                                 pos?)))
        :lang-string?      lang-string?
+       :geometry?         geometry?
        :hidden?           (literal-truthy? mb-hide)})))
 
 (defn- shape

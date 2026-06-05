@@ -82,3 +82,23 @@
   (testing "a column with no bindings defaults to text"
     (is (= {"a" :type/Text}
            (conversion/determine-column-types ["a"] [{} {}])))))
+
+(deftest geometry-detection-test
+  (testing "geometry datatypes are recognized"
+    (is (conversion/geometry-datatype? "http://www.openlinksw.com/schemas/virtrdf#Geometry"))
+    (is (conversion/geometry-datatype? "http://www.opengis.net/ont/geosparql#wktLiteral"))
+    (is (not (conversion/geometry-datatype? (str xsd "string"))))
+    (is (not (conversion/geometry-datatype? nil))))
+  (testing "WKT-shaped strings are recognized (catches plain-string POLYGONs)"
+    (is (conversion/wkt-string? "POINT(4.70 50.88)"))
+    (is (conversion/wkt-string? "POLYGON((4.2 51.3,4.3 51.3,4.2 51.3))"))
+    (is (conversion/wkt-string? "BOX(1.40 1.78,42.42 42.65)"))
+    (is (conversion/wkt-string? "MULTIPOLYGON (((1 2)))"))
+    (is (not (conversion/wkt-string? "Antwerpen")))
+    (is (not (conversion/wkt-string? "pointer")))
+    (is (not (conversion/wkt-string? nil))))
+  (testing "a binding is geometry by datatype or by WKT value"
+    (is (conversion/geometry-binding? {:datatype "http://www.openlinksw.com/schemas/virtrdf#Geometry"
+                                       :value "POINT(1 2)"}))
+    (is (conversion/geometry-binding? {:datatype (str xsd "string") :value "POLYGON((1 2,3 4))"}))
+    (is (not (conversion/geometry-binding? {:datatype (str xsd "string") :value "Gent"})))))
