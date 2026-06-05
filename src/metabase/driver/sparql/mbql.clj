@@ -250,6 +250,19 @@
                  (str "(" (str/join " || " parts) ")")))
         :not (when-let [inner (compile-filter-expr lhs field-id->var pair->target-var)]
                (str "(!" inner ")"))
+        ;; [:inside lat lon lat-max(N) lon-min(W) lat-min(S) lon-max(E)] — the
+        ;; map "draw a box" filter. lat/lon are (typically synthesized) coordinate
+        ;; columns; compile to a bounding-box range over both.
+        :inside (let [[_ lat-tok lon-tok lat-max lon-min lat-min lon-max] filter-clause
+                      latv (var-for-token lat-tok field-id->var pair->target-var)
+                      lonv (var-for-token lon-tok field-id->var pair->target-var)
+                      uv   (fn [x] (if (and (vector? x) (= :value (first x))) (second x) x))]
+                  (when (and latv lonv)
+                    (format "((?%s <= %s) && (?%s >= %s) && (?%s >= %s) && (?%s <= %s))"
+                            latv (literal->sparql (uv lat-max))
+                            latv (literal->sparql (uv lat-min))
+                            lonv (literal->sparql (uv lon-min))
+                            lonv (literal->sparql (uv lon-max)))))
         (let [fid (field-token->id lhs)
               var (var-for-token lhs field-id->var pair->target-var)
               opts (when (map? maybe-opts) maybe-opts)
@@ -272,6 +285,12 @@
               :>= (and (some? v) (format "(?%s >= %s)" var (literal->sparql v)))
               :< (and (some? v) (format "(?%s < %s)" var (literal->sparql v)))
               :<= (and (some? v) (format "(?%s <= %s)" var (literal->sparql v)))
+              ;; [:between field min max] — min is rhs (`v`), max is the next arg.
+              :between (let [hi (let [x maybe-opts]
+                                  (if (and (vector? x) (= :value (first x))) (second x) x))]
+                         (when (and (some? v) (some? hi))
+                           (format "(?%s >= %s && ?%s <= %s)"
+                                   var (literal->sparql v) var (literal->sparql hi))))
               :starts-with (let [needle (literal->sparql v)
                                  expr (if insensitive?
                                         (format "STRSTARTS(LCASE(STR(?%s)), LCASE(%s))" var needle)

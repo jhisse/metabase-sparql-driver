@@ -796,3 +796,28 @@
                              :filter [:< [:field 12 nil] 5]})]
         (is (str/includes? sparql "AS ?lokatie_lon)"))
         (is (str/includes? sparql "FILTER (?lokatie_lon < 5)"))))))
+
+(deftest inside-and-between-filter-test
+  (with-fixture
+    (testing ":between compiles to a numeric range"
+      (let [f #(@#'mbql/compile-filter-expr % {"leeftijd" "leeftijd"} {})]
+        (is (= "(?leeftijd >= 18 && ?leeftijd <= 65)"
+               (f [:between [:field "leeftijd" nil] 18 65])))
+        (testing "a [:value ...] wrapped bound is unwrapped"
+          (is (= "(?leeftijd >= 18 && ?leeftijd <= 65)"
+                 (f [:between [:field "leeftijd" nil] [:value 18 {}] [:value 65 {}]]))))))
+    (testing ":inside compiles to a bounding box over lat/lon (N/W/S/E order)"
+      (let [f #(@#'mbql/compile-filter-expr % {"lat" "lat" "lon" "lon"} {})]
+        (is (= "((?lat <= 51.0) && (?lat >= 50.0) && (?lon >= 4.0) && (?lon <= 5.0))"
+               (f [:inside [:field "lat" nil] [:field "lon" nil] 51.0 4.0 50.0 5.0])))))
+    (testing ":inside on synthesized coordinate columns emits their BINDs + the box FILTER"
+      (let [{:keys [sparql]}
+            (compile-stage* {:source-table 100
+                             :fields [[:field 1 nil] [:field 12 nil] [:field 13 nil]]
+                             :filter [:inside [:field 13 nil] [:field 12 nil] 51.0 4.0 50.0 5.0]})]
+        (is (str/includes? sparql "OPTIONAL { ?subject <https://odis.q.libis.be/lokatie> ?lokatie . }"))
+        (is (str/includes? sparql "AS ?lokatie_lon)"))
+        (is (str/includes? sparql "AS ?lokatie_lat)"))
+        (is (str/includes?
+             sparql
+             "FILTER ((?lokatie_lat <= 51.0) && (?lokatie_lat >= 50.0) && (?lokatie_lon >= 4.0) && (?lokatie_lon <= 5.0))"))))))

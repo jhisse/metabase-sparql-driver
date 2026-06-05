@@ -100,6 +100,7 @@ The driver automatically converts XSD / RDF datatypes to Metabase types. At **qu
 | `xsd:time`                                                         | Time               | `10:30:00`                                                            |
 | `xsd:anyURI`                                                       | Text (semantic `type/URL`) | Stored as text but rendered as a URL                          |
 | `rdf:langString` *(SHACL only)*                                    | Text (`database-type: langString`) | Triggers per-column `FILTER(LANG(?x) = "<lang>")` when **Default Language** is set |
+| `geo:wktLiteral`, Virtuoso `virtrdf:Geometry`, or any value whose lexical form is WKT (`POINT`, `POLYGON`, `BOX`, …) | Text (`database-type: geometry`) | Equality filters compare via `STR()`; `POINT`/`BOX` columns also get auto-synthesized lon/lat columns — see [Geospatial](#geospatial-wkt-geometry--maps) |
 | URIs (subject column)                                              | URL                | `http://dbpedia.org/resource/Berlin`                                  |
 | Untagged literals                                                  | Text               | `"Hello"`                                                             |
 | Language-tagged literals not declared as `rdf:langString`          | Text               | `"Hello"@en` — value comes through, the language tag is stripped by SPARQL `STR()` when needed |
@@ -290,6 +291,7 @@ The driver re-fetches the SHACL on every sync (results are cached for ~30 second
 | `sh:datatype xsd:dateTime` / `xsd:dateTimeStamp`           | `:type/DateTimeWithTZ`.                                                                                                       |
 | `sh:datatype xsd:time`                                     | `:type/Time`.                                                                                                                 |
 | `sh:datatype rdf:langString`                               | `:base-type :type/Text` **and** `:database-type "langString"` — triggers the LANG filter described above when a Default Language is set. |
+| `sh:datatype geo:wktLiteral` *(or Virtuoso `virtrdf:Geometry`)* | `:base-type :type/Text` **and** `:database-type "geometry"` — equality compiles via `STR()` and the column gets auto-synthesized `<name>_lon`/`<name>_lat` coordinate columns (SHACL assumes `POINT`). See [Geospatial](#geospatial-wkt-geometry--maps). |
 | `sh:class C2` *(without `sh:datatype`)*                    | `:base-type :type/Text`, `:semantic-type :type/FK`. A `describe-fks` row is emitted pointing at `C2.subject` so Metabase wires the foreign-key relationship automatically. |
 | `sh:name "…"` / `sh:description "…"`                       | Combined into the field's description. When multiple language-tagged literals exist, the **Default Language** wins, then untagged, then any. |
 | `sh:minCount n` *(n ≥ 1)*                                  | `:database-required true` — marks the column as required.                                                                     |
@@ -440,6 +442,58 @@ With **Default Graph URI** = `http://dbpedia.org/ontology/` and **Default Langua
 - `wikiPageRevisionID` is absent (`metabase:hide`).
 - The synced Dutch description ("Wikipedia-pagina-ID") is preferred over the English one.
 
+## :triangular_ruler: Custom Columns (Expressions)
+
+The driver compiles a useful subset of Metabase **custom expressions** ("Custom column" in the notebook editor, and the expression editor) into SPARQL. Each expression becomes a `BIND(... AS ?name)` in the compiled query; fields referenced only inside an expression still get their triples (including across implicit joins).
+
+**Supported functions**
+
+| Category | Functions | Compiles to |
+|:---------|:----------|:------------|
+| Arithmetic | `+` `-` `*` `/`, `abs`, `ceil`, `floor`, `round` | infix / `ABS` `CEIL` `FLOOR` `ROUND` |
+| Text | `concat`, `substring`, `length`, `lower`, `upper`, `trim`, `ltrim`, `rtrim`, `replace` | `CONCAT`, `SUBSTR`, `STRLEN`, `LCASE`, `UCASE`, `REPLACE` |
+| Regex | `regexextract` | first-match `REPLACE(STR(x), "^.*?(<pat>).*$", "$1")` |
+| Conditional | `coalesce`, `case` | `COALESCE`, nested `IF` |
+| Casts | `float`/`double`, `integer`, `text` | `xsd:double`, `xsd:integer`, `STR` |
+
+> **Note:** Enabling expressions exposes the *entire* expression palette in the UI. Anything outside the subset above (most date/time math, advanced math, window functions) raises a clear **"Unsupported expression function"** error instead of silently producing a wrong query. If you hit one you need, open an issue.
+
+Example — extract a number from a string and treat it numerically:
+
+```text
+float(regexextract([code], "[0-9]+"))
+```
+
+## :world_map: Geospatial: WKT, Geometry & Maps
+
+RDF geometry values — Virtuoso `virtrdf:Geometry`, standard `geo:wktLiteral`, or plain strings whose lexical form is WKT (`POINT(...)`, `POLYGON(...)`, Virtuoso `BOX(...)`) — are detected automatically (by datatype in SHACL sync, by sampled value in `auto` sync) and typed `database-type: geometry`.
+
+**Filtering a geometry column.** A geometry literal is a *typed* term, so a plain `?x = "POINT(...)"` never matches. The driver compiles equality on a geometry column via `STR()` instead, so clicking a geometry value to filter (or `=` / `!=` in the notebook) works:
+
+```sparql
+FILTER(STR(?lokatie) = "POINT(4.40 51.22)")
+```
+
+**Automatic lon/lat columns (maps with zero setup).** Metabase discovers maps from `:type/Latitude` / `:type/Longitude` columns, and its native "Extract column" feature can't be extended by a driver. So for every geometry column the driver **synthesizes coordinate columns at sync**, correctly typed:
+
+| Source geometry | Synthesized columns | Semantic type |
+|:----------------|:--------------------|:--------------|
+| `POINT(lon lat)` | `<name>_lon`, `<name>_lat` | Longitude / Latitude |
+| `BOX(minLon maxLon, minLat maxLat)` *(Virtuoso)* | `<name>_min_lon`, `<name>_max_lon`, `<name>_min_lat`, `<name>_max_lat` | Coordinate |
+
+Each is a `Float` extracted at query time with a capture-group `REPLACE` cast to `xsd:double`. The `POINT` lon/lat are typed Longitude/Latitude so **Pin/Region map visualizations appear automatically** — no custom column needed. `BOX` corners are typed plain Coordinate (so the map picker doesn't grab a box corner as a pin) and power range / box filtering. The raw geometry column is kept too.
+
+> Axis order follows WKT/CRS84: longitude first (X), latitude second (Y). Coordinate extraction relies on standard SPARQL 1.1 `REPLACE`; no GeoSPARQL/`bif:` functions are required, so it works on any compliant endpoint.
+
+**Box / region filtering.** Metabase's map "draw a box" drill (`:inside`) and numeric `:between` are translated to bounding-box range filters over the lon/lat columns:
+
+```sparql
+# [:inside lat lon  north west south east]
+FILTER ((?lokatie_lat <= 51.3) && (?lokatie_lat >= 51.0) && (?lokatie_lon >= 4.2) && (?lokatie_lon <= 4.5))
+```
+
+If you need a different projection or a value WKT doesn't expose, you can always build a [custom column](#custom-columns-expressions) by hand (e.g. `float(regexextract([lokatie], "[-0-9.]+"))`).
+
 ## :warning: Limitations and Known Issues
 
 - **Aggregations**: Basic aggregations in Query Builder's "Summarize" are supported — **Count**, **Count distinct**, **Sum**, **Average**, **Minimum**, **Maximum** — with an optional group-by (breakout). `Count` compiles to `COUNT(DISTINCT ?subject)`, so grouping by a multi-valued property counts *entities* per group rather than fanned-out solution rows. Advanced aggregations (standard deviation, percentiles, cumulative sum/count, expression aggregations) and post-aggregation filtering (`HAVING`) are not supported.
@@ -447,7 +501,7 @@ With **Default Graph URI** = `http://dbpedia.org/ontology/` and **Default Langua
 - **Saved cards / models as a source**: When a saved card or model is used as the source of another question, the inner query is compiled as a SPARQL sub-`SELECT` and the outer stage's FK display-value remaps wrap it. Outer stages that add their *own* aggregation, filter, or breakout on top of the inner query are not supported — only passthrough + remap wrappers.
 - **Auto-mode language tagging**: The `FILTER(LANG(?x) = …)` clause only fires for columns whose `rdf:langString` datatype was declared in SHACL. The `auto` sync strategy can't see datatypes by sampling alone, so multilingual fan-out can still happen there.
 - **Performance**: Fetching large result sets or performing metadata discovery on extensive endpoints can be resource-intensive. Use **Configurable Limits** (Class/Property/Sample Size) in `auto`, or move to `shacl` / `explicit` / `none` for control.
-- **Filter Support**: Basic filtering works in Query Builder. Complex Metabase filter expressions or custom expressions might not be fully translated to SPARQL.
+- **Filter Support**: Standard filters work in Query Builder, including `:between` and the map `:inside` (draw-a-box) filter. Equality on geometry columns compiles via `STR()`. Custom expressions are supported for a documented subset of functions (see [Custom Columns](#custom-columns-expressions)); functions outside that subset raise a clear error rather than mistranslating.
 - **Authentication**: HTTP Basic (username/password) and Bearer token (`Authorization: Bearer <token>`) are supported via the **Authentication** field. The bearer token is static — paste a long-lived JWT or API key that the SPARQL endpoint accepts. Per-user / per-session token forwarding (e.g. propagating the signed-in user's Google or OIDC `id_token`) is **not** supported: Metabase discards the upstream OIDC tokens after creating its own session, so they are not reachable from the driver. OAuth client-credentials refresh and Metabase's `auth-provider` framework (enterprise) are not wired in yet.
 
 ## :building_construction: Build Locally From Source
