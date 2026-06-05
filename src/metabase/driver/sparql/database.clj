@@ -70,7 +70,7 @@
   "Creates a field definition from a property URI.
 
    `default-graph` is stripped from the URI when it matches, so the column
-   name in Metabase is the short local name (e.g. `naam`) instead of the
+   name in Metabase is the short local name (e.g. `name`) instead of the
    full URI. The full URI is reconstructed at query-compile time.
 
    `sample` is an example lexical value (from the discovery query); when it is

@@ -113,7 +113,7 @@ The driver automatically converts XSD / RDF datatypes to Metabase types. At **qu
 | Ignore SSL Certificate Errors         |    ❌    | Skip TLS/SSL validation.                                                                                                                                                                                                                                 | `false`                             |
 | Authentication                        |    ❌    | How to authenticate to the endpoint. `basic` reveals **Username** / **Password** (sent as HTTP Basic). `bearer` reveals **Bearer Token** (sent as `Authorization: Bearer <token>` — paste a static JWT or API key issued for this Metabase instance).      | `none` / `basic` / `bearer`         |
 | Default Graph URI                     |    ❌    | Default graph URI **and** implicit base prefix. RDF classes and properties whose URI starts with this value are shortened in the Metabase UI — `http://dbpedia.org/ontology/Person` becomes `Person`. The full URI is reconstructed automatically at query time. | `http://dbpedia.org/ontology/`      |
-| Default Language                      |    ❌    | BCP-47 language tag. When set, queries against `rdf:langString` columns are filtered to this language (untagged literals are still kept), and SHACL `sh:name` / `sh:description` literals are picked using this language first.                          | `nl`, `en`                          |
+| Default Language                      |    ❌    | BCP-47 language tag. When set, queries against `rdf:langString` columns are filtered to this language (untagged literals are still kept), and SHACL `sh:name` / `sh:description` literals are picked using this language first.                          | `fr`, `en`                          |
 | Hide URIs outside the Default Graph   |    ❌    | When enabled, RDF classes and properties whose URI does **not** start with the Default Graph URI are skipped during sync (less clutter when external vocabularies are sampled).                                                                          | `false`                             |
 | Metadata Sync Strategy (Advanced)     |    ❌    | How the driver discovers tables/fields.                                                                                                                                                                                                                  | `auto` / `none` / `explicit` / `shacl` |
 | Schema Configuration (Advanced)       |    ❌    | JSON schema. Visible when strategy is `explicit`.                                                                                                                                                                                                        | See JSON example below              |
@@ -146,7 +146,7 @@ This mirrors RDF/Turtle "base IRI" semantics: only URIs *under* the configured b
 If a property is declared as `sh:datatype rdf:langString` in a SHACL document (so the driver knows it is language-tagged) **and** a **Default Language** is configured, every reference to that variable in the compiled SPARQL gets:
 
 ```sparql
-FILTER(!BOUND(?var) || LANG(?var) = "nl" || LANG(?var) = "")
+FILTER(!BOUND(?var) || LANG(?var) = "fr" || LANG(?var) = "")
 ```
 
 This keeps each row to the configured language (plus any untagged literals) and avoids the row fan-out that multilingual datasets otherwise produce. The `!BOUND(...)` guard preserves left-join semantics. Leaving **Default Language** blank disables this entirely — the driver behaves exactly as before.
@@ -177,13 +177,13 @@ SELECT ?label WHERE {
 LIMIT {{ n }}
 ```
 
-With parameters `class = https://data.example/Item`, `lang = nl`, `n = 100`, the driver emits:
+With parameters `class = https://data.example/Item`, `lang = fr`, `n = 100`, the driver emits:
 
 ```sparql
 SELECT ?label WHERE {
   ?s a <https://data.example/Item> ;
      rdfs:label ?label .
-  FILTER (LANG(?label) = "nl")
+  FILTER (LANG(?label) = "fr")
 }
 LIMIT 100
 ```
@@ -331,7 +331,7 @@ dbo:PlaceShape a sh:NodeShape ;
   sh:targetClass dbo:Place ;
   sh:property [ sh:path     rdfs:label ;
                 sh:datatype rdf:langString ;
-                sh:name     "label"@nl, "label"@en ;
+                sh:name     "label"@fr, "label"@en ;
                 sh:order    1 ] ;
   sh:property [ sh:path     dbo:populationTotal ;
                 sh:datatype xsd:integer ;
@@ -364,7 +364,7 @@ Read the FK property out loud: *"`birthPlace` is a foreign key to `Place`. When 
 1. The property you name must be declared on the target NodeShape (directly, or via `sh:node` inheritance). If the driver can't find a synced field by that name on the target table, no `Dimension` row is written — the next sync resolves it once the field appears.
 2. The target property must actually carry triples on the linked instances. If it's declared but empty in the data, the display column will simply come back blank.
 
-**Note on `langString` targets.** When the display property is `rdf:langString` and a **Default Language** is configured, the per-row `FILTER(LANG(?x) = "nl" || LANG(?x) = "")` still applies, so multilingual labels resolve to the right language automatically.
+**Note on `langString` targets.** When the display property is `rdf:langString` and a **Default Language** is configured, the per-row `FILTER(LANG(?x) = "fr" || LANG(?x) = "")` still applies, so multilingual labels resolve to the right language automatically.
 
 ### Foreign Keys
 
@@ -404,14 +404,14 @@ dbo:AgentShape a sh:NodeShape ;
                 sh:minCount 1 ;
                 sh:maxCount 1 ;
                 sh:order 1 ;
-                sh:name "wikiPageID"@nl, "wikiPageID"@en ;
-                sh:description "Wikipedia-pagina-ID"@nl, "Wikipedia page ID"@en ] .
+                sh:name "wikiPageID"@fr, "wikiPageID"@en ;
+                sh:description "ID de la page Wikipédia"@fr, "Wikipedia page ID"@en ] .
 
 dbo:PlaceShape a sh:NodeShape ;
   sh:targetClass dbo:Place ;
   sh:property [ sh:path     rdfs:label ;
                 sh:datatype rdf:langString ;
-                sh:name     "label"@nl, "label"@en ;
+                sh:name     "label"@fr, "label"@en ;
                 sh:order    1 ] ;
   sh:property [ sh:path     dbo:populationTotal ;
                 sh:datatype xsd:integer ;
@@ -422,7 +422,7 @@ dbo:PersonShape a sh:NodeShape ;
   sh:node        dbo:AgentShape ;
   sh:property [ sh:path dbo:birthName ;
                 sh:datatype rdf:langString ;
-                sh:name "Naam"@nl, "Name"@en ;
+                sh:name "Nom"@fr, "Name"@en ;
                 sh:order 2 ] ;
   sh:property [ sh:path  dbo:birthPlace ;
                 sh:class dbo:Place ;
@@ -433,14 +433,14 @@ dbo:PersonShape a sh:NodeShape ;
                 metabase:hide true ] .
 ```
 
-With **Default Graph URI** = `http://dbpedia.org/ontology/` and **Default Language** = `nl`, this produces:
+With **Default Graph URI** = `http://dbpedia.org/ontology/` and **Default Language** = `fr`, this produces:
 
 - A table **Place** with columns `subject`, `label`, `populationTotal`.
 - A table **Person** with columns `subject`, `wikiPageID` (inherited from Agent), `birthName`, `birthPlace`.
-- `birthName` is `langString`, so queries get `FILTER(... LANG(?birthName) = "nl" || LANG(?birthName) = "")`.
-- `birthPlace` is marked **Foreign Key** pointing to `Place.subject`. After sync the driver writes a `Dimension` row pairing `Person.birthPlace` → `Place.label`, so the FK column renders as the place's Dutch label automatically — no manual "Display values" click in the column-settings panel.
+- `birthName` is `langString`, so queries get `FILTER(... LANG(?birthName) = "fr" || LANG(?birthName) = "")`.
+- `birthPlace` is marked **Foreign Key** pointing to `Place.subject`. After sync the driver writes a `Dimension` row pairing `Person.birthPlace` → `Place.label`, so the FK column renders as the place's French label automatically — no manual "Display values" click in the column-settings panel.
 - `wikiPageRevisionID` is absent (`metabase:hide`).
-- The synced Dutch description ("Wikipedia-pagina-ID") is preferred over the English one.
+- The synced French description ("ID de la page Wikipédia") is preferred over the English one.
 
 ## :triangular_ruler: Custom Columns (Expressions)
 
@@ -471,7 +471,7 @@ RDF geometry values — Virtuoso `virtrdf:Geometry`, standard `geo:wktLiteral`, 
 **Filtering a geometry column.** A geometry literal is a *typed* term, so a plain `?x = "POINT(...)"` never matches. The driver compiles equality on a geometry column via `STR()` instead, so clicking a geometry value to filter (or `=` / `!=` in the notebook) works:
 
 ```sparql
-FILTER(STR(?lokatie) = "POINT(4.40 51.22)")
+FILTER(STR(?location) = "POINT(4.40 51.22)")
 ```
 
 **Automatic lon/lat columns (maps with zero setup).** Metabase discovers maps from `:type/Latitude` / `:type/Longitude` columns, and its native "Extract column" feature can't be extended by a driver. So for every geometry column the driver **synthesizes coordinate columns at sync**, correctly typed:
@@ -489,21 +489,21 @@ Each is a `Float` extracted at query time with a capture-group `REPLACE` cast to
 
 ```sparql
 # [:inside lat lon  north west south east]
-FILTER ((?lokatie_lat <= 51.3) && (?lokatie_lat >= 51.0) && (?lokatie_lon >= 4.2) && (?lokatie_lon <= 4.5))
+FILTER ((?location_lat <= 51.3) && (?location_lat >= 51.0) && (?location_lon >= 4.2) && (?location_lon <= 4.5))
 ```
 
 **Pin map vs. grid map.** The lon/lat columns give you a **pin map** directly. For a **grid / heat map**, Metabase needs *binned* latitude and longitude (each coordinate bucketed into a grid cell) plus an aggregation. The driver supports binning: a binned breakout compiles to a `FLOOR` bucket and is grouped on, e.g. count of entities per 0.1° cell:
 
 ```sparql
-BIND((FLOOR(?lokatie_lon / 0.1) * 0.1) AS ?lokatie_lon_binned)
-BIND((FLOOR(?lokatie_lat / 0.1) * 0.1) AS ?lokatie_lat_binned)
+BIND((FLOOR(?location_lon / 0.1) * 0.1) AS ?location_lon_binned)
+BIND((FLOOR(?location_lat / 0.1) * 0.1) AS ?location_lat_binned)
 ...
-GROUP BY ?lokatie_lon_binned ?lokatie_lat_binned
+GROUP BY ?location_lon_binned ?location_lat_binned
 ```
 
 > Binning needs a column min/max, which Metabase reads from the **fingerprint**. Fingerprinting is therefore **enabled** for this driver — sync samples each table to compute column stats. On very large endpoints this adds sync cost; if that's a problem you can set `:fingerprint false` in the driver feature list, but binning (and grid maps) will then only work when you also add a numeric range filter on the coordinate.
 
-If you need a different projection or a value WKT doesn't expose, you can always build a [custom column](#custom-columns-expressions) by hand (e.g. `float(regexextract([lokatie], "[-0-9.]+"))`).
+If you need a different projection or a value WKT doesn't expose, you can always build a [custom column](#custom-columns-expressions) by hand (e.g. `float(regexextract([location], "[-0-9.]+"))`).
 
 ## :warning: Limitations and Known Issues
 

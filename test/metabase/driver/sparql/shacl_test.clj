@@ -10,7 +10,7 @@
 (def ^:private coerce-semantic-type @#'shacl/coerce-semantic-type)
 (def ^:private xsd-base-type @#'shacl/xsd-base-type)
 
-(def ^:private base "https://odis.q.libis.be/")
+(def ^:private base "https://example.org/")
 
 (def ^:private turtle
   (str
@@ -18,30 +18,30 @@
    "@prefix xsd: <http://www.w3.org/2001/XMLSchema#> .\n"
    "@prefix rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .\n"
    "@prefix mb:  <https://data.metabase.com/> .\n"
-   "@prefix ex:  <https://odis.q.libis.be/> .\n"
+   "@prefix ex:  <https://example.org/> .\n"
    "\n"
    "ex:EntiteitShape a sh:NodeShape ;\n"
    "  sh:targetClass ex:Entiteit ;\n"
    "  sh:property ex:p_bron .\n"
    "ex:p_bron a sh:PropertyShape ; sh:path ex:bron ; sh:datatype xsd:string .\n"
    "\n"
-   "ex:PersoonShape a sh:NodeShape ;\n"
-   "  sh:targetClass ex:Persoon ;\n"
-   "  sh:description \"Een persoon\"@nl ;\n"
+   "ex:PersonShape a sh:NodeShape ;\n"
+   "  sh:targetClass ex:Person ;\n"
+   "  sh:description \"Een person\"@nl ;\n"
    "  sh:node ex:EntiteitShape ;\n"
-   "  sh:property ex:p_naam , ex:p_leeftijd , ex:p_geboorteplaats , ex:p_secret .\n"
-   "ex:p_naam a sh:PropertyShape ;\n"
-   "  sh:path ex:naam ; sh:datatype rdf:langString ;\n"
-   "  sh:name \"Naam\"@nl , \"Name\"@en ; sh:order 1 .\n"
-   "ex:p_leeftijd a sh:PropertyShape ;\n"
-   "  sh:path ex:leeftijd ; sh:datatype xsd:integer ; sh:minCount 1 ; sh:order 2 .\n"
-   "ex:p_geboorteplaats a sh:PropertyShape ;\n"
-   "  sh:path ex:geboorteplaats ; sh:class ex:Plaats ; sh:order 3 .\n"
+   "  sh:property ex:p_name , ex:p_age , ex:p_birthplace , ex:p_secret .\n"
+   "ex:p_name a sh:PropertyShape ;\n"
+   "  sh:path ex:name ; sh:datatype rdf:langString ;\n"
+   "  sh:name \"Name\"@nl , \"Name\"@en ; sh:order 1 .\n"
+   "ex:p_age a sh:PropertyShape ;\n"
+   "  sh:path ex:age ; sh:datatype xsd:integer ; sh:minCount 1 ; sh:order 2 .\n"
+   "ex:p_birthplace a sh:PropertyShape ;\n"
+   "  sh:path ex:birthplace ; sh:class ex:Place ; sh:order 3 .\n"
    "ex:p_secret a sh:PropertyShape ;\n"
    "  sh:path ex:secret ; sh:datatype xsd:string ; mb:hide true .\n"
    "\n"
-   "ex:PlaatsShape a sh:NodeShape ;\n"
-   "  sh:targetClass ex:Plaats ;\n"
+   "ex:PlaceShape a sh:NodeShape ;\n"
+   "  sh:targetClass ex:Place ;\n"
    "  sh:property ex:p_label .\n"
    "ex:p_label a sh:PropertyShape ; sh:path ex:label ; sh:datatype xsd:string .\n"))
 
@@ -66,19 +66,19 @@
 (deftest shacl->metadata-test
   (let [shapes  (shacl->metadata (shacl/parse-turtle turtle base) "nl")
         by-cls  (into {} (map (juxt :class-uri identity)) shapes)
-        persoon (by-cls (str base "Persoon"))
-        plaats  (by-cls (str base "Plaats"))
-        p-props (props-by-uri persoon)]
+        person (by-cls (str base "Person"))
+        place  (by-cls (str base "Place"))
+        p-props (props-by-uri person)]
 
     (testing "every class-targeted shape becomes a table"
       (is (= 3 (count shapes)))
-      (is (contains? by-cls (str base "Persoon")))
-      (is (contains? by-cls (str base "Plaats")))
+      (is (contains? by-cls (str base "Person")))
+      (is (contains? by-cls (str base "Place")))
       (is (contains? by-cls (str base "Entiteit"))))
 
     (testing "the localized sh:description is selected"
-      (is (= "Een persoon" (:description persoon)))
-      (is (false? (:hidden? persoon))))
+      (is (= "Een person" (:description person)))
+      (is (false? (:hidden? person))))
 
     (testing "metabase:hide properties are pruned"
       (is (not (contains? p-props (str base "secret")))))
@@ -87,42 +87,42 @@
       (is (contains? p-props (str base "bron"))))
 
     (testing "rdf:langString properties are flagged and typed as text"
-      (let [naam (p-props (str base "naam"))]
-        (is (true? (:lang-string? naam)))
-        (is (= :type/Text (:base-type naam)))
-        (is (= "Naam" (:description naam)))))
+      (let [name (p-props (str base "name"))]
+        (is (true? (:lang-string? name)))
+        (is (= :type/Text (:base-type name)))
+        (is (= "Name" (:description name)))))
 
     (testing "xsd:integer + sh:minCount are mapped"
-      (let [leeftijd (p-props (str base "leeftijd"))]
-        (is (= :type/Integer (:base-type leeftijd)))
-        (is (true? (:database-required leeftijd)))))
+      (let [age (p-props (str base "age"))]
+        (is (= :type/Integer (:base-type age)))
+        (is (true? (:database-required age)))))
 
     (testing "sh:class declares a foreign key"
-      (let [gp (p-props (str base "geboorteplaats"))]
+      (let [gp (p-props (str base "birthplace"))]
         (is (= :type/FK (:semantic-type gp)))
-        (is (= (str base "Plaats") (:fk-target-class gp)))))
+        (is (= (str base "Place") (:fk-target-class gp)))))
 
     (testing "a leaf shape keeps just its own property"
       (is (= #{(str base "label")}
-             (set (map :property-uri (:properties plaats))))))))
+             (set (map :property-uri (:properties place))))))))
 
 (deftest shacl->metadata-language-test
   (testing "switching the language re-picks sh:name literals"
     (let [shapes (shacl->metadata (shacl/parse-turtle turtle base) "en")
-          naam   ((props-by-uri (first (filter #(= (str base "Persoon") (:class-uri %)) shapes)))
-                  (str base "naam"))]
-      (is (= "Name" (:description naam))))))
+          name   ((props-by-uri (first (filter #(= (str base "Person") (:class-uri %)) shapes)))
+                  (str base "name"))]
+      (is (= "Name" (:description name))))))
 
 (deftest pick-localized-test
-  (let [nl {:type :literal :value "Naam" :lang "nl"}
+  (let [nl {:type :literal :value "Name" :lang "nl"}
         en {:type :literal :value "Name" :lang "en"}
         un {:type :literal :value "Plain" :lang nil}]
     (is (= "Name" (pick-localized [nl en] "en")))
-    (is (= "Naam" (pick-localized [nl en] "nl")))
+    (is (= "Name" (pick-localized [nl en] "nl")))
     (testing "untagged literal is preferred when no language matches"
       (is (= "Plain" (pick-localized [nl un] "fr"))))
     (testing "falls back to the first literal when nothing else fits"
-      (is (= "Naam" (pick-localized [nl en] ""))))
+      (is (= "Name" (pick-localized [nl en] ""))))
     (is (nil? (pick-localized [] "nl")))))
 
 (deftest coerce-semantic-type-test

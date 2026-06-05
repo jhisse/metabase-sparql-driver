@@ -10,14 +10,14 @@
 ;; Geometry / WKT detection
 ;; ---------------------------------------------------------------------------
 ;; RDF geometry values arrive either as typed literals (Virtuoso's
-;; `virtrdf:Geometry`, or the standard `geo:wktLiteral`) or — as seen with ODIS
-;; `odis_geometry` POLYGONs — as a plain `xsd:string` whose lexical form is WKT.
+;; `virtrdf:Geometry`, or the standard `geo:wktLiteral`) or as a plain
+;; `xsd:string` whose lexical form is WKT (some stores expose POLYGONs that way).
 ;; We flag both so the driver can (a) compile equality via STR() and (b) let
 ;; users pull coordinates out with expressions.
 
 (def geometry-datatypes
   "Datatype IRIs that denote an RDF geometry literal."
-  #{"http://www.openlinksw.com/schemas/virtrdf#Geometry"
+  #{"http://www.openlinksw.com/schemas/virtrdf#Geometry" ; Virtuoso's geometry datatype
     "http://www.opengis.net/ont/geosparql#wktLiteral"
     "http://www.opengis.net/ont/sf#wktLiteral"})
 
