@@ -541,16 +541,7 @@ java --add-opens java.base/java.nio=ALL-UNNAMED -Dlog4j.configurationFile=file:.
 
 ## :handshake: Contributing
 
-Found a bug or want to contribute? Open an issue or submit a PR!
-
-Before opening a PR, please:
-
-- Run `make init-metabase` if you have not initialized the submodule yet.
-- Run `make lint`, `make splint`, and `make test` and make sure all pass.
-- Run `make format` to apply the project's code style.
-- Avoid bumping the `metabase/` submodule unless that is the explicit point of the PR — call it out in the description if so.
-
-Use the [pull request template](.github/pull_request_template.md) checklist when opening your PR.
+Found a bug? Open an issue. Want to contribute code? Read [CONTRIBUTING.md](CONTRIBUTING.md) first — it covers PR scope and size, branching, the pre-PR checklist, and what is not accepted in contributor PRs. Small, focused PRs are reviewed quickly.
 
 ## :page_facing_up: License
 
