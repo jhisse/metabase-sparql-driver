@@ -220,6 +220,12 @@
               :>= (and (some? v) (format "(?%s >= %s)" var (literal->sparql v)))
               :< (and (some? v) (format "(?%s < %s)" var (literal->sparql v)))
               :<= (and (some? v) (format "(?%s <= %s)" var (literal->sparql v)))
+              ;; [:between field min max] — min is rhs (`v`), max is the next arg.
+              :between (let [hi (let [x maybe-opts]
+                                  (if (and (vector? x) (= :value (first x))) (second x) x))]
+                         (when (and (some? v) (some? hi))
+                           (format "(?%s >= %s && ?%s <= %s)"
+                                   var (literal->sparql v) var (literal->sparql hi))))
               :starts-with (let [needle (literal->sparql v)
                                  expr (if insensitive?
                                         (format "STRSTARTS(LCASE(STR(?%s)), LCASE(%s))" var needle)

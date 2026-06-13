@@ -116,6 +116,15 @@
       (is (= "((?naam = \"Jan\") || (?naam = \"Piet\"))"
              (f [:or [:= [:field "naam" nil] "Jan"] [:= [:field "naam" nil] "Piet"]]))))))
 
+(deftest between-filter-test
+  (let [f #(@#'mbql/compile-filter-expr % {"leeftijd" "leeftijd"} {})]
+    (testing ":between compiles to a numeric range"
+      (is (= "(?leeftijd >= 18 && ?leeftijd <= 65)"
+             (f [:between [:field "leeftijd" nil] 18 65])))
+      (testing "a [:value ...] wrapped bound is unwrapped"
+        (is (= "(?leeftijd >= 18 && ?leeftijd <= 65)"
+               (f [:between [:field "leeftijd" nil] [:value 18 {}] [:value 65 {}]])))))))
+
 (deftest order-by-test
   (let [ob     #(@#'mbql/compile-order-by % {"naam" "naam" "leeftijd" "leeftijd"} {})
         agg-ob #(@#'mbql/compile-agg-order-by % {"naam" "naam"} {})]
