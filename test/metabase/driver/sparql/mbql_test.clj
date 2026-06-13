@@ -131,7 +131,42 @@
   (let [f @#'mbql/var-for-token]
     (is (= "naam" (f [:field "naam" nil] {"naam" "naam"} {})))
     (testing "a join-alias token resolves through pair->target-var"
-      (is (= "jvar" (f [:field "x" {:join-alias "J"}] {} {["x" "J"] "jvar"}))))))
+      (is (= "jvar" (f [:field "x" {:join-alias "J"}] {} {["x" "J"] "jvar"}))))
+    (testing "an expression token resolves to its sanitized name"
+      (is (= "my_col" (f [:expression "my-col"] {} {}))))))
+
+(deftest compile-expression-test
+  (let [resolve-token (fn [tok]
+                        (if (= :expression (first tok))
+                          (@#'mbql/sanitize-var-name (second tok))
+                          (get {1 "a" 2 "b"} (second tok) (str (second tok)))))
+        f (fn [clause] (@#'mbql/compile-expression clause resolve-token))]
+    (testing "arithmetic"
+      (is (= "(?a + 1)" (f [:+ [:field 1 nil] 1])))
+      (is (= "(?a - ?b)" (f [:- [:field 1 nil] [:field 2 nil]])))
+      (is (= "(?a * 2)" (f [:* [:field 1 nil] 2]))))
+    (testing "string functions coerce args with STR()"
+      (is (= "LCASE(STR(?a))" (f [:lower [:field 1 nil]])))
+      (is (= "STRLEN(STR(?a))" (f [:length [:field 1 nil]])))
+      (is (= "CONCAT(STR(?a), STR(?b))" (f [:concat [:field 1 nil] [:field 2 nil]]))))
+    (testing "trim compiles to a REPLACE"
+      (is (= "REPLACE(STR(?a), \"^\\\\s+|\\\\s+$\", \"\")" (f [:trim [:field 1 nil]]))))
+    (testing "regexextract compiles to a first-match REPLACE"
+      (is (= "REPLACE(STR(?a), \"^.*?([-0-9.]+).*$\", \"$1\")"
+             (f [:regex-match-first [:field 1 nil] "[-0-9.]+"]))))
+    (testing "substring is 1-based SUBSTR"
+      (is (= "SUBSTR(STR(?a), 2, 3)" (f [:substring [:field 1 nil] 2 3])))
+      (is (= "SUBSTR(STR(?a), 2)" (f [:substring [:field 1 nil] 2]))))
+    (testing "casts use the full xsd IRI constructor"
+      (is (= "<http://www.w3.org/2001/XMLSchema#double>(?a)" (f [:float [:field 1 nil]])))
+      (is (= "<http://www.w3.org/2001/XMLSchema#integer>(?a)" (f [:integer [:field 1 nil]]))))
+    (testing "coalesce / case"
+      (is (= "COALESCE(?a, \"x\")" (f [:coalesce [:field 1 nil] "x"])))
+      (is (= "IF((?a > 5), \"big\", \"small\")"
+             (f [:case [[[:> [:field 1 nil] 5] "big"]] {:default "small"}]))))
+    (testing "an unsupported function throws a clear error"
+      (is (thrown-with-msg? clojure.lang.ExceptionInfo #"Unsupported expression function"
+                            (f [:totally-bogus [:field 1 nil]]))))))
 
 (deftest inner-var-for-ref-test
   (let [f @#'mbql/inner-var-for-ref]
@@ -413,6 +448,33 @@
         (is (= ["naam" "ag_0"] vars))
         (is (str/includes? sparql "(COUNT(*) AS ?ag_0)"))
         (is (str/includes? sparql "GROUP BY ?naam"))))))
+
+(deftest compile-base-stage-expression-test
+  (with-fixture
+    (testing "a custom column emits a BIND and is projected"
+      (let [{:keys [sparql vars]}
+            (compile-stage* {:source-table 100
+                             :fields [[:field 1 nil] [:field 2 nil] [:expression "upper_naam"]]
+                             :expressions {"upper_naam" [:upper [:field 2 nil]]}})]
+        (is (some #{"upper_naam"} vars))
+        (is (str/includes? sparql "BIND(UCASE(STR(?naam)) AS ?upper_naam)"))
+        (is (str/includes? sparql "SELECT ?subject ?naam ?upper_naam"))))
+    (testing "a field referenced only inside an expression still gets its triple"
+      (let [{:keys [sparql]}
+            (compile-stage* {:source-table 100
+                             :fields [[:field 1 nil] [:expression "len"]]
+                             :expressions {"len" [:length [:field 3 nil]]}})]
+        (is (str/includes? sparql (str "OPTIONAL { ?subject <" base "leeftijd> ?leeftijd . }")))
+        (is (str/includes? sparql "BIND(STRLEN(STR(?leeftijd)) AS ?len)"))))
+    (testing "filter and order-by can reference an expression"
+      (let [{:keys [sparql]}
+            (compile-stage* {:source-table 100
+                             :fields [[:field 1 nil] [:expression "len"]]
+                             :expressions {"len" [:length [:field 2 nil]]}
+                             :filter [:> [:expression "len"] 3]
+                             :order-by [[:desc [:expression "len"]]]})]
+        (is (str/includes? sparql "FILTER (?len > 3)"))
+        (is (str/includes? sparql "ORDER BY DESC(?len)"))))))
 
 ;; ---------------------------------------------------------------------------
 ;; Lib-driven projection (the column-count-mismatch fix)
