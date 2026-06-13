@@ -184,6 +184,31 @@
     (nil? v) ""
     :else (uri/string-literal v)))
 
+(defn- url-shaped?
+  "True when `v` is a string carrying a URI scheme (`http:`, `https:`, `urn:`, …).
+   Uses the same scheme regex as [[uri/absolute-uri]]."
+  [v]
+  (boolean (and (string? v) (re-find #"^[A-Za-z][A-Za-z0-9+.-]*:" v))))
+
+(defn- iri-valued-field?
+  "True when the field's metadata marks it as carrying an RDF IRI value — a
+   foreign key (`:type/FK`) or a URL column (`:type/URL`). These are bound to IRI
+   nodes in SPARQL, so an equality filter must compare against `<iri>`, not a
+   quoted string literal."
+  [field-id]
+  (let [meta (field-id->metadata field-id)]
+    (or (contains? #{:type/FK :type/URL} (:semantic-type meta))
+        (= :type/URL (:base-type meta)))))
+
+(defn- value->term
+  "Render a filter RHS value as a SPARQL term for an equality comparison.
+   When the field is IRI-valued and the value is a URL-shaped string, emit an
+   IRI `<…>` so it matches the bound node; otherwise fall back to a literal."
+  [field-id v]
+  (if (and (iri-valued-field? field-id) (string? v) (url-shaped? v))
+    (str "<" v ">")
+    (literal->sparql v)))
+
 (defn- compile-filter-expr
   "Compile a filter clause to a SPARQL boolean expression string."
   [filter-clause field-id->var pair->target-var]
@@ -212,10 +237,10 @@
             (case op
               := (if (nil? v)
                    (format "(!BOUND(?%s))" var)
-                   (format "(?%s = %s)" var (literal->sparql v)))
+                   (format "(?%s = %s)" var (value->term fid v)))
               :!= (if (nil? v)
                     (format "(BOUND(?%s))" var)
-                    (format "(?%s != %s)" var (literal->sparql v)))
+                    (format "(?%s != %s)" var (value->term fid v)))
               :> (and (some? v) (format "(?%s > %s)" var (literal->sparql v)))
               :>= (and (some? v) (format "(?%s >= %s)" var (literal->sparql v)))
               :< (and (some? v) (format "(?%s < %s)" var (literal->sparql v)))
