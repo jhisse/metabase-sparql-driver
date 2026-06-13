@@ -114,7 +114,25 @@
       (is (= "((?naam = \"Jan\") && (?leeftijd > 18))"
              (f [:and [:= [:field "naam" nil] "Jan"] [:> [:field "leeftijd" nil] 18]])))
       (is (= "((?naam = \"Jan\") || (?naam = \"Piet\"))"
-             (f [:or [:= [:field "naam" nil] "Jan"] [:= [:field "naam" nil] "Piet"]]))))))
+             (f [:or [:= [:field "naam" nil] "Jan"] [:= [:field "naam" nil] "Piet"]]))))
+    (testing "IRI-valued fields render a URL value as <IRI>, not a string literal"
+      (with-redefs [mbql/field-id->metadata {5 {:name "country" :semantic-type :type/FK}
+                                             6 {:name "homepage" :semantic-type :type/URL}
+                                             2 {:name "name" :database-type "string"}}]
+        (let [g #(@#'mbql/compile-filter-expr % {5 "country" 6 "homepage" 2 "name"} {})
+              iri "https://example.org/countries/AC28-7090"]
+          (is (= (str "(?country = <" iri ">)")
+                 (g [:= [:field 5 nil] iri]))
+              "FK field + URL value → IRI term")
+          (is (= (str "(?homepage != <" iri ">)")
+                 (g [:!= [:field 6 nil] iri]))
+              "URL field + URL value → IRI term")
+          (is (= "(?country = \"AC-123\")"
+                 (g [:= [:field 5 nil] "AC-123"]))
+              "FK field + non-URL value stays a string literal")
+          (is (= (str "(?name = \"" iri "\")")
+                 (g [:= [:field 2 nil] iri]))
+              "plain string field + URL-shaped value stays a string literal"))))))
 
 (deftest order-by-test
   (let [ob     #(@#'mbql/compile-order-by % {"naam" "naam" "leeftijd" "leeftijd"} {})
