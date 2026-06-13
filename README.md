@@ -440,6 +440,28 @@ With **Default Graph URI** = `http://dbpedia.org/ontology/` and **Default Langua
 - `wikiPageRevisionID` is absent (`metabase:hide`).
 - The synced Dutch description ("Wikipedia-pagina-ID") is preferred over the English one.
 
+## :triangular_ruler: Custom Columns (Expressions)
+
+The driver compiles a useful subset of Metabase **custom expressions** ("Custom column" in the notebook editor, and the expression editor) into SPARQL. Each expression becomes a `BIND(... AS ?name)` in the compiled query; fields referenced only inside an expression still get their triples (including across implicit joins).
+
+**Supported functions**
+
+| Category | Functions | Compiles to |
+|:---------|:----------|:------------|
+| Arithmetic | `+` `-` `*` `/`, `abs`, `ceil`, `floor`, `round` | infix / `ABS` `CEIL` `FLOOR` `ROUND` |
+| Text | `concat`, `substring`, `length`, `lower`, `upper`, `trim`, `ltrim`, `rtrim`, `replace` | `CONCAT`, `SUBSTR`, `STRLEN`, `LCASE`, `UCASE`, `REPLACE` |
+| Regex | `regexextract` | first-match `REPLACE(STR(x), "^.*?(<pat>).*$", "$1")` |
+| Conditional | `coalesce`, `case` | `COALESCE`, nested `IF` |
+| Casts | `float`/`double`, `integer`, `text` | `xsd:double`, `xsd:integer`, `STR` |
+
+> **Note:** Enabling expressions exposes the *entire* expression palette in the UI. Anything outside the subset above (most date/time math, advanced math, window functions) raises a clear **"Unsupported expression function"** error instead of silently producing a wrong query. If you hit one you need, open an issue.
+
+Example — extract a number from a string and treat it numerically:
+
+```text
+float(regexextract([code], "[0-9]+"))
+```
+
 ## :warning: Limitations and Known Issues
 
 - **Aggregations**: Basic aggregations in Query Builder's "Summarize" are supported — **Count**, **Count distinct**, **Sum**, **Average**, **Minimum**, **Maximum** — with an optional group-by (breakout). `Count` compiles to `COUNT(DISTINCT ?subject)`, so grouping by a multi-valued property counts *entities* per group rather than fanned-out solution rows. Advanced aggregations (standard deviation, percentiles, cumulative sum/count, expression aggregations) and post-aggregation filtering (`HAVING`) are not supported.
