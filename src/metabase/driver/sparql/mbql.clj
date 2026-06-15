@@ -313,6 +313,45 @@
     (when (and (vector? arg) (= :field (first arg)))
       arg)))
 
+(defn- aggregation-output-name
+  "Metabase's default result-column name for an aggregation clause — the name a
+   *later* stage uses to reference the aggregation as a plain field (e.g. drilling
+   on a count value adds a filter `[:< [:field \"count\" …] 12]`). An
+   `:aggregation-options` `:name` wins; otherwise it is derived from the operator
+   (`:distinct` reports as `\"count\"`, matching Metabase). Returns nil for
+   operators with no stable default name."
+  [agg]
+  (or (when (and (sequential? agg) (= :aggregation-options (first agg)))
+        (:name (nth agg 2 nil)))
+      (let [op (when (sequential? (unwrap-aggregation agg))
+                 (first (unwrap-aggregation agg)))]
+        (case op
+          (:count :cum-count) "count"
+          :distinct           "count"
+          (:sum :cum-sum)     "sum"
+          :avg                "avg"
+          :min                "min"
+          :max                "max"
+          :stddev             "stddev"
+          :median             "median"
+          nil))))
+
+(defn- aggregation-name->var
+  "Map each aggregation in `aggregations` from the name a later stage references
+   it by ([[aggregation-output-name]]) to its SPARQL variable (`ag_0`, `ag_1`, …),
+   so an outer stage's filter/order-by on an aggregation result resolves. Duplicate
+   names are disambiguated `name`, `name_2`, `name_3`, … the way Metabase dedupes."
+  [aggregations]
+  (let [seen (atom {})]
+    (into {}
+          (keep-indexed
+           (fn [i agg]
+             (when-let [nm (aggregation-output-name agg)]
+               (let [n   (get (swap! seen update nm (fnil inc 0)) nm)
+                     nm* (if (> n 1) (str nm "_" n) nm)]
+                 [nm* (str "ag_" i)])))
+           aggregations))))
+
 (defn- aggregation->projection
   "Compile one aggregation clause to a SPARQL projection
    `{:select \"(EXPR AS ?ag_N)\" :var \"ag_N\"}`. `token->var` resolves a field
@@ -770,7 +809,11 @@
         passthrough-vars (vec (concat (:vars inner) (map :var remap-entries)))
         ;; The sub-SELECT already projects these by name, so resolving an outer
         ;; field token (a string-named source-query column) is just sanitizing it.
-        field-id->var    (into {} (for [v passthrough-vars] [v (sanitize-var-name v)]))
+        ;; Aggregation results are the exception: the inner stage names them `ag_N`,
+        ;; but a later stage references them by Lib's name (`count`, `sum`, …), so we
+        ;; add those aliases (drilling on an aggregation value relies on this).
+        field-id->var    (merge (into {} (for [v passthrough-vars] [v (sanitize-var-name v)]))
+                                (aggregation-name->var (:aggregation (:source-query stage))))
         pair->target-var (into {} (for [{:keys [tid alias var]} remap-entries]
                                     [[tid alias] var]))
         token->var       (fn [tok] (var-for-token tok field-id->var pair->target-var))
@@ -825,6 +868,20 @@
                                  (update acc :vars conj (str "undefined_" (swap! placeholder inc))))))
                            {:vars [] :optionals []}
                            expected-cols)))
+        ;; Lib-name → SPARQL-var, so an outer filter/order-by referencing an inner
+        ;; column by Lib's name resolves even when the driver's invented var name
+        ;; differs (joined breakout columns become `?<alias>__<field>`, aggregations
+        ;; become `?ag_N`). `reconciled` produces exactly one var per `expected-col`
+        ;; in order, so they zip positionally; both `:name` and any
+        ;; `:lib/desired-column-alias` are keyed in case the ref uses either.
+        expected-name->var (when reconciled
+                             (into {}
+                                   (mapcat (fn [col v]
+                                             (keep (fn [k] (when k [k v]))
+                                                   [(:name col) (:lib/desired-column-alias col)]))
+                                           expected-cols (:vars reconciled))))
+        ;; The map used to resolve the outer stage's own filter/order-by clauses.
+        outer-field-id->var (merge field-id->var expected-name->var)
         result-vars   (cond
                         agg?           (vec (concat breakout-vars (keep :var agg-projections)))
                         reconciled     (vec (:vars reconciled))
@@ -838,10 +895,10 @@
         group-by-clause (when (and agg? (seq breakout-vars))
                           (str "GROUP BY " (str/join " " (map #(str "?" %) breakout-vars))))
         order-clause  (if agg?
-                        (compile-agg-order-by order-by field-id->var pair->target-var)
-                        (compile-order-by order-by field-id->var pair->target-var))
+                        (compile-agg-order-by order-by outer-field-id->var pair->target-var)
+                        (compile-order-by order-by outer-field-id->var pair->target-var))
         filters       (when filter-clause
-                        (or (compile-basic-filter filter-clause field-id->var pair->target-var) []))
+                        (or (compile-basic-filter filter-clause outer-field-id->var pair->target-var) []))
         query         (str (str/trim select-part) "\n"
                            "WHERE {\n"
                            "  {\n" (:sparql inner) "\n  }\n"

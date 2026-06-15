@@ -423,6 +423,60 @@
         (is (str/includes? sparql "(COUNT(*) AS ?ag_0)"))
         (is (str/includes? sparql "GROUP BY ?naam"))))))
 
+(deftest compile-derived-stage-filter-on-aggregation-test
+  (with-fixture
+    (testing "drilling on an aggregation value (filter references it by Lib's name) is applied"
+      (let [card {:source-table 100 :aggregation [[:count]] :breakout [[:field 2 nil]]}
+            {:keys [sparql vars]}
+            (compile-stage* {:source-query card
+                             :filter [:< [:field "count" nil] 12]})]
+        (is (= ["naam" "ag_0"] vars))
+        (is (str/includes? sparql "FILTER (?ag_0 < 12)")
+            "the `count` column reference resolves to the ?ag_0 SPARQL variable")))
+    (testing "a named aggregation resolves by its :aggregation-options name"
+      (let [card {:source-table 100
+                  :aggregation [[:aggregation-options [:sum [:field 3 nil]] {:name "total"}]]
+                  :breakout    [[:field 2 nil]]}
+            {:keys [sparql]}
+            (compile-stage* {:source-query card
+                             :filter [:>= [:field "total" nil] 100]})]
+        (is (str/includes? sparql "FILTER (?ag_0 >= 100)"))))
+    (testing "duplicate aggregation names are disambiguated count, count_2, …"
+      (let [f @#'mbql/aggregation-name->var]
+        (is (= {"count" "ag_0" "count_2" "ag_1"}
+               (f [[:count] [:distinct [:field 3 nil]]])))))))
+
+(deftest compile-derived-stage-filter-on-joined-breakout-test
+  (with-fixture
+    (testing "an outer filter on a joined breakout column resolves via Lib's expected-cols name"
+      (let [card {:source-table 100
+                  :aggregation [[:count]]
+                  :breakout    [[:field 10 {:join-alias "Place"}]]
+                  :joins       [{:alias "Place" :fk-field-id 4}]}
+            ;; Lib names the joined breakout column "Birthplace" — different from the
+            ;; driver's invented SPARQL var "Place__label".
+            expected [{:name "Birthplace"} {:name "count"}]
+            {:keys [sparql vars]}
+            (@#'mbql/compile-derived-stage
+             {:source-query card
+              :filter [:= [:field "Birthplace" nil] "Leuven"]}
+             expected)]
+        (is (= ["Place__label" "ag_0"] vars))
+        (is (str/includes? sparql "FILTER (?Place__label = \"Leuven\")")
+            "the Lib column name resolves to the joined SPARQL variable")))
+    (testing "the same name-aliasing applies to order-by on a joined breakout column"
+      (let [card {:source-table 100
+                  :aggregation [[:count]]
+                  :breakout    [[:field 10 {:join-alias "Place"}]]
+                  :joins       [{:alias "Place" :fk-field-id 4}]}
+            expected [{:name "Birthplace"} {:name "count"}]
+            {:keys [sparql]}
+            (@#'mbql/compile-derived-stage
+             {:source-query card
+              :order-by [[:asc [:field "Birthplace" nil]]]}
+             expected)]
+        (is (str/includes? sparql "ORDER BY ASC(?Place__label)"))))))
+
 ;; ---------------------------------------------------------------------------
 ;; Lib-driven projection (the column-count-mismatch fix)
 ;; ---------------------------------------------------------------------------
