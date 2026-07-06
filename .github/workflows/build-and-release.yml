@@ -31,7 +31,7 @@ jobs:
 
       - name: Restore Clojure dependencies cache
         id: cache-clojure
-        uses: actions/cache/restore@v5
+        uses: actions/cache/restore@v6
         with:
           path: |
             ~/.m2/repository
@@ -49,7 +49,7 @@ jobs:
 
       - name: Save Clojure dependencies cache
         if: always() && steps.cache-clojure.outputs.cache-hit != 'true'
-        uses: actions/cache/save@v5
+        uses: actions/cache/save@v6
         with:
           path: |
             ~/.m2/repository
@@ -80,7 +80,7 @@ jobs:
 
       - name: Restore Clojure dependencies cache
         id: cache-clojure
-        uses: actions/cache/restore@v5
+        uses: actions/cache/restore@v6
         with:
           path: |
             ~/.m2/repository
@@ -98,7 +98,7 @@ jobs:
 
       - name: Save Clojure dependencies cache
         if: always() && steps.cache-clojure.outputs.cache-hit != 'true'
-        uses: actions/cache/save@v5
+        uses: actions/cache/save@v6
         with:
           path: |
             ~/.m2/repository
@@ -129,7 +129,7 @@ jobs:
 
       - name: Restore Clojure dependencies cache
         id: cache-clojure
-        uses: actions/cache/restore@v5
+        uses: actions/cache/restore@v6
         with:
           path: |
             ~/.m2/repository
@@ -151,7 +151,7 @@ jobs:
 
       - name: Save Clojure dependencies cache
         if: always() && steps.cache-clojure.outputs.cache-hit != 'true'
-        uses: actions/cache/save@v5
+        uses: actions/cache/save@v6
         with:
           path: |
             ~/.m2/repository
