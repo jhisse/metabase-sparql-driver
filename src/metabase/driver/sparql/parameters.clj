@@ -14,6 +14,7 @@
    [clojure.string :as str]
    [metabase.driver.common.parameters :as params]
    [metabase.driver.common.parameters.values :as params.values]
+   [metabase.driver.sparql.uri :as uri]
    [metabase.util.log :as log])
   (:import
    (java.util.regex Matcher Pattern)))
@@ -27,14 +28,11 @@
      (re-find #"^(?:https?://|urn:)" s))))
 
 (defn- escape-sparql-string
-  "Escape characters that would break a SPARQL double-quoted string literal."
+  "Escape characters that would break a SPARQL double-quoted string literal.
+   Delegates to the shared [[metabase.driver.sparql.uri/escape-string]] so the
+   driver has a single canonical escaper."
   [s]
-  (-> s
-      (str/replace "\\" "\\\\")
-      (str/replace "\"" "\\\"")
-      (str/replace "\n" "\\n")
-      (str/replace "\r" "\\r")
-      (str/replace "\t" "\\t")))
+  (uri/escape-string s))
 
 (defn- unsupported-record?
   "True for parameter value records we cannot meaningfully render in SPARQL:
@@ -82,7 +80,7 @@
                               (when (seq terms)
                                 (str/join ", " terms)))
       (or (boolean? v) (number? v)) (str v)
-      (iri-shaped? v)       (str "<" v ">")
+      (iri-shaped? v)       (uri/iri-ref v)
       (string? v)           (str "\"" (escape-sparql-string v) "\"")
       :else                 (do (log/warnf "[sparql.params] Unrecognized parameter value class %s; falling back to (str v)"
                                            (class v))

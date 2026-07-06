@@ -34,3 +34,28 @@
   (and (not (str/blank? default-graph))
        (string? uri)
        (not (str/starts-with? uri default-graph))))
+
+(defn escape-string
+  "Escape characters that would break a SPARQL double-quoted string literal.
+   Returns the escaped body only; callers wrap it in `\"...\"`. Backslash is
+   escaped first so the other escapes' backslashes are not doubled again."
+  [s]
+  (-> (str s)
+      (str/replace "\\" "\\\\")
+      (str/replace "\"" "\\\"")
+      (str/replace "\n" "\\n")
+      (str/replace "\r" "\\r")
+      (str/replace "\t" "\\t")))
+
+(defn iri-ref
+  "Render `v` as a SPARQL IRIREF `<...>`. Percent-encodes the characters the
+   IRIREF grammar forbids inside the brackets — spaces, control chars (0x00-0x20),
+   and any of < > \" { } | ^ backtick backslash — so a value cannot close the
+   `<...>` early or otherwise break/inject the query. IRIREF has no backslash
+   escaping, so percent-encoding is the only safe transform. A well-formed IRI
+   passes through unchanged."
+  [v]
+  (let [encoded (str/replace (str v)
+                             #"[\x00-\x20<>\"{}|^`\\]"
+                             (fn [m] (format "%%%02X" (int (first m)))))]
+    (str "<" encoded ">")))

@@ -47,6 +47,15 @@
                                     :target [:variable [:template-tag "cls"]]
                                     :value "https://data.example.org/Item"}]})))))
 
+(deftest iri-parameter-with-illegal-chars-is-percent-encoded
+  (testing "A scheme-shaped value with IRIREF-illegal chars is percent-encoded, not leaked raw"
+    (is (= "SELECT * WHERE { ?s a <https://ex.org/a%3E%20b> }"
+           (subst {:query         "SELECT * WHERE { ?s a {{cls}} }"
+                   :template-tags {"cls" {:name "cls" :display-name "Class" :type :text}}
+                   :parameters    [{:type "category"
+                                    :target [:variable [:template-tag "cls"]]
+                                    :value "https://ex.org/a> b"}]})))))
+
 (deftest whitespace-inside-braces-is-tolerated
   (testing "`{{ name }}` and `{{name}}` are both substituted"
     (is (= "SELECT * WHERE { ?s rdfs:label \"Alice\" }"

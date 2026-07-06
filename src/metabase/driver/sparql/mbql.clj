@@ -178,11 +178,11 @@
   "Convert a value to a SPARQL literal."
   [v]
   (cond
-    (string? v) (str "\"" (str/replace v "\"" "\\\"") "\"")
+    (string? v) (str "\"" (uri/escape-string v) "\"")
     (number? v) (str v)
     (boolean? v) (if v "true" "false")
     (nil? v) ""
-    :else (str "\"" (str/replace (str v) "\"" "\\\"") "\"")))
+    :else (str "\"" (uri/escape-string (str v)) "\"")))
 
 (defn- compile-filter-expr
   "Compile a filter clause to a SPARQL boolean expression string."

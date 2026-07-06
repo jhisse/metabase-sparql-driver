@@ -44,7 +44,13 @@
     (is (= "false" (f false)))
     (is (= "" (f nil)))
     (testing "embedded double quotes are escaped"
-      (is (= "\"a\\\"b\"" (f "a\"b"))))))
+      (is (= "\"a\\\"b\"" (f "a\"b"))))
+    (testing "backslashes are escaped (a trailing one no longer swallows the closing quote)"
+      (is (= "\"foo\\\\\"" (f "foo\\")))
+      (is (= "\"a\\\\b\"" (f "a\\b"))))
+    (testing "newlines/tabs are escaped so the literal stays single-line"
+      (is (= "\"a\\nb\"" (f "a\nb")))
+      (is (= "\"a\\tb\"" (f "a\tb"))))))
 
 (deftest condition->fk-ref-test
   (let [fk-ref @#'mbql/condition->fk-ref
