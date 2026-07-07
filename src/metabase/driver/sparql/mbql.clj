@@ -83,7 +83,7 @@
    language."
   [var-name lang]
   (format "  FILTER(!BOUND(?%s) || LANG(?%s) = \"%s\" || LANG(?%s) = \"\")"
-          var-name var-name lang var-name))
+          var-name var-name (uri/escape-string lang) var-name))
 
 (defn- table-id->class-uri
   "Resolve RDF class URI (table name) from :source-table."
@@ -178,11 +178,11 @@
   "Convert a value to a SPARQL literal."
   [v]
   (cond
-    (string? v) (str "\"" (uri/escape-string v) "\"")
+    (string? v) (uri/string-literal v)
     (number? v) (str v)
     (boolean? v) (if v "true" "false")
     (nil? v) ""
-    :else (str "\"" (uri/escape-string (str v)) "\"")))
+    :else (uri/string-literal v)))
 
 (defn- compile-filter-expr
   "Compile a filter clause to a SPARQL boolean expression string."
@@ -262,7 +262,7 @@
   ([property-uri target-var]
    (emit-optional-triple "subject" property-uri target-var))
   ([source-var property-uri target-var]
-   (format "  OPTIONAL { ?%s <%s> ?%s . }" source-var property-uri target-var)))
+   (format "  OPTIONAL { ?%s %s ?%s . }" source-var (uri/iri-ref property-uri) target-var)))
 
 (defn- joined-var-name
   "Build a SPARQL var name for a joined column: `<alias>__<field-name>`,
@@ -735,7 +735,7 @@
         order-clause (if agg?
                        (compile-agg-order-by order-by field-id->var pair->target-var)
                        (compile-order-by order-by field-id->var pair->target-var))
-        where-body  (->> (concat [(format "  ?subject a <%s> ." class-uri)]
+        where-body  (->> (concat [(format "  ?subject a %s ." (uri/iri-ref class-uri))]
                                  triples-for-fields
                                  triples-for-extras
                                  join-fk-triples

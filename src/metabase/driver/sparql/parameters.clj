@@ -19,14 +19,6 @@
   (:import
    (java.util.regex Matcher Pattern)))
 
-(defn- iri-shaped?
-  "Heuristic: a string that looks like an absolute IRI we should wrap in `<...>`.
-   We accept `http(s)://...` and `urn:...` shapes; anything else stays a literal."
-  [s]
-  (boolean
-   (when (string? s)
-     (re-find #"^(?:https?://|urn:)" s))))
-
 (defn- unsupported-record?
   "True for parameter value records we cannot meaningfully render in SPARQL:
    FieldFilter (SQL-shaped BETWEEN/IN clauses), referenced cards, snippets, and
@@ -73,11 +65,11 @@
                               (when (seq terms)
                                 (str/join ", " terms)))
       (or (boolean? v) (number? v)) (str v)
-      (iri-shaped? v)       (uri/iri-ref v)
-      (string? v)           (str "\"" (uri/escape-string v) "\"")
+      (uri/iri-shaped? v)   (uri/iri-ref v)
+      (string? v)           (uri/string-literal v)
       :else                 (do (log/warnf "[sparql.params] Unrecognized parameter value class %s; falling back to (str v)"
                                            (class v))
-                                (str "\"" (uri/escape-string (str v)) "\"")))))
+                                (uri/string-literal v)))))
 
 (defn- substitute-one
   "Replace every `{{tag}}` placeholder for `tag-name` in `query` with `term`.

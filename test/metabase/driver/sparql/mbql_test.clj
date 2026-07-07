@@ -8,7 +8,8 @@
    full compile path can be exercised without a running Metabase app DB."
   (:require [clojure.string :as str]
             [clojure.test :refer :all]
-            [metabase.driver.sparql.mbql :as mbql]))
+            [metabase.driver.sparql.mbql :as mbql]
+            [metabase.driver.sparql.uri :as uri]))
 
 ;; ---------------------------------------------------------------------------
 ;; Pure helpers
@@ -120,7 +121,32 @@
       (is (= "((?naam = \"Jan\") && (?leeftijd > 18))"
              (f [:and [:= [:field "naam" nil] "Jan"] [:> [:field "leeftijd" nil] 18]])))
       (is (= "((?naam = \"Jan\") || (?naam = \"Piet\"))"
-             (f [:or [:= [:field "naam" nil] "Jan"] [:= [:field "naam" nil] "Piet"]]))))))
+             (f [:or [:= [:field "naam" nil] "Jan"] [:= [:field "naam" nil] "Piet"]]))))
+    (testing "a dangerous rhs (quote + backslash) is routed through the shared escaper, so the emitted SPARQL literal stays well-formed"
+      (is (= (str "(?naam = " (uri/string-literal "a\"b\\") ")")
+             (f [:= [:field "naam" nil] "a\"b\\"]))))
+    (testing "a dangerous :contains needle is escaped inside STR() too"
+      (is (= (str "(CONTAINS(STR(?naam), " (uri/string-literal "a\"b") "))")
+             (f [:contains [:field "naam" nil] "a\"b"]))))))
+
+(deftest emit-optional-triple-escapes-iri-test
+  (let [emit @#'mbql/emit-optional-triple]
+    (testing "the property IRI is routed through uri/iri-ref, so an illegal char is percent-encoded"
+      (is (= (str "  OPTIONAL { ?subject " (uri/iri-ref "http://ex.org/a b") " ?t . }")
+             (emit "http://ex.org/a b" "t")))
+      ;; a normal property URI is unchanged (iri-ref is a no-op)
+      (is (= "  OPTIONAL { ?s <http://ex.org/name> ?t . }"
+             (emit "s" "http://ex.org/name" "t"))))))
+
+(deftest lang-filter-line-escapes-tag-test
+  (let [lang-line @#'mbql/lang-filter-line]
+    (testing "an escapable char in the language tag is escaped, not leaked raw into the FILTER literal"
+      (is (= (str "  FILTER(!BOUND(?naam) || LANG(?naam) = \""
+                  (uri/escape-string "en\"") "\" || LANG(?naam) = \"\")")
+             (lang-line "naam" "en\""))))
+    (testing "a normal BCP-47 tag is unchanged"
+      (is (= "  FILTER(!BOUND(?naam) || LANG(?naam) = \"pt-BR\" || LANG(?naam) = \"\")"
+             (lang-line "naam" "pt-BR"))))))
 
 (deftest between-filter-test
   (let [f #(@#'mbql/compile-filter-expr % {"leeftijd" "leeftijd"} {})]

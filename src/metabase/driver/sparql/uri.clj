@@ -37,8 +37,9 @@
 
 (defn escape-string
   "Escape characters that would break a SPARQL double-quoted string literal.
-   Returns the escaped body only; callers wrap it in `\"...\"`. Backslash is
-   escaped first so the other escapes' backslashes are not doubled again."
+   Returns the escaped body only; callers wrap it in `\"...\"` (or use
+   [[string-literal]]). Backslash is escaped first so the other escapes'
+   backslashes are not doubled again."
   [s]
   (-> (str s)
       (str/replace "\\" "\\\\")
@@ -47,13 +48,31 @@
       (str/replace "\r" "\\r")
       (str/replace "\t" "\\t")))
 
+(defn string-literal
+  "Render `v` as a complete SPARQL double-quoted string literal, escaping the
+   body via [[escape-string]] and wrapping it in quotes. The literal counterpart
+   to [[iri-ref]]."
+  [v]
+  (str "\"" (escape-string v) "\""))
+
+(defn iri-shaped?
+  "Heuristic: a string that looks like an absolute IRI we should render as
+   `<...>` (via [[iri-ref]]) rather than a quoted literal. Accepts `http(s)://`
+   and `urn:` shapes; anything else stays a literal. Deliberately narrower than
+   [[absolute-uri]]'s scheme check — that one answers \"already has a scheme,
+   don't prepend the base\", which is a different question."
+  [s]
+  (boolean
+   (when (string? s)
+     (re-find #"^(?:https?://|urn:)" s))))
+
 (defn iri-ref
-  "Render `v` as a SPARQL IRIREF `<...>`. Percent-encodes the characters the
-   IRIREF grammar forbids inside the brackets — spaces, control chars (0x00-0x20),
-   and any of < > \" { } | ^ backtick backslash — so a value cannot close the
-   `<...>` early or otherwise break/inject the query. IRIREF has no backslash
-   escaping, so percent-encoding is the only safe transform. A well-formed IRI
-   passes through unchanged."
+  "Render `v` as a SPARQL IRIREF `<...>`. Percent-encodes every character the
+   IRIREF grammar forbids inside the brackets (the char class below is the
+   single source of truth) so a value cannot close the `<...>` early or
+   otherwise break/inject the query. IRIREF has no backslash escaping, so
+   percent-encoding is the only safe transform. A well-formed IRI passes
+   through unchanged."
   [v]
   (let [encoded (str/replace (str v)
                              #"[\x00-\x20<>\"{}|^`\\]"
