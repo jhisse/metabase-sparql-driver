@@ -27,13 +27,6 @@
    (when (string? s)
      (re-find #"^(?:https?://|urn:)" s))))
 
-(defn- escape-sparql-string
-  "Escape characters that would break a SPARQL double-quoted string literal.
-   Delegates to the shared [[metabase.driver.sparql.uri/escape-string]] so the
-   driver has a single canonical escaper."
-  [s]
-  (uri/escape-string s))
-
 (defn- unsupported-record?
   "True for parameter value records we cannot meaningfully render in SPARQL:
    FieldFilter (SQL-shaped BETWEEN/IN clauses), referenced cards, snippets, and
@@ -81,10 +74,10 @@
                                 (str/join ", " terms)))
       (or (boolean? v) (number? v)) (str v)
       (iri-shaped? v)       (uri/iri-ref v)
-      (string? v)           (str "\"" (escape-sparql-string v) "\"")
+      (string? v)           (str "\"" (uri/escape-string v) "\"")
       :else                 (do (log/warnf "[sparql.params] Unrecognized parameter value class %s; falling back to (str v)"
                                            (class v))
-                                (str "\"" (escape-sparql-string (str v)) "\"")))))
+                                (str "\"" (uri/escape-string (str v)) "\"")))))
 
 (defn- substitute-one
   "Replace every `{{tag}}` placeholder for `tag-name` in `query` with `term`.
