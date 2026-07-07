@@ -14,27 +14,10 @@
    [clojure.string :as str]
    [metabase.driver.common.parameters :as params]
    [metabase.driver.common.parameters.values :as params.values]
+   [metabase.driver.sparql.uri :as uri]
    [metabase.util.log :as log])
   (:import
    (java.util.regex Matcher Pattern)))
-
-(defn- iri-shaped?
-  "Heuristic: a string that looks like an absolute IRI we should wrap in `<...>`.
-   We accept `http(s)://...` and `urn:...` shapes; anything else stays a literal."
-  [s]
-  (boolean
-   (when (string? s)
-     (re-find #"^(?:https?://|urn:)" s))))
-
-(defn- escape-sparql-string
-  "Escape characters that would break a SPARQL double-quoted string literal."
-  [s]
-  (-> s
-      (str/replace "\\" "\\\\")
-      (str/replace "\"" "\\\"")
-      (str/replace "\n" "\\n")
-      (str/replace "\r" "\\r")
-      (str/replace "\t" "\\t")))
 
 (defn- unsupported-record?
   "True for parameter value records we cannot meaningfully render in SPARQL:
@@ -82,11 +65,11 @@
                               (when (seq terms)
                                 (str/join ", " terms)))
       (or (boolean? v) (number? v)) (str v)
-      (iri-shaped? v)       (str "<" v ">")
-      (string? v)           (str "\"" (escape-sparql-string v) "\"")
+      (uri/iri-shaped? v)   (uri/iri-ref v)
+      (string? v)           (uri/string-literal v)
       :else                 (do (log/warnf "[sparql.params] Unrecognized parameter value class %s; falling back to (str v)"
                                            (class v))
-                                (str "\"" (escape-sparql-string (str v)) "\"")))))
+                                (uri/string-literal v)))))
 
 (defn- substitute-one
   "Replace every `{{tag}}` placeholder for `tag-name` in `query` with `term`.

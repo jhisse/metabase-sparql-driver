@@ -47,6 +47,15 @@
                                     :target [:variable [:template-tag "cls"]]
                                     :value "https://data.example.org/Item"}]})))))
 
+(deftest iri-parameter-with-illegal-chars-is-percent-encoded
+  (testing "A scheme-shaped value with IRIREF-illegal chars is percent-encoded, not leaked raw"
+    (is (= "SELECT * WHERE { ?s a <https://ex.org/a%3E%20b> }"
+           (subst {:query         "SELECT * WHERE { ?s a {{cls}} }"
+                   :template-tags {"cls" {:name "cls" :display-name "Class" :type :text}}
+                   :parameters    [{:type "category"
+                                    :target [:variable [:template-tag "cls"]]
+                                    :value "https://ex.org/a> b"}]})))))
+
 (deftest whitespace-inside-braces-is-tolerated
   (testing "`{{ name }}` and `{{name}}` are both substituted"
     (is (= "SELECT * WHERE { ?s rdfs:label \"Alice\" }"
@@ -71,6 +80,15 @@
                    :parameters    [{:type "category"
                                     :target [:variable [:template-tag "cls"]]
                                     :value ["https://ex.org/A" "https://ex.org/B"]}]})))))
+
+(deftest multi-value-percent-encodes-illegal-chars-per-element
+  (testing "Each IRI element of an IN(...) list is individually percent-encoded"
+    (is (= "SELECT * WHERE { ?s a ?c FILTER (?c IN (<https://ex.org/a%3Eb>, <https://ex.org/c%20d>)) }"
+           (subst {:query         "SELECT * WHERE { ?s a ?c FILTER (?c IN ({{cls}})) }"
+                   :template-tags {"cls" {:name "cls" :display-name "Class" :type :text}}
+                   :parameters    [{:type "category"
+                                    :target [:variable [:template-tag "cls"]]
+                                    :value ["https://ex.org/a>b" "https://ex.org/c d"]}]})))))
 
 (deftest value-with-regex-meta-chars-survives
   (testing "A `$` or `\\` in the value is not interpreted as a regex backreference"
