@@ -509,8 +509,9 @@ make docker-build
 - `make lint`: Lint code using clj-kondo
 - `make format`: Format code using cljfmt
 - `make splint`: Run splint static code analysis
-- `make test`: Run tests
-- `make coverage`: Run tests with coverage analysis
+- `make test`: Run the hermetic unit tests
+- `make smoke`: Run the smoke/integration tests against an ephemeral Oxigraph endpoint (requires Docker)
+- `make coverage`: Run the unit tests with coverage analysis
 - `make docker-build`: Build docker image
 - `make docker-run`: Run docker image
 - `make docker-stop`: Stop docker image

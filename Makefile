@@ -13,7 +13,7 @@ METABASE_PATH := $(MAKEFILE_DIR)/metabase
 # Target directory for the compiled driver
 TARGET_DIR := $(DRIVER_PATH)/target
 
-.PHONY: build clean init-metabase help all lint format splint test coverage
+.PHONY: build clean init-metabase help all lint format splint test smoke coverage
 
 # Default rule
 all: build
@@ -80,11 +80,18 @@ splint:
 	clojure -M:splint
 	@echo "Splint analysis completed."
 
-# Run tests
+# Run unit tests (hermetic; excludes the :integration smoke suite)
 test:
 	@echo "Running tests..."
-	clojure -X:test
+	clojure -X:test :excludes '[:integration]'
 	@echo "Tests completed."
+
+# Run the smoke/integration suite against an ephemeral Oxigraph endpoint.
+# Requires Docker (Compose v2) and an initialized metabase/ submodule.
+smoke:
+	@echo "Running smoke/integration tests..."
+	@bash bin/smoke-test.sh
+	@echo "Smoke tests completed."
 
 # Run tests with coverage analysis
 coverage:
@@ -133,7 +140,8 @@ help:
 	@echo "  make lint                - Lint code using clj-kondo"
 	@echo "  make format              - Format code using cljfmt"
 	@echo "  make splint              - Run splint static code analysis"
-	@echo "  make test                - Run tests"
+	@echo "  make test                - Run unit tests (hermetic)"
+	@echo "  make smoke               - Run smoke/integration tests (ephemeral Oxigraph via Docker)"
 	@echo "  make coverage            - Run tests with coverage analysis"
 	@echo "  make docker-build        - Build docker image"
 	@echo "  make docker-run          - Run docker image"
