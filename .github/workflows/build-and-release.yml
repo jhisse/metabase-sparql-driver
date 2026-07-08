@@ -106,10 +106,60 @@ jobs:
             ~/.deps.clj
           key: ${{ runner.os }}-clojure-${{ hashFiles('deps.edn', 'metabase/deps.edn') }}-${{ github.run_id }}
 
+  smoke:
+    name: Smoke Tests
+    runs-on: ubuntu-latest
+    needs: lint
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+        with:
+          submodules: 'recursive'
+
+      - name: Setup Java
+        uses: actions/setup-java@v5
+        with:
+          distribution: 'temurin'
+          java-version: '21'
+
+      - name: Setup Clojure Tools
+        uses: DeLaGuardo/setup-clojure@13.6.1
+        with:
+          cli: latest
+
+      - name: Restore Clojure dependencies cache
+        id: cache-clojure
+        uses: actions/cache/restore@v6
+        with:
+          path: |
+            ~/.m2/repository
+            ~/.gitlibs
+            ~/.deps.clj
+          key: ${{ runner.os }}-clojure-${{ hashFiles('deps.edn', 'metabase/deps.edn') }}
+          restore-keys: |
+            ${{ runner.os }}-clojure-
+
+      - name: Run Smoke Tests
+        run: make smoke
+
+      - name: Save Clojure dependencies cache
+        if: always() && steps.cache-clojure.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v6
+        with:
+          path: |
+            ~/.m2/repository
+            ~/.gitlibs
+            ~/.deps.clj
+          key: ${{ runner.os }}-clojure-${{ hashFiles('deps.edn', 'metabase/deps.edn') }}-${{ github.run_id }}-smoke
+
   build:
     name: Build Driver
     runs-on: ubuntu-latest
-    needs: tests
+    # Release chain (build -> release -> docker push) depends on the hermetic unit
+    # tests only, so a transient Docker/ghcr hiccup in `smoke` cannot block a
+    # release. `smoke` still runs on every push/PR (needs: lint) as a gate for
+    # merges via branch protection.
+    needs: [tests]
     steps:
       - name: Checkout code
         uses: actions/checkout@v7

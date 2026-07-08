@@ -24,6 +24,7 @@ Run the full checklist (see also the PR template):
 make lint
 make splint
 make test    # requires Java 21+ and the metabase/ submodule (make init-metabase)
+make smoke   # integration tests against an ephemeral Oxigraph endpoint (requires Docker)
 make format  # if you changed Clojure sources
 ```
 

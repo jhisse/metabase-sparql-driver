@@ -1,0 +1,23 @@
+# Fixture dataset for the smoke/integration suite (test/metabase/driver/sparql/smoke_test.clj).
+#
+# Loaded into an ephemeral Oxigraph endpoint by bin/smoke-test.sh via the SPARQL
+# Graph Store Protocol. Kept deliberately tiny: two RDF classes so describe-database
+# discovers two "tables", and a Person with several properties so describe-table
+# discovers several "columns".
+# The ex: namespace is the dataset's graph IRI; bin/smoke-test.sh (SPARQL_TEST_GRAPH,
+# default https://example.org/) seeds these triples into that named graph and the
+# test queries it. Keep this prefix equal to that default.
+@prefix ex:   <https://example.org/> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+
+ex:alice a ex:Person ;
+    rdfs:label "Alice" ;
+    ex:age 30 ;
+    ex:knows ex:bob .
+
+ex:bob a ex:Person ;
+    rdfs:label "Bob" ;
+    ex:age 25 .
+
+ex:acme a ex:Company ;
+    rdfs:label "Acme Inc" .

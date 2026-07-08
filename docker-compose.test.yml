@@ -1,0 +1,10 @@
+# Ephemeral SPARQL endpoint for the smoke/integration suite.
+# Brought up, seeded, and torn down by bin/smoke-test.sh (and by `make smoke`).
+# Not used by the hermetic `make test` run.
+services:
+  oxigraph:
+    # Pin the tag for reproducibility; never use `latest`.
+    image: ghcr.io/oxigraph/oxigraph:0.4.11
+    command: ["serve", "--bind", "0.0.0.0:7878"]
+    ports:
+      - "7878:7878"
