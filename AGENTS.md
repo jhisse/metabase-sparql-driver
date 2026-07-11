@@ -15,3 +15,5 @@ Read it and follow it strictly before making any change. In particular:
 - Never modify the `metabase/` submodule pointer
 - Source layout: driver code in `src/metabase/driver/sparql/`, tests mirror it in `test/`
 - MBQL → SPARQL compilation lives in `src/metabase/driver/sparql/mbql.clj`; result type coercion in `conversion.clj`; sync/schema discovery in `database.clj`, `shacl.clj`, `templates.clj`
+- Generating SPARQL: never string-concatenate a user-supplied value straight into a query. Route every literal through the one canonical string escaper and every IRI through a shared `<iri>` helper (validate/escape there). Filters, custom expressions, and parameters all feed the same query string — an unescaped `"`, `\`, newline, or `>` breaks the query or allows injection.
+- Before flipping a driver feature flag in `sparql.clj`, check the `metabase/` submodule for which MBQL clauses that feature gates (frontend clause `requiresFeature`), and confirm the compiler handles each one.
