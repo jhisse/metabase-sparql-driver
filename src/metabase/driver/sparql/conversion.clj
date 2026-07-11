@@ -115,30 +115,38 @@
       ;; Default case - strings and all other types
       :else value)))
 
+(def ^:private mixed-type-resolution
+  "When a column's observed base types differ, the most specific type that can
+   represent all of them. Any combination not listed here degrades to Text."
+  {#{:type/Integer :type/Float} :type/Float
+   #{:type/Date :type/DateTime} :type/DateTime})
+
 (defn determine-column-types
-  "Determines column types based on the first rows of the result.
-   Examines up to 20 rows and uses the most generic type when different types exist.
-    
+  "Determines column types from the result rows.
+   Scans every row (the bindings are already fully materialized in memory, so
+   this adds no I/O) instead of a fixed-size sample — a column whose first rows
+   are all null or all integers no longer misses a later type flip.
+
    Parameters:
      vars - List of variable names (columns) in the result
      bindings - List of bindings (rows) in the result
-    
+
    Returns:
      Map associating variable names to Metabase base types"
   [vars bindings]
-  (let [sample-rows (take 20 bindings)]
-    (reduce (fn [types var-name]
-              (let [var-key (keyword var-name)
-                    ;; Collect all non-null types from the first 20 rows
-                    column-types (for [row sample-rows
-                                       :let [binding (get row var-key)]
-                                       :when binding]
-                                   (sparql-type->base-type (:type binding) (:datatype binding)))
-                    ;; If we have different types or no type, use Text
-                    final-type (cond
-                                 (empty? column-types) :type/Text
-                                 (apply = column-types) (first column-types)
-                                 :else :type/Text)]
-                (assoc types var-name final-type)))
-            {}
-            vars)))
+  (reduce (fn [types var-name]
+            (let [var-key (keyword var-name)
+                  ;; Distinct non-null base types observed across all rows
+                  column-types (into #{}
+                                     (keep (fn [row]
+                                             (when-let [binding (get row var-key)]
+                                               (sparql-type->base-type (:type binding)
+                                                                       (:datatype binding)))))
+                                     bindings)
+                  final-type (cond
+                               (empty? column-types)      :type/Text
+                               (= 1 (count column-types)) (first column-types)
+                               :else (get mixed-type-resolution column-types :type/Text))]
+              (assoc types var-name final-type)))
+          {}
+          vars))

@@ -72,12 +72,40 @@
             [{:a {:type "literal" :datatype (str xsd "integer")} :b {:type "uri"}}
              {:a {:type "literal" :datatype (str xsd "integer")} :b {:type "uri"}}]))))
 
-  (testing "mixed types in one column collapse to text"
+  (testing "incompatible mixed types in one column collapse to text"
     (is (= {"a" :type/Text}
            (conversion/determine-column-types
             ["a"]
             [{:a {:type "literal" :datatype (str xsd "integer")}}
              {:a {:type "uri"}}]))))
+
+  (testing "integer + float promotes to float instead of text"
+    (is (= {"a" :type/Float}
+           (conversion/determine-column-types
+            ["a"]
+            [{:a {:type "literal" :datatype (str xsd "integer")}}
+             {:a {:type "literal" :datatype (str xsd "double")}}]))))
+
+  (testing "date + dateTime promotes to dateTime instead of text"
+    (is (= {"a" :type/DateTime}
+           (conversion/determine-column-types
+            ["a"]
+            [{:a {:type "literal" :datatype (str xsd "date")}}
+             {:a {:type "literal" :datatype (str xsd "dateTime")}}]))))
+
+  (testing "every row is scanned, not just a leading sample"
+    (let [int-row  {:a {:type "literal" :datatype (str xsd "integer")}}
+          uri-row  {:a {:type "uri"}}]
+      (testing "a type flip after row 20 is still seen"
+        (is (= {"a" :type/Text}
+               (conversion/determine-column-types
+                ["a"]
+                (concat (repeat 25 int-row) [uri-row])))))
+      (testing "a column whose first rows are all null still gets its real type"
+        (is (= {"a" :type/Integer}
+               (conversion/determine-column-types
+                ["a"]
+                (concat (repeat 25 {}) [int-row])))))))
 
   (testing "a column with no bindings defaults to text"
     (is (= {"a" :type/Text}
