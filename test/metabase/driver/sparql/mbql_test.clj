@@ -128,24 +128,40 @@
     (testing "a dangerous :contains needle is escaped inside STR() too"
       (is (= (str "(CONTAINS(STR(?naam), " (uri/string-literal "a\"b") "))")
              (f [:contains [:field "naam" nil] "a\"b"]))))
-    (testing "IRI-valued fields render a URL value as <IRI>, not a string literal"
+    (testing "IRI-valued fields render an IRI-shaped value as <IRI>, not a string literal"
       (with-redefs [mbql/field-id->metadata {5 {:name "country" :semantic-type :type/FK}
                                              6 {:name "homepage" :semantic-type :type/URL}
+                                             7 {:name "subject" :database-type "uri"}
                                              2 {:name "name" :database-type "string"}}]
-        (let [g #(@#'mbql/compile-filter-expr % {5 "country" 6 "homepage" 2 "name"} {})
+        (let [g #(@#'mbql/compile-filter-expr % {5 "country" 6 "homepage" 7 "subject" 2 "name"} {})
               iri "https://example.org/countries/AC28-7090"]
           (is (= (str "(?country = <" iri ">)")
                  (g [:= [:field 5 nil] iri]))
               "FK field + URL value → IRI term")
-          (is (= (str "(?homepage != <" iri ">)")
+          (is (= (str "(?country != <" iri ">)")
+                 (g [:!= [:field 5 nil] iri]))
+              ":!= routes through the same term rendering")
+          (is (= (str "(?subject = <" iri ">)")
+                 (g [:= [:field 7 nil] iri]))
+              "the subject/PK column (database-type \"uri\") is IRI-valued too")
+          (is (= (str "(?subject = " (uri/iri-ref "urn:isbn:0451450523") ")")
+                 (g [:= [:field 7 nil] "urn:isbn:0451450523"]))
+              "urn: values count as IRI-shaped")
+          (is (= (str "(?homepage != " (uri/string-literal iri) ")")
                  (g [:!= [:field 6 nil] iri]))
-              "URL field + URL value → IRI term")
+              ":type/URL columns hold literal xsd:anyURI values — they stay literals")
           (is (= "(?country = \"AC-123\")"
                  (g [:= [:field 5 nil] "AC-123"]))
-              "FK field + non-URL value stays a string literal")
+              "FK field + non-IRI-shaped value stays a string literal")
+          (is (= (str "(?country = " (uri/string-literal "Ref: 123") ")")
+                 (g [:= [:field 5 nil] "Ref: 123"]))
+              "an arbitrary word:-prefixed value is NOT treated as an IRI")
           (is (= (str "(?name = \"" iri "\")")
                  (g [:= [:field 2 nil] iri]))
-              "plain string field + URL-shaped value stays a string literal"))))))
+              "plain string field + IRI-shaped value stays a string literal")
+          (is (= (str "(?country = " (uri/iri-ref "https://x.example/> } UNION { ?s ?p ?o . #") ")")
+                 (g [:= [:field 5 nil] "https://x.example/> } UNION { ?s ?p ?o . #"]))
+              "a hostile value cannot close the IRIREF — forbidden chars are percent-encoded"))))))
 
 (deftest emit-optional-triple-escapes-iri-test
   (let [emit @#'mbql/emit-optional-triple]
