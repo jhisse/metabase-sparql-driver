@@ -161,3 +161,26 @@
   (testing "fks returns an empty seq for non-SHACL sync strategies"
     (is (= [] (database/fks {:details {:metadata-sync-strategy "auto"}})))
     (is (= [] (database/fks {:details {}})))))
+
+(deftest describe-table-explicit-with-prefixes-test
+  (let [details {:metadata-sync-strategy "explicit"
+                 :default-graph graph
+                 :namespace-prefixes "foaf=http://xmlns.com/foaf/0.1/"
+                 :schema-config (str "{\"tables\":[{\"name\":\"" graph "Persoon\","
+                                     "\"fields\":[\"" graph "naam\","
+                                     "\"http://xmlns.com/foaf/0.1/name\","
+                                     "\"http://other.org/x\"]}]}")}]
+    (testing "a prefix-namespace property syncs as prefix__localName"
+      (let [{:keys [fields]} (database/describe-table :sparql {:details details} {:name "Persoon"})
+            names (set (map :name fields))]
+        (is (contains? names "naam"))
+        (is (contains? names "foaf__name"))
+        (is (contains? names "http://other.org/x"))))
+    (testing "hide-foreign keeps prefix-namespace properties and drops the rest"
+      (let [{:keys [fields]} (database/describe-table
+                              :sparql
+                              {:details (assoc details :hide-foreign-uris true)}
+                              {:name "Persoon"})
+            names (set (map :name fields))]
+        (is (contains? names "foaf__name"))
+        (is (not (contains? names "http://other.org/x")))))))

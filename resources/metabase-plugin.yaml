@@ -44,11 +44,18 @@ driver:
       display-name: Default Language
       placeholder: nl
       description: 'BCP-47 language tag (e.g. nl, en). When set, queries against rdf:langString columns include a FILTER restricting to this language tag (plus untagged literals), and SHACL sh:name / sh:description literals are picked using this language first. Leave blank to disable.'
+    - name: namespace-prefixes
+      display-name: Namespace Prefixes
+      type: text
+      placeholder: |-
+        foaf=http://xmlns.com/foaf/0.1/
+        schema=https://schema.org/
+      description: 'One prefix=uri per line. Classes and properties under a listed namespace sync as prefix__localName (e.g. foaf__name) instead of their full URI, and count as local for "Hide URIs outside the Default Graph". Changing this after a sync renames the affected tables/fields, which Metabase treats as new ones — re-sync afterwards and expect saved questions on renamed fields to need fixing.'
     - name: hide-foreign-uris
       display-name: Hide URIs outside the Default Graph
       type: boolean
       default: false
-      description: When enabled, RDF classes and properties whose URI does not start with the Default Graph URI are skipped during sync.
+      description: When enabled, RDF classes and properties whose URI does not start with the Default Graph URI or a configured Namespace Prefix are skipped during sync.
     - advanced-options-start
     - name: metadata-sync-strategy
       display-name: Metadata Sync Strategy

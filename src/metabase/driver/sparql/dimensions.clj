@@ -76,18 +76,18 @@
    target tables / fields that haven't been synced yet (those are skipped at
    debug level — the next sync resolves them)."
   [database]
-  (let [db-id         (:id database)
-        default-graph (-> database :details :default-graph)
-        shapes        (shacl-shapes database)]
+  (let [db-id  (:id database)
+        naming (uri/naming-context (:details database))
+        shapes (shacl-shapes database)]
     (doseq [shape shapes
             prop  (:properties shape)
             :let  [display-uri (:display-value-property prop)
                    fk-class    (:fk-target-class prop)]
             :when (and display-uri fk-class)]
-      (let [src-table-name (uri/shorten-uri (:class-uri shape) default-graph)
-            src-field-name (uri/shorten-uri (:property-uri prop) default-graph)
-            tgt-table-name (uri/shorten-uri fk-class default-graph)
-            tgt-field-name (uri/shorten-uri display-uri default-graph)
+      (let [src-table-name (uri/shorten-uri (:class-uri shape) naming)
+            src-field-name (uri/shorten-uri (:property-uri prop) naming)
+            tgt-table-name (uri/shorten-uri fk-class naming)
+            tgt-field-name (uri/shorten-uri display-uri naming)
             src-field      (field-for db-id src-table-name src-field-name)
             tgt-field      (field-for db-id tgt-table-name tgt-field-name)]
         (cond
