@@ -77,7 +77,8 @@
 
    Returns:
      On success: [true, response-body] where response-body is the parsed JSON response
-     On failure: [false, error-message] with the error message as string
+     On endpoint failure (non-200 / bad body): [false, error-message]
+     On transport failure (connection refused, DNS, TLS…): [false, error-message, :transport]
 
    This function handles all HTTP communication with the SPARQL endpoint
    using the POST method, which is robust for queries of any length."
@@ -97,7 +98,7 @@
       (process-response response))
     (catch Exception e
       (log/errorf "Error executing SPARQL query: %s" (.getMessage e))
-      [false (.getMessage e)])))
+      [false (.getMessage e) :transport])))
 
 (defn execute-reducible-query
   "Executes a SPARQL query and processes the results for Metabase.
@@ -108,7 +109,9 @@
     - respond: callback function to handle the processed results
 
   This function retrieves database details, executes the SPARQL query, and processes the response.
-  On failure, it logs the error and returns an empty columns result."
+  On failure it throws, so the error reaches the user instead of rendering as an
+  empty result: endpoint-returned errors (SPARQL parse errors, 4xx/5xx bodies)
+  as `invalid-query`, transport failures (unreachable host, TLS…) as `db`."
   [native-query _context respond]
   (log/info "Executing SPARQL query:" (pr-str (select-keys native-query [:native])))
   (let [database (driver-api/database (driver-api/metadata-provider))
@@ -121,9 +124,12 @@
         options {:default-graph (:default-graph details)
                  :insecure?     (:use-insecure details)
                  :auth          (auth/http-options details)}
-        [success result] (execute-sparql-query endpoint sparql-query options)]
+        [success result kind] (execute-sparql-query endpoint sparql-query options)]
     (if success
       (query-processor/process-query-results result respond)
       (do
         (log/error "Error executing SPARQL query:" result)
-        (respond {:cols []} [])))))
+        (throw (ex-info (str "Error executing SPARQL query: " result)
+                        {:type (if (= kind :transport)
+                                 driver-api/qp.error-type.db
+                                 driver-api/qp.error-type.invalid-query)}))))))
