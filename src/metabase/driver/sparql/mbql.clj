@@ -184,6 +184,28 @@
     (nil? v) ""
     :else (uri/string-literal v)))
 
+(defn- value->term
+  "Render a filter RHS value as a SPARQL term for an equality comparison.
+
+   An IRI-valued field — a foreign key (`:semantic-type :type/FK`) or the
+   synthetic subject column (`:database-type \"uri\"`) — is bound to IRI
+   *nodes*, so an IRI-shaped value must be emitted as `<iri>` (via
+   [[uri/iri-ref]], which escapes it) or the comparison can never match.
+   Everything else falls back to [[literal->sparql]]; notably `:type/URL`
+   columns stay literals, because they hold `xsd:anyURI`-typed literal
+   values, not IRI nodes.
+
+   Known limitation: in a derived stage field refs are column-name strings,
+   so `field-id->metadata` returns nil and the value stays a literal."
+  [field-id v]
+  (if (and (string? v)
+           (uri/iri-shaped? v)
+           (let [meta (field-id->metadata field-id)]
+             (or (= :type/FK (:semantic-type meta))
+                 (= "uri" (:database-type meta)))))
+    (uri/iri-ref v)
+    (literal->sparql v)))
+
 (defn- compile-filter-expr
   "Compile a filter clause to a SPARQL boolean expression string."
   [filter-clause field-id->var pair->target-var]
@@ -212,10 +234,10 @@
             (case op
               := (if (nil? v)
                    (format "(!BOUND(?%s))" var)
-                   (format "(?%s = %s)" var (literal->sparql v)))
+                   (format "(?%s = %s)" var (value->term fid v)))
               :!= (if (nil? v)
                     (format "(BOUND(?%s))" var)
-                    (format "(?%s != %s)" var (literal->sparql v)))
+                    (format "(?%s != %s)" var (value->term fid v)))
               :> (and (some? v) (format "(?%s > %s)" var (literal->sparql v)))
               :>= (and (some? v) (format "(?%s >= %s)" var (literal->sparql v)))
               :< (and (some? v) (format "(?%s < %s)" var (literal->sparql v)))
