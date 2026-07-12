@@ -121,6 +121,10 @@
 (deftest ^:integration native-syntax-error-raises-test
   (testing "a malformed native query raises an invalid-query error carrying the
             endpoint's message, instead of succeeding with an empty result"
+    ;; Premise: the harness endpoint (Oxigraph) answers a SPARQL parse error
+    ;; with HTTP 400, which classifies as :query → invalid-query. An engine
+    ;; that answered 200 + an error JSON would take the success branch instead;
+    ;; revisit this assertion if the smoke harness ever changes engines.
     (let [e (is (thrown? clojure.lang.ExceptionInfo
                          (tu/run-native "SELECT ?x WHERE {")))]
       (is (= driver-api/qp.error-type.invalid-query (:type (ex-data e))))
