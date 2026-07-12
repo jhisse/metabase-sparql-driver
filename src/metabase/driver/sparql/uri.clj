@@ -19,6 +19,30 @@
    class covers upper and lower case)."
   #"^[A-Za-z][A-Za-z0-9+.-]*:")
 
+(def ^:private prefixed-name-pattern
+  "Matches a name shaped like `prefix__…` (prefix charset per [[parse-prefix-line]])."
+  #"^[A-Za-z][A-Za-z0-9_-]*__")
+
+(defn- prefix-head
+  "The `prefix__` head a shortened name starts with."
+  [prefix]
+  (str prefix prefix-separator))
+
+(defonce ^:private warned
+  ;; Distinct keys already warned about. parse-prefixes runs on every
+  ;; naming-context build (several times per query compile) and absolute-uri
+  ;; runs per field per compile, so an unconditional warn would repeat the
+  ;; same message forever; one warning per process per offending string is
+  ;; diagnostic enough. Bounded by the tiny set of distinct bad inputs.
+  (atom #{}))
+
+(defn- warn-once!
+  "Log `msg` at WARN, at most once per process for a given `k`."
+  [k msg]
+  (when-not (contains? @warned k)
+    (swap! warned conj k)
+    (log/warn msg)))
+
 (defn- parse-prefix-line
   "Parse one non-blank `prefix=uri` line into a `[prefix uri]` pair, or nil
    with a logged warning — a silently dropped line makes prefixed fields
@@ -27,15 +51,15 @@
   (if-let [[_ prefix uri] (re-matches #"([A-Za-z][A-Za-z0-9_-]*)\s*=\s*(\S+)" line)]
     (cond
       (str/includes? prefix prefix-separator)
-      (do (log/warnf "[sparql.uri] Ignoring namespace prefix %s: prefixes cannot contain \"__\"" prefix)
+      (do (warn-once! line (format "[sparql.uri] Ignoring namespace prefix %s: prefixes cannot contain \"__\"" prefix))
           nil)
 
       (not (re-find scheme-pattern uri))
-      (do (log/warnf "[sparql.uri] Ignoring namespace prefix %s: %s is not an absolute URI" prefix uri)
+      (do (warn-once! line (format "[sparql.uri] Ignoring namespace prefix %s: %s is not an absolute URI" prefix uri))
           nil)
 
       :else [prefix uri])
-    (do (log/warnf "[sparql.uri] Ignoring malformed namespace-prefixes line: %s" line)
+    (do (warn-once! line (format "[sparql.uri] Ignoring malformed namespace-prefixes line: %s" line))
         nil)))
 
 (defn parse-prefixes
@@ -90,19 +114,20 @@
             (re-find scheme-pattern nm))
       nm
       (or (some (fn [[prefix uri]]
-                  (let [head (str prefix prefix-separator)]
+                  (let [head (prefix-head prefix)]
                     (when (and (str/starts-with? nm head)
                                (not (str/blank? (subs nm (count head)))))
                       (str uri (subs nm (count head))))))
                 prefixes)
           (do
             (when (and (seq prefixes)
-                       (re-find #"^[A-Za-z][A-Za-z0-9_-]*__" nm))
-              (log/warnf (str "[sparql.uri] Name %s looks namespace-prefixed but matches no configured "
-                              "prefix; falling back to the Default Graph. If a prefix was changed or "
-                              "removed, re-sync the database. (A plain Default-Graph name containing "
-                              "\"__\" also triggers this — then it is safe to ignore.)")
-                         nm))
+                       (re-find prefixed-name-pattern nm))
+              (warn-once! nm
+                          (format (str "[sparql.uri] Name %s looks namespace-prefixed but matches no configured "
+                                       "prefix; falling back to the Default Graph. If a prefix was changed or "
+                                       "removed, re-sync the database. (A plain Default-Graph name containing "
+                                       "\"__\" also triggers this — then it is safe to ignore.)")
+                                  nm)))
             (if (str/blank? default-graph)
               nm
               (str default-graph nm)))))))
@@ -126,7 +151,7 @@
         ambiguous-tail? (fn [tail]
                           (boolean (or (re-find scheme-pattern tail)
                                        (some (fn [[prefix _]]
-                                               (str/starts-with? tail (str prefix prefix-separator)))
+                                               (str/starts-with? tail (prefix-head prefix)))
                                              prefixes))))]
     (if-not (string? uri)
       uri
@@ -142,7 +167,7 @@
                       (let [local (subs uri (count ns-uri))]
                         (when-not (or (str/blank? local)
                                       (str/includes? local prefix-separator))
-                          (str prefix prefix-separator local)))))
+                          (str (prefix-head prefix) local)))))
                   prefixes)
             uri)))))
 
