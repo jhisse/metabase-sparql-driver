@@ -86,6 +86,23 @@
             [{:a {:type "literal" :datatype (str xsd "integer")}}
              {:a {:type "literal" :datatype (str xsd "double")}}]))))
 
+  (testing "a 3-way mix is NOT promoted — exact-2-set semantics, degrades to text"
+    (is (= {"a" :type/Text}
+           (conversion/determine-column-types
+            ["a"]
+            [{:a {:type "literal" :datatype (str xsd "integer")}}
+             {:a {:type "literal" :datatype (str xsd "double")}}
+             {:a {:type "literal"}}]))))
+
+  (testing "cells of a promoted Float column all convert to numbers (type/value coherence)"
+    ;; Pins the current contract until D1 unifies cell classification: the
+    ;; column may say :type/Float while integer cells convert to Long — both
+    ;; must at least be java.lang.Number so numeric consumers don't break.
+    (let [rows [{:a {:type "literal" :datatype (str xsd "integer") :value "1"}}
+                {:a {:type "literal" :datatype (str xsd "double") :value "2.5"}}]]
+      (is (= {"a" :type/Float} (conversion/determine-column-types ["a"] rows)))
+      (is (every? number? (map #(conversion/convert-value (:a %)) rows)))))
+
   (testing "date + dateTime promotes to dateTime instead of text"
     (is (= {"a" :type/DateTime}
            (conversion/determine-column-types
