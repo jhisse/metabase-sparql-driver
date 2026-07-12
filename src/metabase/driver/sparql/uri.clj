@@ -1,6 +1,7 @@
 (ns metabase.driver.sparql.uri
   "Shared URI helpers for the SPARQL driver."
-  (:require [clojure.string :as str]))
+  (:require [clojure.string :as str]
+            [metabase.util.log :as log]))
 
 ;; ---------------------------------------------------------------------------
 ;; Naming context: Default Graph base + namespace-prefix map
@@ -13,20 +14,43 @@
    `:` to `_` and lose reversibility."
   "__")
 
+(def ^:private scheme-pattern
+  "Matches a name that already carries a URI scheme (RFC-3986 shape; the char
+   class covers upper and lower case)."
+  #"^[A-Za-z][A-Za-z0-9+.-]*:")
+
+(defn- parse-prefix-line
+  "Parse one non-blank `prefix=uri` line into a `[prefix uri]` pair, or nil
+   with a logged warning — a silently dropped line makes prefixed fields
+   vanish from sync with no diagnostic."
+  [line]
+  (if-let [[_ prefix uri] (re-matches #"([A-Za-z][A-Za-z0-9_-]*)\s*=\s*(\S+)" line)]
+    (cond
+      (str/includes? prefix prefix-separator)
+      (do (log/warnf "[sparql.uri] Ignoring namespace prefix %s: prefixes cannot contain \"__\"" prefix)
+          nil)
+
+      (not (re-find scheme-pattern uri))
+      (do (log/warnf "[sparql.uri] Ignoring namespace prefix %s: %s is not an absolute URI" prefix uri)
+          nil)
+
+      :else [prefix uri])
+    (do (log/warnf "[sparql.uri] Ignoring malformed namespace-prefixes line: %s" line)
+        nil)))
+
 (defn parse-prefixes
   "Parse the `namespace-prefixes` connection detail — one `prefix=uri` per
    line — into a vector of `[prefix uri]` pairs ordered by URI length
-   descending, so the most specific namespace wins. Ignored: blank lines,
-   lines without `=`, prefixes that aren't a simple name (letter followed by
-   letters/digits/`_`/`-`) or that contain `__` (it's the separator), and
-   duplicate prefixes (first occurrence wins)."
+   descending, so the most specific namespace wins. Ignored WITH a logged
+   warning: lines without `=` or with trailing tokens, prefixes that aren't a
+   simple name (letter followed by letters/digits/`_`/`-`) or that contain
+   `__` (it's the separator), and non-absolute URI values. Blank lines are
+   skipped silently; duplicate prefixes keep the first occurrence."
   [s]
   (->> (str/split-lines (or s ""))
-       (keep (fn [line]
-               (when-let [[_ prefix uri] (re-matches #"([A-Za-z][A-Za-z0-9_-]*)\s*=\s*(\S+)"
-                                                     (str/trim line))]
-                 (when-not (str/includes? prefix prefix-separator)
-                   [prefix uri]))))
+       (map str/trim)
+       (remove str/blank?)
+       (keep parse-prefix-line)
        (reduce (fn [acc [p u]]
                  (if (some #(= p (first %)) acc) acc (conj acc [p u])))
                [])
@@ -42,23 +66,28 @@
    :prefixes      (parse-prefixes (:namespace-prefixes details))})
 
 (defn- ->naming
-  "Normalize the `base` argument the naming fns accept: either the legacy
-   Default-Graph string (or nil) or a full [[naming-context]] map."
+  "Normalize the `base` argument the naming fns accept: a [[naming-context]]
+   map, or — legacy form kept for tests/back-compat, no production caller —
+   a bare Default-Graph string (or nil)."
   [base]
   (if (map? base) base {:default-graph base}))
 
 (defn absolute-uri
   "Reconstruct a full URI from a (possibly shortened) name. `base` is a
-   Default-Graph string or a [[naming-context]] map.
+   [[naming-context]] map (legacy: a bare Default-Graph string).
 
    If `nm` already has a URI scheme it's returned unchanged. A `prefix__local`
    name whose prefix is registered expands to `<prefix-uri>local`; otherwise
    the Default Graph is prepended. Returns `nm` unchanged when `nm` is blank
-   or nothing applies."
+   or nothing applies.
+
+   A `prefix__`-shaped name that matches NO registered prefix logs a warning
+   before falling back to the Default Graph: it usually means the prefix map
+   changed after the last sync, and the fallback URI queries nothing."
   [nm base]
   (let [{:keys [default-graph prefixes]} (->naming base)]
     (if (or (str/blank? nm)
-            (re-find #"^[A-Za-z][A-Za-z0-9+.-]*:" nm))
+            (re-find scheme-pattern nm))
       nm
       (or (some (fn [[prefix uri]]
                   (let [head (str prefix prefix-separator)]
@@ -66,13 +95,21 @@
                                (not (str/blank? (subs nm (count head)))))
                       (str uri (subs nm (count head))))))
                 prefixes)
-          (if (str/blank? default-graph)
-            nm
-            (str default-graph nm))))))
+          (do
+            (when (and (seq prefixes)
+                       (re-find #"^[A-Za-z][A-Za-z0-9_-]*__" nm))
+              (log/warnf (str "[sparql.uri] Name %s looks namespace-prefixed but matches no configured "
+                              "prefix; falling back to the Default Graph. If a prefix was changed or "
+                              "removed, re-sync the database. (A plain Default-Graph name containing "
+                              "\"__\" also triggers this — then it is safe to ignore.)")
+                         nm))
+            (if (str/blank? default-graph)
+              nm
+              (str default-graph nm)))))))
 
 (defn shorten-uri
   "Shorten `uri` for use as a Metabase table/field name. `base` is a
-   Default-Graph string or a [[naming-context]] map.
+   [[naming-context]] map (legacy: a bare Default-Graph string).
 
    The Default Graph wins first: when `uri` starts with it, the prefix is
    stripped (unchanged legacy behavior). Otherwise the registered namespace
@@ -80,14 +117,17 @@
 
    Falls back to the full `uri` whenever the short name could not round-trip
    through [[absolute-uri]]: a blank remainder, a Default-Graph tail that
-   itself starts with a registered `prefix__`, or a prefix local name that
-   contains `__`."
+   itself starts with a registered `prefix__` or that looks like it carries a
+   URI scheme (a colon is legal in IRI path segments — `has:label` would be
+   returned unchanged by [[absolute-uri]]'s scheme check), or a prefix local
+   name that contains `__`."
   [uri base]
   (let [{:keys [default-graph prefixes]} (->naming base)
         ambiguous-tail? (fn [tail]
-                          (boolean (some (fn [[prefix _]]
-                                           (str/starts-with? tail (str prefix prefix-separator)))
-                                         prefixes)))]
+                          (boolean (or (re-find scheme-pattern tail)
+                                       (some (fn [[prefix _]]
+                                               (str/starts-with? tail (str prefix prefix-separator)))
+                                             prefixes))))]
     (if-not (string? uri)
       uri
       (if (and (not (str/blank? default-graph))
@@ -108,7 +148,8 @@
 
 (defn foreign-uri?
   "True when at least one known namespace is configured (the Default Graph or
-   a namespace prefix) and `uri` belongs to none of them."
+   a namespace prefix) and `uri` belongs to none of them. `base` is a
+   [[naming-context]] map (legacy: a bare Default-Graph string)."
   [uri base]
   (let [{:keys [default-graph prefixes]} (->naming base)
         known (cond-> (mapv second prefixes)

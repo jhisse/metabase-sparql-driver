@@ -50,9 +50,9 @@ driver:
       placeholder: |-
         foaf=http://xmlns.com/foaf/0.1/
         schema=https://schema.org/
-      description: 'One prefix=uri per line. Classes and properties under a listed namespace sync as prefix__localName (e.g. foaf__name) instead of their full URI, and count as local for "Hide URIs outside the Default Graph". Changing this after a sync renames the affected tables/fields, which Metabase treats as new ones — re-sync afterwards and expect saved questions on renamed fields to need fixing.'
+      description: 'One prefix=uri per line. Classes and properties under a listed namespace sync as prefix__localName (e.g. foaf__name) instead of their full URI, and count as local for "Hide URIs outside known namespaces". IMPORTANT: after changing this, re-sync immediately — until the re-sync, questions on previously-synced prefixed fields query the wrong URIs and return empty or incorrect results; the re-sync then renames the affected tables/fields, which Metabase treats as new ones.'
     - name: hide-foreign-uris
-      display-name: Hide URIs outside the Default Graph
+      display-name: Hide URIs outside known namespaces
       type: boolean
       default: false
       description: When enabled, RDF classes and properties whose URI does not start with the Default Graph URI or a configured Namespace Prefix are skipped during sync.

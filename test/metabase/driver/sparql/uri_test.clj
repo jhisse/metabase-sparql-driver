@@ -70,6 +70,11 @@
   (testing "blank and malformed lines are ignored"
     (is (= [["ok" "http://ex.org/"]]
            (uri/parse-prefixes "\nno-equals-sign\n=http://x/\nok=http://ex.org/\n"))))
+  (testing "a line with trailing tokens (e.g. an inline comment) is ignored whole"
+    (is (= [] (uri/parse-prefixes "foaf=http://xmlns.com/foaf/0.1/ # people"))))
+  (testing "a non-absolute URI value is rejected"
+    (is (= [] (uri/parse-prefixes "foaf=foaf/")))
+    (is (= [] (uri/parse-prefixes "p=notauri"))))
   (testing "a prefix containing the __ separator is rejected"
     (is (= [] (uri/parse-prefixes "a__b=http://ex.org/"))))
   (testing "duplicate prefixes: first occurrence wins"
@@ -97,6 +102,14 @@
     (testing "a Default-Graph tail that collides with a registered prefix__ stays full"
       (is (= "https://example.org/foaf__x"
              (uri/shorten-uri "https://example.org/foaf__x" naming))))
+    (testing "a Default-Graph tail that looks scheme-shaped stays full (colon is legal in IRI paths)"
+      ;; shortening to "has:label" would break the round-trip: absolute-uri's
+      ;; scheme check would return it unchanged and the query would emit
+      ;; <has:label> instead of the full URI.
+      (is (= "https://example.org/has:label"
+             (uri/shorten-uri "https://example.org/has:label" naming)))
+      (is (= "https://example.org/has:label"
+             (uri/shorten-uri "https://example.org/has:label" "https://example.org/"))))
     (testing "an unregistered prefix__ name falls back to Default-Graph expansion"
       (is (= "https://example.org/other__x" (uri/absolute-uri "other__x" naming))))
     (testing "the longest matching namespace URI wins"
