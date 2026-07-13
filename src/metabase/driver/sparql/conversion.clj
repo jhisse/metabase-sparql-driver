@@ -5,41 +5,50 @@
    Provides functions to map SPARQL types to Metabase base types and convert values."
   (:require [metabase.util.log :as log]))
 
+(def ^:private xsd
+  "Base URI of the XSD datatype namespace (same convention as shacl.clj)."
+  "http://www.w3.org/2001/XMLSchema#")
+
 ;; Single source of truth for the XSD datatype families, shared by type
 ;; classification (sparql-type->base-type) and value parsing (convert-value).
 ;; The mixed-type promotion in determine-column-types relies on the two
 ;; agreeing: a datatype classified numeric but not parsed numeric would put
 ;; raw string cells inside a numeric-typed column.
 (def ^:private xsd-integer-datatypes
-  #{"http://www.w3.org/2001/XMLSchema#integer"
-    "http://www.w3.org/2001/XMLSchema#int"
-    "http://www.w3.org/2001/XMLSchema#long"
-    "http://www.w3.org/2001/XMLSchema#short"
-    "http://www.w3.org/2001/XMLSchema#byte"
-    "http://www.w3.org/2001/XMLSchema#nonNegativeInteger"
-    "http://www.w3.org/2001/XMLSchema#positiveInteger"
-    "http://www.w3.org/2001/XMLSchema#nonPositiveInteger"
-    "http://www.w3.org/2001/XMLSchema#negativeInteger"
-    "http://www.w3.org/2001/XMLSchema#unsignedLong"
-    "http://www.w3.org/2001/XMLSchema#unsignedInt"
-    "http://www.w3.org/2001/XMLSchema#unsignedShort"
-    "http://www.w3.org/2001/XMLSchema#unsignedByte"})
+  #{(str xsd "integer")
+    (str xsd "int")
+    (str xsd "long")
+    (str xsd "short")
+    (str xsd "byte")
+    (str xsd "nonNegativeInteger")
+    (str xsd "positiveInteger")
+    (str xsd "nonPositiveInteger")
+    (str xsd "negativeInteger")
+    (str xsd "unsignedLong")
+    (str xsd "unsignedInt")
+    (str xsd "unsignedShort")
+    (str xsd "unsignedByte")})
 
 (def ^:private xsd-float-datatypes
-  #{"http://www.w3.org/2001/XMLSchema#decimal"
-    "http://www.w3.org/2001/XMLSchema#float"
-    "http://www.w3.org/2001/XMLSchema#double"})
+  #{(str xsd "decimal")
+    (str xsd "float")
+    (str xsd "double")})
 
 (def ^:private xsd-datetime-datatypes
-  #{"http://www.w3.org/2001/XMLSchema#dateTime"
-    "http://www.w3.org/2001/XMLSchema#gYear"
-    "http://www.w3.org/2001/XMLSchema#gYearMonth"})
+  #{(str xsd "dateTime")
+    (str xsd "gYear")
+    (str xsd "gYearMonth")})
 
 (def ^:private xsd-date-datatypes
-  #{"http://www.w3.org/2001/XMLSchema#date"
-    "http://www.w3.org/2001/XMLSchema#gMonthDay"
-    "http://www.w3.org/2001/XMLSchema#gDay"
-    "http://www.w3.org/2001/XMLSchema#gMonth"})
+  #{(str xsd "date")
+    (str xsd "gMonthDay")
+    (str xsd "gDay")
+    (str xsd "gMonth")})
+
+(def ^:private xsd-boolean
+  "Single-valued family, named because it is used by BOTH classification and
+   parsing — the same must-agree coupling as the multi-valued sets above."
+  (str xsd "boolean"))
 
 (defn sparql-type->base-type
   "Converts a SPARQL type to a Metabase base type.
@@ -63,15 +72,16 @@
     (= sparql-type "bnode") :type/Text
 
     ;; Typed literals
-    (or (and (= sparql-type "typed-literal") datatype)
-        (and (= sparql-type "literal") datatype))
+    (and datatype
+         (or (= sparql-type "typed-literal")
+             (= sparql-type "literal")))
     (cond
       (contains? xsd-integer-datatypes datatype)  :type/Integer
       (contains? xsd-float-datatypes datatype)    :type/Float
-      (= datatype "http://www.w3.org/2001/XMLSchema#boolean") :type/Boolean
+      (= datatype xsd-boolean)                    :type/Boolean
       (contains? xsd-datetime-datatypes datatype) :type/DateTime
       (contains? xsd-date-datatypes datatype)     :type/Date
-      (= datatype "http://www.w3.org/2001/XMLSchema#time") :type/Time
+      (= datatype (str xsd "time"))               :type/Time
       :else :type/Text)
 
     ;; Literals with language tags are treated as text
@@ -108,7 +118,7 @@
              value))
 
       ;; Handle booleans (both typed-literal and literal)
-      (and typed? (= datatype "http://www.w3.org/2001/XMLSchema#boolean"))
+      (and typed? (= datatype xsd-boolean))
       (Boolean/parseBoolean value)
 
       ;; Default case - strings and all other types
