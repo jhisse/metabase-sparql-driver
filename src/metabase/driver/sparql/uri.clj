@@ -62,21 +62,47 @@
     (do (warn-once! line (format "[sparql.uri] Ignoring malformed namespace-prefixes line: %s" line))
         nil)))
 
+(defn- names-collide?
+  "True when two prefix names map to overlapping `prefix__` heads — i.e. one
+   name is the other followed by a single `_`. Because a prefix name cannot
+   itself contain `__`, this is the ONLY way one head can be a prefix of
+   another, and it makes the shortened `prefix__local` form ambiguous: the
+   extra `_` could belong to either the prefix or the local name (e.g. `a___x`
+   reads as both `a` + `_x` and `a_` + `x`). Rejecting such a pair keeps the
+   shortened name space unambiguous, so every name expands to exactly one URI."
+  [a b]
+  (or (= a (str b "_"))
+      (= b (str a "_"))))
+
 (defn parse-prefixes
   "Parse the `namespace-prefixes` connection detail — one `prefix=uri` per
    line — into a vector of `[prefix uri]` pairs ordered by URI length
    descending, so the most specific namespace wins. Ignored WITH a logged
    warning: lines without `=` or with trailing tokens, prefixes that aren't a
    simple name (letter followed by letters/digits/`_`/`-`) or that contain
-   `__` (it's the separator), and non-absolute URI values. Blank lines are
-   skipped silently; duplicate prefixes keep the first occurrence."
+   `__` (it's the separator), non-absolute URI values, and prefixes whose name
+   collides with an already-kept one under the `__` separator (see
+   [[names-collide?]]). Blank lines are skipped silently; duplicate prefixes
+   keep the first occurrence."
   [s]
   (->> (str/split-lines (or s ""))
        (map str/trim)
        (remove str/blank?)
        (keep parse-prefix-line)
        (reduce (fn [acc [p u]]
-                 (if (some #(= p (first %)) acc) acc (conj acc [p u])))
+                 (condp some acc
+                   ;; duplicate prefix name — keep the first occurrence (silent)
+                   #(= p (first %)) acc
+
+                   #(names-collide? p (first %))
+                   (do (warn-once! (str "prefix-collision:" p)
+                                   (format (str "[sparql.uri] Ignoring namespace prefix %s: its name collides with "
+                                                "an already-configured prefix under the \"__\" separator (one is the "
+                                                "other plus \"_\"), which would make shortened field names ambiguous")
+                                           p))
+                       acc)
+
+                   (conj acc [p u])))
                [])
        (sort-by (comp - count second))
        vec))

@@ -80,6 +80,11 @@
   (testing "duplicate prefixes: first occurrence wins"
     (is (= [["p" "http://first/"]]
            (uri/parse-prefixes "p=http://first/\np=http://x/"))))
+  (testing "prefix names colliding under __ (one is the other plus _) are rejected, first kept"
+    (is (= [["a" "http://A/"]]
+           (uri/parse-prefixes "a=http://A/\na_=http://B/")))
+    (is (= [["a_" "http://B/"]]
+           (uri/parse-prefixes "a_=http://B/\na=http://A/"))))
   (testing "nil/blank input parses to no prefixes"
     (is (= [] (uri/parse-prefixes nil)))
     (is (= [] (uri/parse-prefixes "")))))
@@ -116,7 +121,15 @@
       (let [naming {:default-graph nil
                     :prefixes (uri/parse-prefixes "base=http://ex.org/\nsub=http://ex.org/sub/")}]
         (is (= "sub__x" (uri/shorten-uri "http://ex.org/sub/x" naming)))
-        (is (= "base__sub" (uri/shorten-uri "http://ex.org/sub" naming)))))))
+        (is (= "base__sub" (uri/shorten-uri "http://ex.org/sub" naming)))))
+    (testing "with a colliding prefix rejected at parse, the survivor round-trips unambiguously"
+      ;; #{a, a_} would make `a___x` ambiguous; parse keeps only `a`, so
+      ;; http://B/ is simply unknown and stays a full URI.
+      (let [naming {:default-graph nil
+                    :prefixes (uri/parse-prefixes "a=http://A/\na_=http://B/")}]
+        (is (= "a__x" (uri/shorten-uri "http://A/x" naming)))
+        (is (= "http://A/x" (uri/absolute-uri "a__x" naming)))
+        (is (= "http://B/x" (uri/shorten-uri "http://B/x" naming)))))))
 
 (deftest legacy-string-base-still-works-test
   (testing "the 2-arity string base behaves exactly as before"
