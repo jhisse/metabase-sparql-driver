@@ -49,21 +49,52 @@
       (log/debugf "Full body response: %s" (:body response))
       nil)))
 
+(def ^:private max-error-body-chars
+  "Cap on how much of an endpoint error body is embedded in error messages.
+   The message becomes an exception rendered in the UI and logged verbatim
+   (Metabase does not truncate downstream), so a multi-MB HTML error page
+   must not travel whole."
+  1000)
+
+(defn- ^:private truncate-body
+  "Truncate an error-response body to [[max-error-body-chars]]."
+  [body]
+  (let [s (str body)]
+    (if (> (count s) max-error-body-chars)
+      (str (subs s 0 max-error-body-chars) "… (truncated)")
+      s)))
+
+(defn- ^:private status->error-kind
+  "Classify a non-200 HTTP status: auth failures and server-side errors are
+   endpoint/availability problems (`:db`), anything else is the endpoint
+   rejecting the query itself (`:query`, e.g. a 400 SPARQL parse error)."
+  [status]
+  (if (or (contains? #{401 403 407} status)
+          (and (int? status) (>= status 500)))
+    :db
+    :query))
+
 (defn- ^:private process-response
   "Process HTTP response from SPARQL endpoint.
-  
+
    Parameters:
      response - HTTP response from SPARQL endpoint
-     
+
    Returns:
      On success: [true, response-body] where response-body is the parsed JSON response
-     On failure: [false, error-message] with the error message as string"
+     On failure: [false, error-message, kind] where kind is `:query` (the
+     endpoint rejected the query, e.g. a 400 parse error) or `:db` (auth
+     failure, 5xx, or an unparseable 200 body — an endpoint problem, not the
+     user's query). The error body is truncated to a sane size."
   [response]
   (if (= 200 (:status response))
     (if-let [body (parse-json-response response)]
       [true body]
-      [false "Invalid JSON response from SPARQL endpoint"])
-    [false (str "SPARQL endpoint returned status: " (:status response) "\nBody: " (:body response))]))
+      [false "Invalid JSON response from SPARQL endpoint" :db])
+    [false
+     (str "SPARQL endpoint returned status: " (:status response)
+          "\nBody: " (truncate-body (:body response)))
+     (status->error-kind (:status response))]))
 
 (defn execute-sparql-query
   "Execute SPARQL queries against an endpoint using POST.
@@ -77,7 +108,9 @@
 
    Returns:
      On success: [true, response-body] where response-body is the parsed JSON response
-     On failure: [false, error-message] with the error message as string
+     On failure: [false, error-message, kind] where kind is `:query` (the
+     endpoint rejected the query), `:db` (auth/5xx/bad body), or `:transport`
+     (connection refused, DNS, TLS…)
 
    This function handles all HTTP communication with the SPARQL endpoint
    using the POST method, which is robust for queries of any length."
@@ -97,7 +130,7 @@
       (process-response response))
     (catch Exception e
       (log/errorf "Error executing SPARQL query: %s" (.getMessage e))
-      [false (.getMessage e)])))
+      [false (.getMessage e) :transport])))
 
 (defn execute-reducible-query
   "Executes a SPARQL query and processes the results for Metabase.
@@ -108,7 +141,9 @@
     - respond: callback function to handle the processed results
 
   This function retrieves database details, executes the SPARQL query, and processes the response.
-  On failure, it logs the error and returns an empty columns result."
+  On failure it throws, so the error reaches the user instead of rendering as an
+  empty result: query rejections (e.g. SPARQL parse errors) as `invalid-query`,
+  endpoint problems (auth, 5xx, bad body) and transport failures as `db`."
   [native-query _context respond]
   (log/info "Executing SPARQL query:" (pr-str (select-keys native-query [:native])))
   (let [database (driver-api/database (driver-api/metadata-provider))
@@ -121,9 +156,12 @@
         options {:default-graph (:default-graph details)
                  :insecure?     (:use-insecure details)
                  :auth          (auth/http-options details)}
-        [success result] (execute-sparql-query endpoint sparql-query options)]
+        [success result kind] (execute-sparql-query endpoint sparql-query options)]
     (if success
       (query-processor/process-query-results result respond)
-      (do
-        (log/error "Error executing SPARQL query:" result)
-        (respond {:cols []} [])))))
+      ;; No log/error here: the low-level catch already logged transport
+      ;; failures, and the QP logs every thrown exception.
+      (throw (ex-info (str "Error executing SPARQL query: " result)
+                      {:type (if (= kind :query)
+                               driver-api/qp.error-type.invalid-query
+                               driver-api/qp.error-type.db)})))))

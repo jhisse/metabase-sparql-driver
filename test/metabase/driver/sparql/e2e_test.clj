@@ -7,6 +7,7 @@
   (:require [clojure.set :as set]
             [clojure.string :as str]
             [clojure.test :refer :all]
+            [metabase.driver-api.core :as driver-api]
             [metabase.driver.sparql.database :as database]
             [metabase.driver.sparql.test-util :as tu]
             [metabase.lib.core :as lib]))
@@ -106,8 +107,8 @@
         (is (= #{["Alice" 1] ["Bob" 1]} (set rows)))))
     (testing "filter that excludes every group"
       (let [{:keys [cols rows]} (tu/run-query (lib/filter base (lib/> count-col 5)))]
-        ;; a successful empty result still carries the SELECT vars as columns;
-        ;; the driver's error path responds with :cols [] — don't pass on failure.
+        ;; a successful empty result still carries the SELECT vars as columns
+        ;; (the error path throws instead of responding) — don't pass on failure.
         (is (= 2 (count cols)))
         (is (= [] rows))))))
 
@@ -116,3 +117,15 @@
     (is (= [{:name "boolean" :display_name "boolean" :base_type :type/Boolean}]
            cols))
     (is (= [[true]] rows))))
+
+(deftest ^:integration native-syntax-error-raises-test
+  (testing "a malformed native query raises an invalid-query error carrying the
+            endpoint's message, instead of succeeding with an empty result"
+    ;; Premise: the harness endpoint (Oxigraph) answers a SPARQL parse error
+    ;; with HTTP 400, which classifies as :query → invalid-query. An engine
+    ;; that answered 200 + an error JSON would take the success branch instead;
+    ;; revisit this assertion if the smoke harness ever changes engines.
+    (let [e (is (thrown? clojure.lang.ExceptionInfo
+                         (tu/run-native "SELECT ?x WHERE {")))]
+      (is (= driver-api/qp.error-type.invalid-query (:type (ex-data e))))
+      (is (str/includes? (ex-message e) "Error executing SPARQL query")))))
