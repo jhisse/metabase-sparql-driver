@@ -72,12 +72,57 @@
             [{:a {:type "literal" :datatype (str xsd "integer")} :b {:type "uri"}}
              {:a {:type "literal" :datatype (str xsd "integer")} :b {:type "uri"}}]))))
 
-  (testing "mixed types in one column collapse to text"
+  (testing "incompatible mixed types in one column collapse to text"
     (is (= {"a" :type/Text}
            (conversion/determine-column-types
             ["a"]
             [{:a {:type "literal" :datatype (str xsd "integer")}}
              {:a {:type "uri"}}]))))
+
+  (testing "integer + float promotes to float instead of text"
+    (is (= {"a" :type/Float}
+           (conversion/determine-column-types
+            ["a"]
+            [{:a {:type "literal" :datatype (str xsd "integer")}}
+             {:a {:type "literal" :datatype (str xsd "double")}}]))))
+
+  (testing "a 3-way mix is NOT promoted — exact-2-set semantics, degrades to text"
+    (is (= {"a" :type/Text}
+           (conversion/determine-column-types
+            ["a"]
+            [{:a {:type "literal" :datatype (str xsd "integer")}}
+             {:a {:type "literal" :datatype (str xsd "double")}}
+             {:a {:type "literal"}}]))))
+
+  (testing "cells of a promoted Float column all convert to numbers (type/value coherence)"
+    ;; Pins the current contract until D1 unifies cell classification: the
+    ;; column may say :type/Float while integer cells convert to Long — both
+    ;; must at least be java.lang.Number so numeric consumers don't break.
+    (let [rows [{:a {:type "literal" :datatype (str xsd "integer") :value "1"}}
+                {:a {:type "literal" :datatype (str xsd "double") :value "2.5"}}]]
+      (is (= {"a" :type/Float} (conversion/determine-column-types ["a"] rows)))
+      (is (every? number? (map #(conversion/convert-value (:a %)) rows)))))
+
+  (testing "date + dateTime promotes to dateTime instead of text"
+    (is (= {"a" :type/DateTime}
+           (conversion/determine-column-types
+            ["a"]
+            [{:a {:type "literal" :datatype (str xsd "date")}}
+             {:a {:type "literal" :datatype (str xsd "dateTime")}}]))))
+
+  (testing "every row is scanned, not just a leading sample"
+    (let [int-row  {:a {:type "literal" :datatype (str xsd "integer")}}
+          uri-row  {:a {:type "uri"}}]
+      (testing "a type flip after row 20 is still seen"
+        (is (= {"a" :type/Text}
+               (conversion/determine-column-types
+                ["a"]
+                (concat (repeat 25 int-row) [uri-row])))))
+      (testing "a column whose first rows are all null still gets its real type"
+        (is (= {"a" :type/Integer}
+               (conversion/determine-column-types
+                ["a"]
+                (concat (repeat 25 {}) [int-row])))))))
 
   (testing "a column with no bindings defaults to text"
     (is (= {"a" :type/Text}
