@@ -33,15 +33,33 @@
   ;; naming-context build (several times per query compile) and absolute-uri
   ;; runs per field per compile, so an unconditional warn would repeat the
   ;; same message forever; one warning per process per offending string is
-  ;; diagnostic enough. Bounded by the tiny set of distinct bad inputs.
+  ;; diagnostic enough. Capped at [[max-warned]] so a long-lived process cannot
+  ;; accumulate an unbounded set (e.g. a large graph with many field names that
+  ;; legitimately contain "__").
   (atom #{}))
 
+(def ^:private max-warned
+  "Cap on the number of distinct keys [[warn-once!]] tracks. Once reached,
+   further distinct warnings are suppressed — well past the point of being
+   diagnostic — so the dedup set stays bounded regardless of input volume."
+  1000)
+
 (defn- warn-once!
-  "Log `msg` at WARN, at most once per process for a given `k`."
+  "Log `msg` at WARN, at most once per process for a given `k`, until
+   [[max-warned]] distinct keys have been seen (then silent).
+
+   Sync and query compilation run concurrently, so the claim/log pair has to be
+   atomic: [[swap-vals!]] decides membership inside the CAS, and only the caller
+   that actually added `k` — the one that saw the set change — logs."
   [k msg]
-  (when-not (contains? @warned k)
-    (swap! warned conj k)
-    (log/warn msg)))
+  (let [[before after] (swap-vals! warned
+                                   (fn [seen]
+                                     (if (or (contains? seen k)
+                                             (>= (count seen) max-warned))
+                                       seen
+                                       (conj seen k))))]
+    (when-not (identical? before after)
+      (log/warn msg))))
 
 (defn- parse-prefix-line
   "Parse one non-blank `prefix=uri` line into a `[prefix uri]` pair, or nil
