@@ -71,13 +71,20 @@
    `naming` (a [[uri/naming-context]]) shortens the URI when it matches the
    Default Graph or a configured namespace prefix, so the column name in
    Metabase is the short name (e.g. `naam`, `foaf__name`) instead of the
-   full URI. The full URI is reconstructed at query-compile time."
-  [naming idx field-uri]
-  {:name (uri/shorten-uri field-uri naming)
-   :database-type "string"
-   :base-type :type/Text
-   :pk? false
-   :database-position (inc idx)})
+   full URI. The full URI is reconstructed at query-compile time.
+
+   `iri?` marks a property whose values are IRI nodes (discovered via the
+   `?isIri` projection of `class-properties-query`): it syncs as
+   `:database-type \"uri\"` — the same marker as the subject column — so
+   equality filters compile to `<iri>` terms (see `mbql/value->term`)."
+  ([naming idx field-uri]
+   (build-field-from-uri naming idx field-uri false))
+  ([naming idx field-uri iri?]
+   {:name (uri/shorten-uri field-uri naming)
+    :database-type (if iri? "uri" "string")
+    :base-type :type/Text
+    :pk? false
+    :database-position (inc idx)}))
 
 (defn- build-fields-from-explicit-config
   "Builds field set from explicit schema configuration."
@@ -88,6 +95,13 @@
         other-fields (map-indexed (partial build-field-from-uri naming) candidates)]
     (set (cons pk-field other-fields))))
 
+(defn- iri-valued-binding?
+  "True when a `class-properties-query` result row says every sampled value of
+   the property is an IRI node (`?isIri` = 1). Tolerant of endpoints that
+   return booleans."
+  [binding]
+  (contains? #{"1" "true"} (get-in binding [:isIri :value])))
+
 (defn- build-fields-from-sparql-query
   "Builds field set from SPARQL query results."
   [naming hide-foreign? bindings]
@@ -96,7 +110,9 @@
                      hide-foreign? (remove #(uri/foreign-uri? (get-in % [:property :value]) naming)))
         other-fields (map-indexed
                       (fn [idx binding]
-                        (build-field-from-uri naming idx (get-in binding [:property :value])))
+                        (build-field-from-uri naming idx
+                                              (get-in binding [:property :value])
+                                              (iri-valued-binding? binding)))
                       candidates)]
     (set (cons pk-field other-fields))))
 
@@ -148,7 +164,13 @@
         foreign? (uri/foreign-uri? uri naming)]
     (when-not (and foreign? hide-foreign?)
       (cond-> {:name              (uri/shorten-uri uri naming)
-               :database-type     (if (:lang-string? prop) "langString" "string")
+               :database-type     (cond
+                                    (:lang-string? prop) "langString"
+                                    ;; IRI-node values (sh:nodeKind sh:IRI or an
+                                    ;; sh:class target): same marker as the
+                                    ;; subject column, consumed by value->term.
+                                    (:iri-kind? prop)    "uri"
+                                    :else                "string")
                :base-type         (or (:base-type prop) :type/Text)
                :pk?               false
                :database-position (inc idx)}

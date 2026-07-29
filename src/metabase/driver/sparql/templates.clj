@@ -91,7 +91,13 @@
   ([class-uri limit]
    (class-properties-query class-uri limit 1000))
   ([class-uri limit sample-size]
-   (str "SELECT ?property (COUNT(?instance) AS ?count) WHERE { "
+   ;; ?isIri is 1 when EVERY sampled value of the property is an IRI node
+   ;; (MIN over the indicator): those properties sync as :database-type "uri"
+   ;; so equality filters compare against <iri> terms. Mixed or literal-valued
+   ;; properties stay 0. IF/aggregates are SPARQL 1.1, which this query
+   ;; already requires (COUNT/GROUP BY).
+   (str "SELECT ?property (COUNT(?instance) AS ?count) "
+        "(MIN(IF(isIRI(?value), 1, 0)) AS ?isIri) WHERE { "
         "  { SELECT ?instance WHERE { "
         "      ?instance a <" class-uri "> "
         "    } LIMIT " sample-size " "

@@ -29,7 +29,7 @@
    "  sh:targetClass ex:Persoon ;\n"
    "  sh:description \"Een persoon\"@nl ;\n"
    "  sh:node ex:EntiteitShape ;\n"
-   "  sh:property ex:p_naam , ex:p_leeftijd , ex:p_geboorteplaats , ex:p_secret .\n"
+   "  sh:property ex:p_naam , ex:p_leeftijd , ex:p_geboorteplaats , ex:p_website , ex:p_secret .\n"
    "ex:p_naam a sh:PropertyShape ;\n"
    "  sh:path ex:naam ; sh:datatype rdf:langString ;\n"
    "  sh:name \"Naam\"@nl , \"Name\"@en ; sh:order 1 .\n"
@@ -37,6 +37,8 @@
    "  sh:path ex:leeftijd ; sh:datatype xsd:integer ; sh:minCount 1 ; sh:order 2 .\n"
    "ex:p_geboorteplaats a sh:PropertyShape ;\n"
    "  sh:path ex:geboorteplaats ; sh:class ex:Plaats ; sh:order 3 .\n"
+   "ex:p_website a sh:PropertyShape ;\n"
+   "  sh:path ex:website ; sh:nodeKind sh:IRI ; sh:order 4 .\n"
    "ex:p_secret a sh:PropertyShape ;\n"
    "  sh:path ex:secret ; sh:datatype xsd:string ; mb:hide true .\n"
    "\n"
@@ -101,6 +103,11 @@
       (let [gp (p-props (str base "geboorteplaats"))]
         (is (= :type/FK (:semantic-type gp)))
         (is (= (str base "Plaats") (:fk-target-class gp)))))
+
+    (testing "IRI-node properties are flagged: sh:class targets and sh:nodeKind sh:IRI"
+      (is (true? (:iri-kind? (p-props (str base "geboorteplaats")))))
+      (is (true? (:iri-kind? (p-props (str base "website")))))
+      (is (false? (:iri-kind? (p-props (str base "naam"))))))
 
     (testing "a leaf shape keeps just its own property"
       (is (= #{(str base "label")}

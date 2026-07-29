@@ -73,9 +73,33 @@
     (let [f (build-field-from-uri graph 0 (str graph "naam"))]
       (is (= "naam" (:name f)))
       (is (false? (:pk? f)))
-      (is (= 1 (:database-position f))))))
+      (is (= "string" (:database-type f)))
+      (is (= 1 (:database-position f)))))
+  (testing "an IRI-valued property gets the \"uri\" database-type marker"
+    (is (= "uri" (:database-type (build-field-from-uri graph 0 (str graph "kent") true))))))
+
+(deftest build-fields-from-sparql-query-iri-marker-test
+  (let [build @#'database/build-fields-from-sparql-query
+        row   (fn [prop is-iri]
+                {:property {:type "uri" :value (str graph prop)}
+                 :isIri    {:type "literal" :value is-iri}})
+        fields (build graph false [(row "kent" "1") (row "naam" "0")])
+        by-name (into {} (map (juxt :name identity)) fields)]
+    (testing "?isIri = 1 marks the property as IRI-valued"
+      (is (= "uri" (:database-type (by-name "kent")))))
+    (testing "?isIri = 0 stays a plain string property"
+      (is (= "string" (:database-type (by-name "naam")))))
+    (testing "a row without ?isIri (older endpoint shape) defaults to string"
+      (let [fields (build graph false [{:property {:type "uri" :value (str graph "los")}}])]
+        (is (= "string" (:database-type (first (filter #(= "los" (:name %)) fields)))))))))
 
 (deftest shacl-prop->field-test
+  (testing "an IRI-node property (sh:nodeKind sh:IRI / sh:class) gets the uri database-type"
+    (let [f (shacl-prop->field graph false 0
+                               {:property-uri (str graph "website")
+                                :base-type :type/Text
+                                :iri-kind? true})]
+      (is (= "uri" (:database-type f)))))
   (testing "an rdf:langString property gets the langString database-type"
     (let [f (shacl-prop->field graph false 0
                                {:property-uri (str graph "naam")
