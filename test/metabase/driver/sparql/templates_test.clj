@@ -4,6 +4,16 @@
             [clojure.test :refer :all]
             [metabase.driver.sparql.templates :as templates]))
 
+(deftest class-properties-query-iri-projection-test
+  (let [uri "https://example.org/Person"]
+    (testing "the ?isIri projection is on by default"
+      (is (str/includes? (templates/class-properties-query uri) "AS ?isIri")))
+    (testing "detect-iri? false drops it, leaving the pre-?isIri query shape"
+      (let [q (templates/class-properties-query uri 20 1000 false)]
+        (is (not (str/includes? q "?isIri")))
+        (is (not (str/includes? q "isIRI")))
+        (is (str/includes? q "SELECT ?property (COUNT(?instance) AS ?count) WHERE {"))))))
+
 (deftest class-properties-query-escapes-class-uri-test
   (testing "a well-formed class URI is embedded as-is"
     (is (str/includes? (templates/class-properties-query "https://example.org/Person")

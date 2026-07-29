@@ -80,11 +80,14 @@
     class-uri - URI of the RDF class to discover properties for
     limit - Optional integer limiting the number of properties returned (default: 20)
     sample-size - Optional integer limiting the number of instances to analyze (default: 1000)
-  
+    detect-iri? - Optional flag (default: true) projecting ?isIri. Pass false for
+                  the pre-?isIri shape, which callers fall back to when an
+                  endpoint rejects the enriched query.
+
   Returns:
-    A string containing a SPARQL SELECT query that returns the most common properties 
+    A string containing a SPARQL SELECT query that returns the most common properties
     used by instances of the class, along with their occurrence count.
-  
+
   Usage:
     Used by the driver/describe-table method to discover available 'fields' for a 'table'."
   ([class-uri]
@@ -92,13 +95,17 @@
   ([class-uri limit]
    (class-properties-query class-uri limit 1000))
   ([class-uri limit sample-size]
+   (class-properties-query class-uri limit sample-size true))
+  ([class-uri limit sample-size detect-iri?]
    ;; ?isIri is 1 when EVERY sampled value of the property is an IRI node
    ;; (MIN over the indicator): those properties sync as :database-type "uri"
    ;; so equality filters compare against <iri> terms. Mixed or literal-valued
    ;; properties stay 0. IF/aggregates are SPARQL 1.1, which this query
-   ;; already requires (COUNT/GROUP BY).
+   ;; already requires (COUNT/GROUP BY) — verified on Oxigraph and Fuseki — but
+   ;; `detect-iri?` false drops the projection for endpoints that reject it.
    (str "SELECT ?property (COUNT(?instance) AS ?count) "
-        "(MIN(IF(isIRI(?value), 1, 0)) AS ?isIri) WHERE { "
+        (when detect-iri? "(MIN(IF(isIRI(?value), 1, 0)) AS ?isIri) ")
+        "WHERE { "
         "  { SELECT ?instance WHERE { "
         ;; The class URI reaches us from synced table names — i.e. from data the
         ;; endpoint returned — so it is not trusted input: iri-ref percent-encodes

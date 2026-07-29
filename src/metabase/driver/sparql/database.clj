@@ -132,6 +132,31 @@
    :schema nil
    :fields (build-fields-from-explicit-config naming hide-foreign? explicit-table)})
 
+(defn- fetch-class-properties
+  "Run the property-discovery query, retrying without the `?isIri` projection
+   when the endpoint *rejects the query itself* (kind `:query`).
+
+   The projection is SPARQL 1.1 and works on the engines we test against, but an
+   endpoint that refuses it would otherwise sync the table with zero fields —
+   the discovery query is all-or-nothing. Falling back to the pre-`?isIri` shape
+   keeps such an endpoint working exactly as it did before, minus the IRI
+   marker. Endpoint/transport failures are not retried: a second round-trip
+   would not fare better."
+  [endpoint class-uri property-limit sample-limit options]
+  (let [run (fn [detect-iri?]
+              (execute/execute-sparql-query
+               endpoint
+               (templates/class-properties-query class-uri property-limit sample-limit detect-iri?)
+               options))
+        [success _ kind :as enriched] (run true)]
+    (if (or success (not= :query kind))
+      enriched
+      (do (log/warnf (str "[sync] Endpoint rejected the IRI-detection query for %s; "
+                          "retrying without it. IRI-valued properties will sync as plain "
+                          "strings, so equality filters on them may not match.")
+                     class-uri)
+          (run false)))))
+
 (defn- describe-table-auto
   "Handles describe-table when sync strategy is 'auto' (or fallback)."
   [database table]
@@ -145,8 +170,7 @@
         class-uri      (uri/absolute-uri (:name table) naming)
         property-limit (or (->long (:property-limit details)) 20)
         sample-limit   (or (->long (:sample-limit details)) 10000)
-        query          (templates/class-properties-query class-uri property-limit sample-limit)
-        [success result] (execute/execute-sparql-query endpoint query options)]
+        [success result] (fetch-class-properties endpoint class-uri property-limit sample-limit options)]
     (if success
       {:name (:name table)
        :schema nil
