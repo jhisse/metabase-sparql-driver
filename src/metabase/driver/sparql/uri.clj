@@ -19,6 +19,16 @@
    class covers upper and lower case)."
   #"^[A-Za-z][A-Za-z0-9+.-]*:")
 
+(defn has-scheme?
+  "True when `s` is a string that already carries a URI scheme (`http:`,
+   `did:`, `URN:`, …) — any RFC-3986 scheme shape, case-insensitive via
+   [[scheme-pattern]]'s char class. Broader than [[iri-shaped?]], which answers
+   a different question (\"does this *value* look like an IRI absent any other
+   signal\")."
+  [s]
+  (boolean (and (string? s)
+                (re-find scheme-pattern s))))
+
 (def ^:private prefixed-name-pattern
   "Matches a name shaped like `prefix__…` (prefix charset per [[parse-prefix-line]])."
   #"^[A-Za-z][A-Za-z0-9_-]*__")

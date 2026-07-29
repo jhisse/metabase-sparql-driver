@@ -188,19 +188,25 @@
 (defn- value->term
   "Render a filter RHS value as a SPARQL term for an equality comparison.
 
-   An IRI-valued field — a foreign key (`:semantic-type :type/FK`) or the
-   synthetic subject column (`:database-type \"uri\"`) — is bound to IRI
-   *nodes*, so an IRI-shaped value must be emitted as `<iri>` (via
-   [[uri/iri-ref]], which escapes it) or the comparison can never match.
-   Everything else falls back to [[literal->sparql]]; notably `:type/URL`
-   columns stay literals, because they hold `xsd:anyURI`-typed literal
-   values, not IRI nodes.
+   An IRI-valued field — a foreign key (`:semantic-type :type/FK`) or a
+   column whose values are IRI nodes (`:database-type \"uri\"`: the synthetic
+   subject, auto-sync-discovered IRI properties, SHACL `sh:nodeKind sh:IRI`) —
+   is bound to IRI *nodes*, so a scheme-carrying value must be emitted as
+   `<iri>` (via [[uri/iri-ref]], which escapes it) or the comparison can never
+   match. The shape check is [[uri/has-scheme?]] — any scheme, case-insensitive
+   (`did:`, `HTTPS://`, …) — which is safe here because the field metadata
+   already says the values are IRIs. Everything else falls back to
+   [[literal->sparql]]; notably `:type/URL` columns stay literals, because
+   they hold `xsd:anyURI`-typed literal values, not IRI nodes.
+
+   Only `:=`/`:!=` route through here: range ops (`:</:>/:between`) stay
+   literals by design — ordering comparisons on IRI terms are a SPARQL type
+   error, and a range filter over IRIs is not meaningful.
 
    Known limitation: in a derived stage field refs are column-name strings,
    so `field-id->metadata` returns nil and the value stays a literal."
   [field-id v]
-  (if (and (string? v)
-           (uri/iri-shaped? v)
+  (if (and (uri/has-scheme? v)
            (let [meta (field-id->metadata field-id)]
              (or (= :type/FK (:semantic-type meta))
                  (= "uri" (:database-type meta)))))

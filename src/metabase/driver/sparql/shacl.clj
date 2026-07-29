@@ -200,6 +200,7 @@
   (let [path        (single spo prop-node (str sh "path"))
         datatype    (single spo prop-node (str sh "datatype"))
         target-cls  (single spo prop-node (str sh "class"))
+        node-kind   (single spo prop-node (str sh "nodeKind"))
         name-text   (pick-localized (objects spo prop-node (str sh "name")) lang)
         desc-text   (pick-localized (objects spo prop-node (str sh "description")) lang)
         order-lit   (single spo prop-node (str sh "order"))
@@ -225,6 +226,11 @@
        :semantic-type     sem-type
        :description       (when-not (str/blank? descr) descr)
        :order             (parse-long-literal order-lit)
+       ;; Values are IRI nodes: an explicit sh:nodeKind sh:IRI, or an sh:class
+       ;; target (FK). Synced as :database-type "uri" (see shacl-prop->field).
+       :iri-kind?         (boolean (or (iri? target-cls)
+                                       (and (iri? node-kind)
+                                            (= (:value node-kind) (str sh "IRI")))))
        :fk-target-class   (when (iri? target-cls) (:value target-cls))
        :display-value-property (when (iri? mb-display) (:value mb-display))
        :database-required (boolean (and (literal? min-count)

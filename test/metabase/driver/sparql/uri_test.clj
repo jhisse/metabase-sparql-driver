@@ -26,6 +26,19 @@
     (is (= "\"a\\\"b\"" (uri/string-literal "a\"b")))
     (is (= "\"plain\"" (uri/string-literal "plain")))))
 
+(deftest has-scheme?-test
+  (testing "any RFC-3986 scheme shape counts, case-insensitively"
+    (is (uri/has-scheme? "https://ex.org/x"))
+    (is (uri/has-scheme? "HTTPS://EX.ORG/X"))
+    (is (uri/has-scheme? "did:example:123"))
+    (is (uri/has-scheme? "URN:isbn:123"))
+    (is (uri/has-scheme? "mailto:a@b.c")))
+  (testing "schemeless strings and non-strings do not"
+    (is (not (uri/has-scheme? "AC-123")))
+    (is (not (uri/has-scheme? "1col:x")))
+    (is (not (uri/has-scheme? 42)))
+    (is (not (uri/has-scheme? nil)))))
+
 (deftest iri-shaped?-test
   (testing "http(s) and urn shapes are IRIs"
     (is (uri/iri-shaped? "https://ex.org/x"))

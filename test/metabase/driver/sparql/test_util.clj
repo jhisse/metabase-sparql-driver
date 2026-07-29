@@ -65,11 +65,13 @@
   ;; Mirrors what describe-table discovers for Person in the smoke fixture
   ;; (provider-matches-live-schema-test in e2e_test.clj keeps the two in sync).
   ;; age is declared Integer so Lib accepts numeric filters on it; the compiler
-  ;; itself only reads :name/:table-id.
+  ;; itself only reads :name/:table-id. knows carries the "uri" marker the
+  ;; auto-sync discovery now stamps on IRI-valued properties (?isIri), so
+  ;; equality filters on it compile to <iri> terms.
   [(col 101 0 "subject" :type/Text "uri")
    (col 102 1 rdfs-label :type/Text "string")
    (col 103 2 "age" :type/Integer "string")
-   (col 104 3 "knows" :type/Text "string")])
+   (col 104 3 "knows" :type/Text "uri")])
 
 (def provider
   "Minimal MetadataProvider over the fixture's schema. Carries the endpoint and

@@ -56,13 +56,16 @@
 
 (deftest ^:integration describe-table-discovers-fields-test
   (testing "describe-table discovers the synthetic PK plus the class's properties"
-    (let [field-names (->> (:fields (database/describe-table :sparql tu/db {:name "Person"}))
-                           (map :name)
-                           set)]
+    (let [fields      (:fields (database/describe-table :sparql tu/db {:name "Person"}))
+          field-names (set (map :name fields))
+          by-name     (into {} (map (juxt :name identity)) fields)]
       (testing "the synthetic subject primary key is always present"
         (is (contains? field-names "subject")))
       (testing "same-graph properties are shortened to their local names"
         (is (contains? field-names "age"))
         (is (contains? field-names "knows")))
       (testing "rdfs:label is discovered too (kept as its full foreign URI)"
-        (is (some #(str/includes? % "rdf-schema#label") field-names))))))
+        (is (some #(str/includes? % "rdf-schema#label") field-names)))
+      (testing "IRI-valued properties get the \"uri\" database-type; literal ones stay \"string\""
+        (is (= "uri" (:database-type (by-name "knows"))))
+        (is (= "string" (:database-type (by-name "age"))))))))

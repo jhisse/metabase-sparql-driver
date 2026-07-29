@@ -53,6 +53,28 @@
         {:keys [rows]} (tu/run-query q)]
     (is (= [["Alice"]] rows))))
 
+(deftest ^:integration iri-equality-filter-test
+  (testing "equality on the subject column compiles to an <iri> term and matches"
+    (let [q     (tu/person-query)
+          label (tu/column q tu/rdfs-label)
+          subj  (tu/column q "subject")
+          q     (-> q
+                    (lib/with-fields [label])
+                    (lib/filter (lib/= subj "https://example.org/alice")))
+          {:keys [rows native]} (tu/run-query q)]
+      (is (str/includes? native "<https://example.org/alice>"))
+      (is (= [["Alice"]] rows))))
+  (testing "equality on an IRI-valued property (knows, database-type \"uri\") matches the node"
+    (let [q     (tu/person-query)
+          label (tu/column q tu/rdfs-label)
+          knows (tu/column q "knows")
+          q     (-> q
+                    (lib/with-fields [label])
+                    (lib/filter (lib/= knows "https://example.org/bob")))
+          {:keys [rows native]} (tu/run-query q)]
+      (is (str/includes? native "<https://example.org/bob>"))
+      (is (= [["Alice"]] rows)))))
+
 (deftest ^:integration filter-between-age-test
   (let [q     (tu/person-query)
         label (tu/column q tu/rdfs-label)

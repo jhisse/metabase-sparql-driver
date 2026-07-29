@@ -2,8 +2,10 @@
   "Unit tests for SPARQL metadata-sync helpers: URI shortening, the implicit
    Default-Graph base prefix, foreign-URI hiding, explicit/none sync strategies,
    and the SHACL shape -> Metabase metadata conversion."
-  (:require [clojure.test :refer :all]
+  (:require [clojure.string :as str]
+            [clojure.test :refer :all]
             [metabase.driver.sparql.database :as database]
+            [metabase.driver.sparql.execute :as execute]
             [metabase.driver.sparql.uri :as uri]))
 
 (def ^:private extract-class-name @#'database/extract-class-name)
@@ -73,9 +75,60 @@
     (let [f (build-field-from-uri graph 0 (str graph "naam"))]
       (is (= "naam" (:name f)))
       (is (false? (:pk? f)))
-      (is (= 1 (:database-position f))))))
+      (is (= "string" (:database-type f)))
+      (is (= 1 (:database-position f)))))
+  (testing "an IRI-valued property gets the \"uri\" database-type marker"
+    (is (= "uri" (:database-type (build-field-from-uri graph 0 (str graph "kent") true))))))
+
+(deftest build-fields-from-sparql-query-iri-marker-test
+  (let [build @#'database/build-fields-from-sparql-query
+        row   (fn [prop is-iri]
+                {:property {:type "uri" :value (str graph prop)}
+                 :isIri    {:type "literal" :value is-iri}})
+        fields (build graph false [(row "kent" "1") (row "naam" "0")])
+        by-name (into {} (map (juxt :name identity)) fields)]
+    (testing "?isIri = 1 marks the property as IRI-valued"
+      (is (= "uri" (:database-type (by-name "kent")))))
+    (testing "?isIri = 0 stays a plain string property"
+      (is (= "string" (:database-type (by-name "naam")))))
+    (testing "a row without ?isIri (older endpoint shape) defaults to string"
+      (let [fields (build graph false [{:property {:type "uri" :value (str graph "los")}}])]
+        (is (= "string" (:database-type (first (filter #(= "los" (:name %)) fields)))))))))
+
+(deftest describe-table-auto-iri-projection-fallback-test
+  (let [details   {:endpoint "http://sparql.invalid/query" :default-graph graph}
+        queries   (atom [])
+        one-prop  {:results {:bindings [{:property {:type "uri" :value (str graph "naam")}}]}}]
+    (testing "an endpoint that rejects the ?isIri query still syncs its fields"
+      (reset! queries [])
+      (with-redefs [execute/execute-sparql-query
+                    (fn [_ query _]
+                      (swap! queries conj query)
+                      (if (str/includes? query "?isIri")
+                        [false "SPARQL endpoint returned status: 400" :query]
+                        [true one-prop]))]
+        (let [{:keys [fields]} (database/describe-table :sparql {:details details} {:name "Persoon"})
+              naam (first (filter #(= "naam" (:name %)) fields))]
+          (is (= 2 (count @queries)) "the rejected query is retried without the projection")
+          (is (some? naam) "the property still syncs — no zero-field table")
+          (is (= "string" (:database-type naam))
+              "without the projection the IRI marker is simply absent"))))
+    (testing "an endpoint/transport failure is NOT retried — a second round-trip would not help"
+      (reset! queries [])
+      (with-redefs [execute/execute-sparql-query
+                    (fn [_ query _]
+                      (swap! queries conj query)
+                      [false "Connection refused" :transport])]
+        (database/describe-table :sparql {:details details} {:name "Persoon"})
+        (is (= 1 (count @queries)))))))
 
 (deftest shacl-prop->field-test
+  (testing "an IRI-node property (sh:nodeKind sh:IRI / sh:class) gets the uri database-type"
+    (let [f (shacl-prop->field graph false 0
+                               {:property-uri (str graph "website")
+                                :base-type :type/Text
+                                :iri-kind? true})]
+      (is (= "uri" (:database-type f)))))
   (testing "an rdf:langString property gets the langString database-type"
     (let [f (shacl-prop->field graph false 0
                                {:property-uri (str graph "naam")
