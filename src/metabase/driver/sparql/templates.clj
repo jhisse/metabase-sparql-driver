@@ -3,7 +3,8 @@
 
    This namespace contains predefined SPARQL queries used by the driver
    for various operations such as connection testing and table discovery.
-   Each query is optimized for specific use cases.")
+   Each query is optimized for specific use cases."
+  (:require [metabase.driver.sparql.uri :as uri]))
 
 (defn connection-test-query
   "Simple query to test connectivity with a SPARQL endpoint.
@@ -99,7 +100,11 @@
    (str "SELECT ?property (COUNT(?instance) AS ?count) "
         "(MIN(IF(isIRI(?value), 1, 0)) AS ?isIri) WHERE { "
         "  { SELECT ?instance WHERE { "
-        "      ?instance a <" class-uri "> "
+        ;; The class URI reaches us from synced table names — i.e. from data the
+        ;; endpoint returned — so it is not trusted input: iri-ref percent-encodes
+        ;; the chars that could close the <...> early and graft clauses onto this
+        ;; query (the same guard mbql.clj already applies to class/property IRIs).
+        "      ?instance a " (uri/iri-ref class-uri) " "
         "    } LIMIT " sample-size " "
         "  } "
         "  ?instance ?property ?value . "
