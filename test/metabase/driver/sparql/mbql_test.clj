@@ -3,7 +3,7 @@
 
    Pure helpers are tested directly. The stage-compilation functions reach the
    metadata provider through four private accessors
-   (`field-id->metadata`, `table-id->class-uri`, `database-default-graph`,
+   (`field-id->metadata`, `table-id->class-uri`, `database-naming-context`,
    `database-default-language`); those are stubbed with `with-redefs-fn` so the
    full compile path can be exercised without a running Metabase app DB."
   (:require [clojure.string :as str]
@@ -236,7 +236,7 @@
   `(with-redefs-fn
      {#'mbql/field-id->metadata        (fn [id#] (get fixture-fields id#))
       #'mbql/table-id->class-uri       (constantly (str base "Persoon"))
-      #'mbql/database-default-graph    (constantly base)
+      #'mbql/database-naming-context   (constantly {:default-graph base :prefixes []})
       #'mbql/database-default-language (constantly "")}
      (fn [] ~@body)))
 
@@ -314,7 +314,7 @@
       (with-redefs-fn
         {#'mbql/field-id->metadata        (fn [id] (get fields id))
          #'mbql/table-id->class-uri       (constantly (str base "Persoon"))
-         #'mbql/database-default-graph    (constantly base)
+         #'mbql/database-naming-context   (constantly {:default-graph base :prefixes []})
          #'mbql/database-default-language (constantly "")}
         (fn []
           (let [stage {:source-table persoon-tid
@@ -353,7 +353,7 @@
       (with-redefs-fn
         {#'mbql/field-id->metadata        (fn [id] (get fields id))
          #'mbql/table-id->class-uri       (constantly (str base "Item"))
-         #'mbql/database-default-graph    (constantly base)
+         #'mbql/database-naming-context   (constantly {:default-graph base :prefixes []})
          #'mbql/database-default-language (constantly "")}
         (fn []
           (let [{:keys [sparql]}
@@ -397,7 +397,7 @@
       (with-redefs-fn
         {#'mbql/field-id->metadata        (fn [id] (get fields id))
          #'mbql/table-id->class-uri       (constantly (str base "Item"))
-         #'mbql/database-default-graph    (constantly base)
+         #'mbql/database-naming-context   (constantly {:default-graph base :prefixes []})
          #'mbql/database-default-language (constantly "")}
         (fn []
           (let [{:keys [sparql]}
@@ -427,7 +427,7 @@
       (with-redefs-fn
         {#'mbql/field-id->metadata        (fn [id] (get fields id))
          #'mbql/table-id->class-uri       (constantly (str base "Item"))
-         #'mbql/database-default-graph    (constantly base)
+         #'mbql/database-naming-context   (constantly {:default-graph base :prefixes []})
          #'mbql/database-default-language (constantly "")}
         (fn []
           (let [{:keys [sparql]}
@@ -553,7 +553,7 @@
           ctx {:field-id->var           {2 "naam" 3 "leeftijd"}
                :pair->target-var        {[10 "Plaats"] "Plaats__label"}
                :alias->intermediate-var {"Plaats" "Plaats_subject"}
-               :default-graph           base}]
+               :naming                  {:default-graph base :prefixes []}}]
       (testing "columns the compiler already projects reuse their variable"
         (is (= {:vars ["subject" "naam" "Plaats__label"] :triples []}
                (f [{:id 1} {:id 2} {:id 10 :lib/join-alias "Plaats"}] ctx))))
@@ -613,7 +613,7 @@
                                                        2 {:name "naam" :database-type "langString"}}
                                                       id))
        #'mbql/table-id->class-uri       (constantly (str base "Persoon"))
-       #'mbql/database-default-graph    (constantly base)
+       #'mbql/database-naming-context   (constantly {:default-graph base :prefixes []})
        #'mbql/database-default-language (constantly "nl")}
       (fn []
         (let [{:keys [sparql]}

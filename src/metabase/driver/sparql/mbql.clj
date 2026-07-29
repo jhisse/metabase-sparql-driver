@@ -56,12 +56,13 @@
   [field-id]
   (= "subject" (:name (field-id->metadata field-id))))
 
-(defn- database-default-graph
-  "Read the Default Graph URI from the connection details of the current database."
+(defn- database-naming-context
+  "URI-naming context (Default Graph + namespace prefixes) from the connection
+   details of the current database. Consumed by `uri/absolute-uri` to expand
+   shortened table/field names back to full URIs."
   []
-  (some-> (driver-api/database (driver-api/metadata-provider))
-          :details
-          :default-graph))
+  (uri/naming-context (some-> (driver-api/database (driver-api/metadata-provider))
+                              :details)))
 
 (defn- database-default-language
   "Read the Default Language (BCP-47 tag) from connection details. May be blank."
@@ -90,7 +91,7 @@
   [table-id]
   (let [nm  (some-> (driver-api/table (driver-api/metadata-provider) table-id)
                     :name)
-        uri (uri/absolute-uri nm (database-default-graph))]
+        uri (uri/absolute-uri nm (database-naming-context))]
     (log/debugf "[mbql] Resolved class URI for table-id %s: %s" table-id uri)
     uri))
 
@@ -458,7 +459,7 @@
 
    Returns `{:vars [...] :triples [...]}`."
   [expected-cols {:keys [field-id->var pair->target-var alias->intermediate-var
-                         fk-fid->alias default-graph]}]
+                         fk-fid->alias naming]}]
   (let [placeholder (atom 0)]
     (reduce
      (fn [acc col]
@@ -478,7 +479,7 @@
                (update acc :vars conj inter)
                (let [nm   (:name (field-id->metadata fid))
                      v    (joined-var-name alias (or nm (str "f_" fid)))
-                     prop (uri/absolute-uri nm default-graph)]
+                     prop (uri/absolute-uri nm naming)]
                  (-> acc
                      (update :vars conj v)
                      (update :triples conj
@@ -488,7 +489,7 @@
            (and fid (not alias) (not (id-field? fid)) (:name (field-id->metadata fid)))
            (let [nm   (:name (field-id->metadata fid))
                  v    (sanitize-var-name nm)
-                 prop (uri/absolute-uri nm default-graph)]
+                 prop (uri/absolute-uri nm naming)]
              (-> acc
                  (update :vars conj v)
                  (update :triples conj
@@ -532,7 +533,7 @@
   (let [limit         (:limit inner)
         table-id      (:source-table inner)
         class-uri     (table-id->class-uri table-id)
-        default-graph (database-default-graph)
+        naming        (database-naming-context)
         fields        (:fields inner)
         order-by      (:order-by inner)
         filter-clause (:filter inner)
@@ -566,7 +567,7 @@
                                                    (condition->fk-field-id (:condition j) alias))
                                          nm    (when fk-id (:name (field-id->metadata fk-id)))]
                                    :when nm]
-                               [alias (uri/absolute-uri nm default-graph)]))
+                               [alias (uri/absolute-uri nm naming)]))
         ;; LHS of each join's FK triple. Chained joins (e.g. Item → Provider → Owner)
         ;; carry an FK field that lives on a *previously joined* table; emitting the
         ;; triple off `?subject` would silently produce an unbound chain. Resolution
@@ -637,7 +638,7 @@
                              (for [fid field-ids
                                    :let [nm (:name (field-id->metadata fid))]
                                    :when (and nm (not (id-field? fid)))]
-                               [fid (uri/absolute-uri nm default-graph)]))
+                               [fid (uri/absolute-uri nm naming)]))
         field-id->var  (build-var-aliases field-ids)
         token->var     (fn [tok] (var-for-token tok field-id->var pair->target-var))
         triples-for-fields (->> output-tokens
@@ -683,7 +684,7 @@
         join-target-triples (for [[fid alias] joined-pairs
                                   :when (not (id-field? fid))
                                   :let [nm (:name (field-id->metadata fid))
-                                        prop (uri/absolute-uri nm default-graph)
+                                        prop (uri/absolute-uri nm naming)
                                         target-var (get pair->target-var [fid alias])
                                         inter-var (get alias->intermediate-var alias)]
                                   :when (and prop target-var inter-var)]
@@ -742,7 +743,7 @@
                         :pair->target-var        pair->target-var
                         :alias->intermediate-var alias->intermediate-var
                         :fk-fid->alias           fk-fid->alias
-                        :default-graph           default-graph}))
+                        :naming                  naming}))
         result-vars (cond
                       agg?       (vec (concat breakout-vars (keep :var agg-projections)))
                       reconciled (vec (:vars reconciled))
@@ -809,7 +810,7 @@
 
    Returns `{:sparql … :vars …}`."
   [stage expected-cols]
-  (let [default-graph (database-default-graph)
+  (let [naming        (database-naming-context)
         inner         (compile-stage (:source-query stage))
         joins         (:joins stage)
         alias->join   (into {} (for [j joins] [(:alias j) j]))
@@ -820,7 +821,7 @@
                                    join   (get alias->join alias)
                                    fk-var (some-> join :condition condition->fk-ref inner-var-for-ref)
                                    nm     (when (integer? tid) (:name (field-id->metadata tid)))
-                                   prop   (when nm (uri/absolute-uri nm default-graph))
+                                   prop   (when nm (uri/absolute-uri nm naming))
                                    rvar   (joined-var-name alias (or nm (str "f_" tid)))]
                             :when (and fk-var prop)]
                         {:optional (emit-optional-triple fk-var prop rvar)
@@ -875,7 +876,7 @@
 
                                  (and alias join fk-var nm)
                                  (let [rvar (joined-var-name alias nm)
-                                       prop (uri/absolute-uri nm default-graph)]
+                                       prop (uri/absolute-uri nm naming)]
                                    (-> acc
                                        (update :vars conj rvar)
                                        (update :optionals conj

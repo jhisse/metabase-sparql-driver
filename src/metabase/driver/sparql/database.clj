@@ -68,11 +68,12 @@
 (defn- build-field-from-uri
   "Creates a field definition from a property URI.
 
-   `default-graph` is stripped from the URI when it matches, so the column
-   name in Metabase is the short local name (e.g. `naam`) instead of the
+   `naming` (a [[uri/naming-context]]) shortens the URI when it matches the
+   Default Graph or a configured namespace prefix, so the column name in
+   Metabase is the short name (e.g. `naam`, `foaf__name`) instead of the
    full URI. The full URI is reconstructed at query-compile time."
-  [default-graph idx field-uri]
-  {:name (uri/shorten-uri field-uri default-graph)
+  [naming idx field-uri]
+  {:name (uri/shorten-uri field-uri naming)
    :database-type "string"
    :base-type :type/Text
    :pk? false
@@ -80,22 +81,22 @@
 
 (defn- build-fields-from-explicit-config
   "Builds field set from explicit schema configuration."
-  [default-graph hide-foreign? explicit-table]
+  [naming hide-foreign? explicit-table]
   (let [pk-field     (build-pk-field)
         candidates   (cond->> (:fields explicit-table)
-                       hide-foreign? (remove #(uri/foreign-uri? % default-graph)))
-        other-fields (map-indexed (partial build-field-from-uri default-graph) candidates)]
+                       hide-foreign? (remove #(uri/foreign-uri? % naming)))
+        other-fields (map-indexed (partial build-field-from-uri naming) candidates)]
     (set (cons pk-field other-fields))))
 
 (defn- build-fields-from-sparql-query
   "Builds field set from SPARQL query results."
-  [default-graph hide-foreign? bindings]
+  [naming hide-foreign? bindings]
   (let [pk-field   (build-pk-field)
         candidates (cond->> bindings
-                     hide-foreign? (remove #(uri/foreign-uri? (get-in % [:property :value]) default-graph)))
+                     hide-foreign? (remove #(uri/foreign-uri? (get-in % [:property :value]) naming)))
         other-fields (map-indexed
                       (fn [idx binding]
-                        (build-field-from-uri default-graph idx (get-in binding [:property :value])))
+                        (build-field-from-uri naming idx (get-in binding [:property :value])))
                       candidates)]
     (set (cons pk-field other-fields))))
 
@@ -109,23 +110,23 @@
 
 (defn- describe-table-explicit
   "Handles describe-table when sync strategy is 'explicit'."
-  [default-graph hide-foreign? table explicit-table]
+  [naming hide-foreign? table explicit-table]
   (log/info "Using explicit schema configuration for table:" (:name table))
   {:name (:name table)
    :schema nil
-   :fields (build-fields-from-explicit-config default-graph hide-foreign? explicit-table)})
+   :fields (build-fields-from-explicit-config naming hide-foreign? explicit-table)})
 
 (defn- describe-table-auto
   "Handles describe-table when sync strategy is 'auto' (or fallback)."
   [database table]
   (let [details        (:details database)
-        default-graph  (:default-graph details)
+        naming         (uri/naming-context details)
         hide-foreign?  (boolean (:hide-foreign-uris details))
         endpoint       (:endpoint details)
         options        {:insecure?     (:use-insecure details)
-                        :default-graph default-graph
+                        :default-graph (:default-graph details)
                         :auth          (auth/http-options details)}
-        class-uri      (uri/absolute-uri (:name table) default-graph)
+        class-uri      (uri/absolute-uri (:name table) naming)
         property-limit (or (->long (:property-limit details)) 20)
         sample-limit   (or (->long (:sample-limit details)) 10000)
         query          (templates/class-properties-query class-uri property-limit sample-limit)
@@ -133,7 +134,7 @@
     (if success
       {:name (:name table)
        :schema nil
-       :fields (build-fields-from-sparql-query default-graph hide-foreign? (get-in result [:results :bindings]))}
+       :fields (build-fields-from-sparql-query naming hide-foreign? (get-in result [:results :bindings]))}
       (do
         (log/error "Error describing SPARQL table:" result)
         {:fields #{}}))))
@@ -142,11 +143,11 @@
 
 (defn- shacl-prop->field
   "Convert one SHACL property descriptor into a Metabase TableMetadataField."
-  [default-graph hide-foreign? idx prop]
+  [naming hide-foreign? idx prop]
   (let [uri      (:property-uri prop)
-        foreign? (uri/foreign-uri? uri default-graph)]
+        foreign? (uri/foreign-uri? uri naming)]
     (when-not (and foreign? hide-foreign?)
-      (cond-> {:name              (uri/shorten-uri uri default-graph)
+      (cond-> {:name              (uri/shorten-uri uri naming)
                :database-type     (if (:lang-string? prop) "langString" "string")
                :base-type         (or (:base-type prop) :type/Text)
                :pk?               false
@@ -157,8 +158,8 @@
 
 (defn- shacl-shape->table
   "Convert one SHACL shape into a Metabase TableMetadata `:table` entry."
-  [default-graph {:keys [class-uri description]}]
-  {:name         (uri/shorten-uri class-uri default-graph)
+  [naming {:keys [class-uri description]}]
+  {:name         (uri/shorten-uri class-uri naming)
    :schema       nil
    :display-name (extract-class-name class-uri)
    :description  (or description (str "RDF Class: " class-uri " (SHACL)"))})
@@ -169,23 +170,23 @@
    Properties are emitted in `sh:order` ascending, with `:property-uri` as a
    tie-breaker so the output is deterministic; properties without `sh:order`
    sort to the end."
-  [default-graph hide-foreign? {:keys [class-uri properties]}]
+  [naming hide-foreign? {:keys [class-uri properties]}]
   (let [pk-field   (build-pk-field)
         candidates (cond->> properties
-                     hide-foreign? (remove #(uri/foreign-uri? (:property-uri %) default-graph))
+                     hide-foreign? (remove #(uri/foreign-uri? (:property-uri %) naming))
                      :always       (sort-by (juxt #(or (:order %) Long/MAX_VALUE)
                                                   :property-uri)))
         fields     (->> candidates
-                        (map-indexed (fn [idx p] (shacl-prop->field default-graph hide-foreign? idx p)))
+                        (map-indexed (fn [idx p] (shacl-prop->field naming hide-foreign? idx p)))
                         (remove nil?))]
-    {:name   (uri/shorten-uri class-uri default-graph)
+    {:name   (uri/shorten-uri class-uri naming)
      :schema nil
      :fields (set (cons pk-field fields))}))
 
 (defn- shape-for-table
   "Find the SHACL shape whose class matches `table` (after URI reconstruction)."
-  [shapes default-graph table]
-  (let [full (uri/absolute-uri (:name table) default-graph)]
+  [shapes naming table]
+  (let [full (uri/absolute-uri (:name table) naming)]
     (some #(when (= (:class-uri %) full) %) shapes)))
 
 (defn- shacl-fetch-opts
@@ -220,7 +221,7 @@
   [database]
   (if-not (= :shacl (keyword (get-in database [:details :metadata-sync-strategy] "auto")))
     []
-    (let [default-graph (-> database :details :default-graph)
+    (let [naming        (uri/naming-context (:details database))
           hide-foreign? (boolean (-> database :details :hide-foreign-uris))
           shapes        (shacl-shapes database)]
       (for [shape shapes
@@ -229,39 +230,39 @@
                    prop-uri (:property-uri prop)]
             :when fk-class
             :when (not (and hide-foreign?
-                            (or (uri/foreign-uri? fk-class default-graph)
-                                (uri/foreign-uri? prop-uri default-graph)
-                                (uri/foreign-uri? (:class-uri shape) default-graph))))]
-        {:fk-table-name   (uri/shorten-uri (:class-uri shape) default-graph)
+                            (or (uri/foreign-uri? fk-class naming)
+                                (uri/foreign-uri? prop-uri naming)
+                                (uri/foreign-uri? (:class-uri shape) naming))))]
+        {:fk-table-name   (uri/shorten-uri (:class-uri shape) naming)
          :fk-table-schema nil
-         :fk-column-name  (uri/shorten-uri prop-uri default-graph)
-         :pk-table-name   (uri/shorten-uri fk-class default-graph)
+         :fk-column-name  (uri/shorten-uri prop-uri naming)
+         :pk-table-name   (uri/shorten-uri fk-class naming)
          :pk-table-schema nil
          :pk-column-name  "subject"}))))
 
 (defn- describe-database-shacl
   [database]
   (let [details       (:details database)
-        default-graph (:default-graph details)
+        naming        (uri/naming-context details)
         hide-foreign? (boolean (:hide-foreign-uris details))
         shapes        (shacl-shapes database)]
     (when-not shapes
       (log/warnf "[shacl] No shapes available for database %s; returning empty table set" (:name database)))
     {:tables (->> (or shapes [])
                   (remove (fn [s] (and hide-foreign?
-                                       (uri/foreign-uri? (:class-uri s) default-graph))))
-                  (map #(shacl-shape->table default-graph %))
+                                       (uri/foreign-uri? (:class-uri s) naming))))
+                  (map #(shacl-shape->table naming %))
                   set)}))
 
 (defn- describe-table-shacl
   [database table]
   (let [details       (:details database)
-        default-graph (:default-graph details)
+        naming        (uri/naming-context details)
         hide-foreign? (boolean (:hide-foreign-uris details))
         shapes        (shacl-shapes database)
-        match         (shape-for-table shapes default-graph table)]
+        match         (shape-for-table shapes naming table)]
     (if match
-      (shacl-shape->describe-table default-graph hide-foreign? match)
+      (shacl-shape->describe-table naming hide-foreign? match)
       (do
         (log/warnf "[shacl] No shape found for table %s; returning empty fields"
                    (:name table))
@@ -280,10 +281,10 @@
   [_ database table]
   (let [details        (:details database)
         sync-strategy  (keyword (get details :metadata-sync-strategy "auto"))
-        default-graph  (:default-graph details)
+        naming         (uri/naming-context details)
         hide-foreign?  (boolean (:hide-foreign-uris details))
         schema-config  (some-> details :schema-config parse-schema-config)
-        full-name      (uri/absolute-uri (:name table) default-graph)
+        full-name      (uri/absolute-uri (:name table) naming)
         explicit-table (when (= sync-strategy :explicit)
                          (some #(when (= (:name %) full-name) %) (:tables schema-config)))]
     (cond
@@ -294,16 +295,16 @@
       (describe-table-shacl database table)
 
       (and (= sync-strategy :explicit) explicit-table)
-      (describe-table-explicit default-graph hide-foreign? table explicit-table)
+      (describe-table-explicit naming hide-foreign? table explicit-table)
 
       :else
       (describe-table-auto database table))))
 
 (defn- build-table-from-config
   "Builds a table definition from schema configuration."
-  [default-graph table]
+  [naming table]
   (let [uri        (:name table)
-        short-name (uri/shorten-uri uri default-graph)]
+        short-name (uri/shorten-uri uri naming)]
     {:name short-name
      :schema nil
      :display-name (extract-class-name uri)
@@ -312,8 +313,8 @@
 
 (defn- build-table-from-sparql-result
   "Builds a table definition from SPARQL query results."
-  [default-graph {:keys [uri count]}]
-  {:name (uri/shorten-uri uri default-graph)
+  [naming {:keys [uri count]}]
+  {:name (uri/shorten-uri uri naming)
    :schema nil
    :display-name (extract-class-name uri)
    :description (str "RDF Class: " uri " (Instances: " count ")")})
@@ -326,21 +327,21 @@
 
 (defn- describe-database-explicit
   "Handles describe-database when sync strategy is 'explicit'."
-  [default-graph hide-foreign? database schema-config]
+  [naming hide-foreign? database schema-config]
   (log/info "Using explicit schema configuration for database:" (:name database))
   (let [tables (cond->> (:tables schema-config)
-                 hide-foreign? (remove #(uri/foreign-uri? (:name %) default-graph)))]
-    {:tables (set (map #(build-table-from-config default-graph %) tables))}))
+                 hide-foreign? (remove #(uri/foreign-uri? (:name %) naming)))]
+    {:tables (set (map #(build-table-from-config naming %) tables))}))
 
 (defn- describe-database-auto
   "Handles describe-database when sync strategy is 'auto' (or fallback)."
   [database]
   (let [details       (:details database)
-        default-graph (:default-graph details)
+        naming        (uri/naming-context details)
         hide-foreign? (boolean (:hide-foreign-uris details))
         endpoint      (:endpoint details)
         options       {:insecure?     (:use-insecure details)
-                       :default-graph default-graph
+                       :default-graph (:default-graph details)
                        :auth          (auth/http-options details)}
         class-limit   (or (->long (:class-limit details)) 100)
         [success result] (execute/execute-sparql-query endpoint (templates/classes-discovery-query class-limit) options)]
@@ -349,8 +350,8 @@
                                   :always (map (fn [binding]
                                                  {:uri   (get-in binding [:class :value])
                                                   :count (bigint (get-in binding [:count :value]))}))
-                                  hide-foreign? (remove #(uri/foreign-uri? (:uri %) default-graph)))]
-        {:tables (set (map #(build-table-from-sparql-result default-graph %) classes-with-counts))})
+                                  hide-foreign? (remove #(uri/foreign-uri? (:uri %) naming)))]
+        {:tables (set (map #(build-table-from-sparql-result naming %) classes-with-counts))})
       (do
         (log/error "Error describing SPARQL database:" result)
         {:tables #{}}))))
@@ -367,7 +368,7 @@
   [_ database]
   (let [details       (:details database)
         sync-strategy (keyword (get details :metadata-sync-strategy "auto"))
-        default-graph (:default-graph details)
+        naming        (uri/naming-context details)
         hide-foreign? (boolean (:hide-foreign-uris details))
         schema-config (some-> details :schema-config parse-schema-config)]
     (cond
@@ -378,7 +379,7 @@
       (describe-database-shacl database)
 
       (and (= sync-strategy :explicit) schema-config)
-      (describe-database-explicit default-graph hide-foreign? database schema-config)
+      (describe-database-explicit naming hide-foreign? database schema-config)
 
       :else
       (describe-database-auto database))))
