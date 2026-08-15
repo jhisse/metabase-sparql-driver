@@ -19,7 +19,7 @@ jobs:
         uses: actions/checkout@v7
 
       - name: Setup Java
-        uses: actions/setup-java@v5.6.0
+        uses: actions/setup-java@v5.7.0
         with:
           distribution: 'temurin'
           java-version: '21'
@@ -68,7 +68,7 @@ jobs:
           submodules: 'recursive'
 
       - name: Setup Java
-        uses: actions/setup-java@v5.6.0
+        uses: actions/setup-java@v5.7.0
         with:
           distribution: 'temurin'
           java-version: '21'
@@ -117,7 +117,7 @@ jobs:
           submodules: 'recursive'
 
       - name: Setup Java
-        uses: actions/setup-java@v5.6.0
+        uses: actions/setup-java@v5.7.0
         with:
           distribution: 'temurin'
           java-version: '21'
@@ -167,7 +167,7 @@ jobs:
           submodules: 'recursive'
 
       - name: Setup Java
-        uses: actions/setup-java@v5.6.0
+        uses: actions/setup-java@v5.7.0
         with:
           distribution: 'temurin'
           java-version: '21'
