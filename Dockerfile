@@ -1,4 +1,4 @@
-FROM clojure:temurin-21-tools-deps-trixie-slim AS builder-base
+FROM clojure:temurin-24-tools-deps-trixie-slim AS builder-base
 
 WORKDIR /app
 
