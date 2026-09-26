@@ -52,7 +52,7 @@
     (if result
       (let [bindings (get-in result [:results :bindings])]
         (log/debugf "SPARQL endpoint supports 1.1 features.")
-        {:version (get-in bindings [:version :value])})
+        {:version (get-in bindings [0 :version :value])})
       (do
         (log/errorf "Error getting SPARQL version: [Bind] %s" res-bind)
         (log/errorf "Error getting SPARQL version: [Values] %s" res-values)
