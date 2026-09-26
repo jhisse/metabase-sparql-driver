@@ -8,25 +8,30 @@
 
 <https://w3id.org/sban/ns> a owl:Ontology ;
   rdfs:label "SBAN: SHACL annotations for BI tools"@en ;
+  dcterms:title "SBAN: SHACL annotations for BI tools"@en ;
   rdfs:comment """Annotation properties that tune how BI tools present RDF data described by SHACL shapes. Read by the SPARQL driver at https://github.com/jhisse/metabase-sparql-driver.
 Not related to OpenLink Virtuoso's SPARQL-BI extensions.
 This namespace IRI identifies this and all future versions of the vocabulary."""@en ;
   vann:preferredNamespacePrefix "sban" ;
   vann:preferredNamespaceUri "https://w3id.org/sban/ns#" ;
   owl:versionInfo "1.0" ;
+  dcterms:issued "2026-09-26"^^xsd:date ;
   dcterms:creator <https://github.com/jhisse> ;
   dcterms:source <https://github.com/jhisse/metabase-sparql-driver> .
 
 sban:semanticType a owl:AnnotationProperty ;
+  rdfs:isDefinedBy <https://w3id.org/sban/ns> ;
   rdfs:label "semantic type"@en ;
   rdfs:comment "On a property shape: the semantic type of the resulting column in the BI tool, e.g. \"type/URL\" or \"type/Category\"."@en ;
   rdfs:range xsd:string .
 
 sban:displayValueProperty a owl:AnnotationProperty ;
+  rdfs:isDefinedBy <https://w3id.org/sban/ns> ;
   rdfs:label "display value property"@en ;
   rdfs:comment "On a foreign-key property shape (one with sh:class): the property of the target shape whose value is shown instead of the target IRI."@en .
 
 sban:hide a owl:AnnotationProperty ;
+  rdfs:isDefinedBy <https://w3id.org/sban/ns> ;
   rdfs:label "hide"@en ;
   rdfs:comment "On a node shape or property shape: true hides the table or column in the BI tool. Presentation only; SHACL validation is unaffected. Prefer dash:hidden unless a tool-specific override is needed."@en ;
   rdfs:range xsd:boolean ;
