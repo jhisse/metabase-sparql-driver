@@ -8,7 +8,11 @@
    [metabase.driver-api.core :as driver-api]
    [metabase.driver.sparql.uri :as uri]
    [metabase.lib.metadata.result-metadata :as result-metadata]
-   [metabase.util.log :as log]))
+   [metabase.util.date-2 :as u.date]
+   [metabase.util.log :as log])
+  (:import
+   (java.time LocalDate LocalDateTime OffsetDateTime ZoneId ZonedDateTime)
+   (java.time.format DateTimeFormatter)))
 
 (defn- sanitize-var-name
   "Return a SPARQL-safe variable name."
@@ -226,6 +230,84 @@
                   {:type   driver-api/qp.error-type.unsupported-feature
                    :clause filter-clause})))
 
+(def ^:private xsd-date     "<http://www.w3.org/2001/XMLSchema#date>")
+(def ^:private xsd-datetime "<http://www.w3.org/2001/XMLSchema#dateTime>")
+
+(def ^:private ^DateTimeFormatter xsd-datetime-format
+  "xsd:dateTime lexical form. Seconds are always written: ISO_OFFSET_DATE_TIME
+   drops them when zero, which xsd:dateTime does not allow."
+  (DateTimeFormatter/ofPattern "uuuu-MM-dd'T'HH:mm:ssXXX"))
+
+(defn- query-zone
+  "Zone that relative dates and date-only values are resolved in (the QP's
+   results timezone)."
+  ^ZoneId []
+  (ZoneId/of (driver-api/results-timezone-id)))
+
+(defn- query-now
+  "Current time in [[query-zone]]; the reference point for `:relative-datetime`."
+  ^ZonedDateTime []
+  (ZonedDateTime/now (query-zone)))
+
+(defn- temporal-clause?
+  [x]
+  (and (vector? x) (contains? #{:absolute-datetime :relative-datetime} (first x))))
+
+(defn- temporal-clause->value
+  "Resolve `[:absolute-datetime t unit]` / `[:relative-datetime n unit]` to a
+   java.time value. A relative datetime is the start of `unit`, `n` units from
+   now (the same semantics as the SQL and Mongo drivers)."
+  [[tag a b]]
+  (case tag
+    :absolute-datetime (if (string? a) (u.date/parse a) a)
+    :relative-datetime (let [now (query-now)]
+                         (if (or (= a :current) (contains? #{nil :default} b))
+                           now
+                           (u.date/bucket (u.date/add now b a) b)))))
+
+(def ^:private ^DateTimeFormatter xsd-local-datetime-format
+  (DateTimeFormatter/ofPattern "uuuu-MM-dd'T'HH:mm:ss"))
+
+(defn- temporal->sparql
+  "Render a java.time value as a typed literal matching the column: xsd:date
+   for `:type/Date` columns, xsd:dateTime otherwise. The column type comes from
+   field metadata or, for a source-query column ref, the ref's own options.
+
+   An xsd:dateTime bound is returned as `{:tz … :local …}`: the same instant
+   with and without a timezone offset. XSD comparisons between a value with a
+   timezone and one without are indeterminate, so [[compare-expr]] picks the
+   bound matching each value's `TZ()`."
+  [field-id opts t]
+  (let [base-type (or (:base-type (field-id->metadata field-id))
+                      (:effective-type opts)
+                      (:base-type opts))
+        date?     (if base-type
+                    (isa? base-type :type/Date)
+                    (instance? LocalDate t))]
+    (if date?
+      (str "\"" (condp instance? t
+                  LocalDate      t
+                  LocalDateTime  (.toLocalDate ^LocalDateTime t)
+                  OffsetDateTime (.toLocalDate ^OffsetDateTime t)
+                  ZonedDateTime  (.toLocalDate (.withZoneSameInstant ^ZonedDateTime t (query-zone))))
+           "\"^^" xsd-date)
+      (let [^ZonedDateTime zdt (condp instance? t
+                                 LocalDate      (.atStartOfDay ^LocalDate t (query-zone))
+                                 LocalDateTime  (.atZone ^LocalDateTime t (query-zone))
+                                 OffsetDateTime (.atZoneSameInstant ^OffsetDateTime t (query-zone))
+                                 ZonedDateTime  (.withZoneSameInstant ^ZonedDateTime t (query-zone)))]
+        {:tz    (str "\"" (.format xsd-datetime-format zdt) "\"^^" xsd-datetime)
+         :local (str "\"" (.format xsd-local-datetime-format zdt) "\"^^" xsd-datetime)}))))
+
+(defn- compare-expr
+  "`?var op term`. For a `{:tz … :local …}` dateTime bound, compare each value
+   against the form that matches whether it carries a timezone."
+  [var op term]
+  (if (map? term)
+    (format "((TZ(?%s) != \"\" && ?%s %s %s) || (TZ(?%s) = \"\" && ?%s %s %s))"
+            var var op (:tz term) var var op (:local term))
+    (format "?%s %s %s" var op term)))
+
 (defn- compile-filter-expr
   "Compile a filter clause to a SPARQL boolean expression string. Throws
    (via [[unsupported-filter!]]) for operators or custom-expression functions
@@ -260,41 +342,53 @@
           (when-not var
             (unsupported-filter! (str "a reference to an unresolved column (" (pr-str lhs) ")")
                                  filter-clause))
-          (case op
-            := (if (nil? v)
-                 (format "(!BOUND(?%s))" var)
-                 (format "(?%s = %s)" var (value->term fid v)))
-            :!= (if (nil? v)
-                  (format "(BOUND(?%s))" var)
-                  (format "(?%s != %s)" var (value->term fid v)))
-            :> (and (some? v) (format "(?%s > %s)" var (literal->sparql v)))
-            :>= (and (some? v) (format "(?%s >= %s)" var (literal->sparql v)))
-            :< (and (some? v) (format "(?%s < %s)" var (literal->sparql v)))
-            :<= (and (some? v) (format "(?%s <= %s)" var (literal->sparql v)))
+          (let [unit        (:temporal-unit (field-token->opts lhs))
+                null-check? (or (contains? #{:is-null :not-null} op)
+                                (and (contains? #{:= :!=} op) (nil? v)))]
+            ;; A null check does not depend on the grouping, so it stays valid.
+            (when (and unit (not= unit :default) (not null-check?))
+              (unsupported-filter! (str "a date grouped by " (name unit)) filter-clause)))
+          (let [term (fn [x render]
+                       (cond
+                         (temporal-clause? x) (temporal->sparql fid (field-token->opts lhs) (temporal-clause->value x))
+                         (vector? x)          (unsupported-filter! (str "comparing against a " (name (first x)) " clause")
+                                                                   filter-clause)
+                         :else                (render x)))]
+            (case op
+              := (if (nil? v)
+                   (format "(!BOUND(?%s))" var)
+                   (str "(" (compare-expr var "=" (term v #(value->term fid %))) ")"))
+              :!= (if (nil? v)
+                    (format "(BOUND(?%s))" var)
+                    (str "(" (compare-expr var "!=" (term v #(value->term fid %))) ")"))
+              :> (and (some? v) (str "(" (compare-expr var ">" (term v literal->sparql)) ")"))
+              :>= (and (some? v) (str "(" (compare-expr var ">=" (term v literal->sparql)) ")"))
+              :< (and (some? v) (str "(" (compare-expr var "<" (term v literal->sparql)) ")"))
+              :<= (and (some? v) (str "(" (compare-expr var "<=" (term v literal->sparql)) ")"))
               ;; [:between field min max] — min is rhs (`v`), max is the next arg.
-            :between (let [hi (let [x maybe-opts]
-                                (if (and (vector? x) (= :value (first x))) (second x) x))]
-                       (when (and (some? v) (some? hi))
-                         (format "(?%s >= %s && ?%s <= %s)"
-                                 var (literal->sparql v) var (literal->sparql hi))))
-            :starts-with (let [needle (literal->sparql v)
+              :between (let [hi (let [x maybe-opts]
+                                  (if (and (vector? x) (= :value (first x))) (second x) x))]
+                         (when (and (some? v) (some? hi))
+                           (str "(" (compare-expr var ">=" (term v literal->sparql))
+                                " && " (compare-expr var "<=" (term hi literal->sparql)) ")")))
+              :starts-with (let [needle (let [t (term v literal->sparql)] (if (map? t) (:tz t) t))
+                                 expr (if insensitive?
+                                        (format "STRSTARTS(LCASE(STR(?%s)), LCASE(%s))" var needle)
+                                        (format "STRSTARTS(STR(?%s), %s)" var needle))]
+                             (str "(" expr ")"))
+              :ends-with (let [needle (let [t (term v literal->sparql)] (if (map? t) (:tz t) t))
                                expr (if insensitive?
-                                      (format "STRSTARTS(LCASE(STR(?%s)), LCASE(%s))" var needle)
-                                      (format "STRSTARTS(STR(?%s), %s)" var needle))]
+                                      (format "STRENDS(LCASE(STR(?%s)), LCASE(%s))" var needle)
+                                      (format "STRENDS(STR(?%s), %s)" var needle))]
                            (str "(" expr ")"))
-            :ends-with (let [needle (literal->sparql v)
-                             expr (if insensitive?
-                                    (format "STRENDS(LCASE(STR(?%s)), LCASE(%s))" var needle)
-                                    (format "STRENDS(STR(?%s), %s)" var needle))]
-                         (str "(" expr ")"))
-            :contains (let [needle (literal->sparql v)
-                            expr (if insensitive?
-                                   (format "CONTAINS(LCASE(STR(?%s)), LCASE(%s))" var needle)
-                                   (format "CONTAINS(STR(?%s), %s)" var needle))]
-                        (str "(" expr ")"))
-            :is-null (format "(!BOUND(?%s))" var)
-            :not-null (format "(BOUND(?%s))" var)
-            (unsupported-filter! (str "the " (name op) " operator") filter-clause)))))))
+              :contains (let [needle (let [t (term v literal->sparql)] (if (map? t) (:tz t) t))
+                              expr (if insensitive?
+                                     (format "CONTAINS(LCASE(STR(?%s)), LCASE(%s))" var needle)
+                                     (format "CONTAINS(STR(?%s), %s)" var needle))]
+                          (str "(" expr ")"))
+              :is-null (format "(!BOUND(?%s))" var)
+              :not-null (format "(BOUND(?%s))" var)
+              (unsupported-filter! (str "the " (name op) " operator") filter-clause))))))))
 
 (defn- build-var-aliases
   "Map field-id to sanitized var name from the original column name."
