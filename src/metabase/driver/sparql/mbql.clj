@@ -119,14 +119,18 @@
    - If the token carries `:join-alias`, look up the joined target var via
      `pair->target-var` keyed by `[field-id alias]`.
    - Otherwise the subject (PK) field always maps to `?subject`.
-   - Otherwise look up the regular alias from `field-id->var`."
+   - Otherwise look up the regular alias from `field-id->var`. A string ref
+     (a source-query column name, e.g. `birth-date`) also tries its sanitized
+     form, since derived stages key their columns by SPARQL var name."
   [field-token field-id->var pair->target-var]
   (let [fid   (field-token->id field-token)
         alias (field-token->join-alias field-token)]
     (cond
       (and fid alias) (get pair->target-var [fid alias])
       (and fid (id-field? fid)) "subject"
-      fid (get field-id->var fid))))
+      fid (or (get field-id->var fid)
+              (when (string? fid)
+                (get field-id->var (sanitize-var-name fid)))))))
 
 (defn- condition->fk-ref
   "Extract the FK-source field token from a join `:condition`. The condition is
@@ -214,17 +218,27 @@
     (uri/iri-ref v)
     (literal->sparql v)))
 
+(defn- unsupported-filter!
+  "Throw for a filter the compiler cannot translate. Returning nil instead
+   would drop the filter and silently return unfiltered rows."
+  [what filter-clause]
+  (throw (ex-info (format "The SPARQL driver does not support %s in filters." what)
+                  {:type   driver-api/qp.error-type.unsupported-feature
+                   :clause filter-clause})))
+
 (defn- compile-filter-expr
-  "Compile a filter clause to a SPARQL boolean expression string."
+  "Compile a filter clause to a SPARQL boolean expression string. Throws
+   (via [[unsupported-filter!]]) for operators or custom-expression functions
+   it cannot translate."
   [filter-clause field-id->var pair->target-var]
   (when (sequential? filter-clause)
-    (let [[op lhs rhs maybe-opts & more] filter-clause]
+    (let [[op lhs rhs maybe-opts] filter-clause]
       (case op
-        :and (let [parts (->> (concat [lhs rhs] more)
+        :and (let [parts (->> (rest filter-clause)
                               (keep #(compile-filter-expr % field-id->var pair->target-var)))]
                (when (seq parts)
                  (str "(" (str/join " && " parts) ")")))
-        :or  (let [parts (->> (concat [lhs rhs] more)
+        :or  (let [parts (->> (rest filter-clause)
                               (keep #(compile-filter-expr % field-id->var pair->target-var)))]
                (when (seq parts)
                  (str "(" (str/join " || " parts) ")")))
@@ -238,42 +252,49 @@
                   (if (and (vector? x) (= :value (first x)))
                     (second x)
                     x))]
-          (when (and fid var)
-            (case op
-              := (if (nil? v)
-                   (format "(!BOUND(?%s))" var)
-                   (format "(?%s = %s)" var (value->term fid v)))
-              :!= (if (nil? v)
-                    (format "(BOUND(?%s))" var)
-                    (format "(?%s != %s)" var (value->term fid v)))
-              :> (and (some? v) (format "(?%s > %s)" var (literal->sparql v)))
-              :>= (and (some? v) (format "(?%s >= %s)" var (literal->sparql v)))
-              :< (and (some? v) (format "(?%s < %s)" var (literal->sparql v)))
-              :<= (and (some? v) (format "(?%s <= %s)" var (literal->sparql v)))
+          (when-not fid
+            (unsupported-filter! (if (and (vector? lhs) (keyword? (first lhs)))
+                                   (str "the " (name (first lhs)) "() function")
+                                   "this expression")
+                                 filter-clause))
+          (when-not var
+            (unsupported-filter! (str "a reference to an unresolved column (" (pr-str lhs) ")")
+                                 filter-clause))
+          (case op
+            := (if (nil? v)
+                 (format "(!BOUND(?%s))" var)
+                 (format "(?%s = %s)" var (value->term fid v)))
+            :!= (if (nil? v)
+                  (format "(BOUND(?%s))" var)
+                  (format "(?%s != %s)" var (value->term fid v)))
+            :> (and (some? v) (format "(?%s > %s)" var (literal->sparql v)))
+            :>= (and (some? v) (format "(?%s >= %s)" var (literal->sparql v)))
+            :< (and (some? v) (format "(?%s < %s)" var (literal->sparql v)))
+            :<= (and (some? v) (format "(?%s <= %s)" var (literal->sparql v)))
               ;; [:between field min max] — min is rhs (`v`), max is the next arg.
-              :between (let [hi (let [x maybe-opts]
-                                  (if (and (vector? x) (= :value (first x))) (second x) x))]
-                         (when (and (some? v) (some? hi))
-                           (format "(?%s >= %s && ?%s <= %s)"
-                                   var (literal->sparql v) var (literal->sparql hi))))
-              :starts-with (let [needle (literal->sparql v)
-                                 expr (if insensitive?
-                                        (format "STRSTARTS(LCASE(STR(?%s)), LCASE(%s))" var needle)
-                                        (format "STRSTARTS(STR(?%s), %s)" var needle))]
-                             (str "(" expr ")"))
-              :ends-with (let [needle (literal->sparql v)
+            :between (let [hi (let [x maybe-opts]
+                                (if (and (vector? x) (= :value (first x))) (second x) x))]
+                       (when (and (some? v) (some? hi))
+                         (format "(?%s >= %s && ?%s <= %s)"
+                                 var (literal->sparql v) var (literal->sparql hi))))
+            :starts-with (let [needle (literal->sparql v)
                                expr (if insensitive?
-                                      (format "STRENDS(LCASE(STR(?%s)), LCASE(%s))" var needle)
-                                      (format "STRENDS(STR(?%s), %s)" var needle))]
+                                      (format "STRSTARTS(LCASE(STR(?%s)), LCASE(%s))" var needle)
+                                      (format "STRSTARTS(STR(?%s), %s)" var needle))]
                            (str "(" expr ")"))
-              :contains (let [needle (literal->sparql v)
-                              expr (if insensitive?
-                                     (format "CONTAINS(LCASE(STR(?%s)), LCASE(%s))" var needle)
-                                     (format "CONTAINS(STR(?%s), %s)" var needle))]
-                          (str "(" expr ")"))
-              :is-null (format "(!BOUND(?%s))" var)
-              :not-null (format "(BOUND(?%s))" var)
-              nil)))))))
+            :ends-with (let [needle (literal->sparql v)
+                             expr (if insensitive?
+                                    (format "STRENDS(LCASE(STR(?%s)), LCASE(%s))" var needle)
+                                    (format "STRENDS(STR(?%s), %s)" var needle))]
+                         (str "(" expr ")"))
+            :contains (let [needle (literal->sparql v)
+                            expr (if insensitive?
+                                   (format "CONTAINS(LCASE(STR(?%s)), LCASE(%s))" var needle)
+                                   (format "CONTAINS(STR(?%s), %s)" var needle))]
+                        (str "(" expr ")"))
+            :is-null (format "(!BOUND(?%s))" var)
+            :not-null (format "(BOUND(?%s))" var)
+            (unsupported-filter! (str "the " (name op) " operator") filter-clause)))))))
 
 (defn- build-var-aliases
   "Map field-id to sanitized var name from the original column name."
