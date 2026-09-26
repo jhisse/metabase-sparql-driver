@@ -8,8 +8,8 @@
 
 <https://w3id.org/sban/ns> a owl:Ontology ;
   rdfs:label "SBAN: SHACL annotations for BI tools"@en ;
-  rdfs:comment """Annotation properties that tune how BI tools present RDF data described by SHACL shapes. Read by the community SPARQL driver for Metabase (https://github.com/jhisse/metabase-sparql-driver).
-Metabase is a trademark of Metabase, Inc. This vocabulary and the driver are independent community projects, not affiliated with, sponsored by, or endorsed by Metabase, Inc. Not related to OpenLink Virtuoso's SPARQL-BI extensions.
+  rdfs:comment """Annotation properties that tune how BI tools present RDF data described by SHACL shapes. Read by the SPARQL driver at https://github.com/jhisse/metabase-sparql-driver.
+Not related to OpenLink Virtuoso's SPARQL-BI extensions.
 This namespace IRI identifies this and all future versions of the vocabulary."""@en ;
   vann:preferredNamespacePrefix "sban" ;
   vann:preferredNamespaceUri "https://w3id.org/sban/ns#" ;
@@ -19,7 +19,7 @@ This namespace IRI identifies this and all future versions of the vocabulary."""
 
 sban:semanticType a owl:AnnotationProperty ;
   rdfs:label "semantic type"@en ;
-  rdfs:comment "On a property shape: the Metabase semantic type of the resulting column, e.g. \"type/URL\" or \"type/Category\"."@en ;
+  rdfs:comment "On a property shape: the semantic type of the resulting column in the BI tool, e.g. \"type/URL\" or \"type/Category\"."@en ;
   rdfs:range xsd:string .
 
 sban:displayValueProperty a owl:AnnotationProperty ;
