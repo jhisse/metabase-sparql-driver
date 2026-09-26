@@ -1,17 +1,15 @@
 (ns metabase.driver.sparql.database-test
-  "Unit tests for SPARQL metadata-sync helpers: URI shortening, the implicit
-   Default-Graph base prefix, foreign-URI hiding, explicit/none sync strategies,
-   and the SHACL shape -> Metabase metadata conversion."
+  "Unit tests for SPARQL metadata sync: the auto/explicit/none/shacl
+   strategies (endpoint and SHACL fetch stubbed), foreign-URI hiding, and the
+   SHACL shape -> Metabase metadata conversion. URI naming itself is covered in
+   uri_test.clj."
   (:require [clojure.string :as str]
             [clojure.test :refer :all]
             [metabase.driver.sparql.database :as database]
             [metabase.driver.sparql.execute :as execute]
-            [metabase.driver.sparql.uri :as uri]))
+            [metabase.driver.sparql.shacl :as shacl]))
 
 (def ^:private extract-class-name @#'database/extract-class-name)
-(def ^:private shorten-uri uri/shorten-uri)
-(def ^:private foreign-uri? uri/foreign-uri?)
-(def ^:private absolute-uri uri/absolute-uri)
 (def ^:private parse-schema-config @#'database/parse-schema-config)
 (def ^:private build-pk-field @#'database/build-pk-field)
 (def ^:private build-field-from-uri @#'database/build-field-from-uri)
@@ -26,32 +24,6 @@
     (is (= "Persoon" (extract-class-name "https://example.org/Persoon")))
     (is (= "Person"  (extract-class-name "http://xmlns.com/foaf/0.1/Person")))
     (is (= "name"    (extract-class-name "http://example.org/schema#name")))))
-
-(deftest shorten-uri-test
-  (testing "the Default-Graph prefix is stripped"
-    (is (= "Persoon" (shorten-uri (str graph "Persoon") graph))))
-  (testing "URIs outside the Default Graph are left untouched"
-    (is (= "http://xmlns.com/foaf/0.1/Person"
-           (shorten-uri "http://xmlns.com/foaf/0.1/Person" graph))))
-  (testing "a blank Default Graph is a no-op"
-    (is (= (str graph "Persoon") (shorten-uri (str graph "Persoon") ""))))
-  (testing "stripping never yields a blank name (uri == default-graph)"
-    (is (= graph (shorten-uri graph graph)))))
-
-(deftest foreign-uri?-test
-  (is (true?  (foreign-uri? "http://xmlns.com/foaf/0.1/Person" graph)))
-  (is (false? (foreign-uri? (str graph "Persoon") graph)))
-  (testing "without a Default Graph nothing is considered foreign"
-    (is (false? (foreign-uri? "http://xmlns.com/foaf/0.1/Person" "")))))
-
-(deftest absolute-uri-test
-  (testing "relative names are resolved against the Default Graph"
-    (is (= (str graph "naam") (absolute-uri "naam" graph))))
-  (testing "already-absolute URIs are returned unchanged"
-    (is (= "http://xmlns.com/foaf/0.1/name" (absolute-uri "http://xmlns.com/foaf/0.1/name" graph))))
-  (testing "blank inputs are no-ops"
-    (is (= "" (absolute-uri "" graph)))
-    (is (= "naam" (absolute-uri "naam" "")))))
 
 (deftest parse-schema-config-test
   (testing "valid JSON is decoded with keyword keys"
@@ -237,3 +209,106 @@
             names (set (map :name fields))]
         (is (contains? names "foaf__name"))
         (is (not (contains? names "http://other.example/x")))))))
+
+;; ---------------------------------------------------------------------------
+;; auto strategy (class discovery against the endpoint)
+;; ---------------------------------------------------------------------------
+
+(defn- class-binding [class-uri n]
+  {:class {:type "uri" :value class-uri} :count {:type "literal" :value (str n)}})
+
+(deftest describe-database-auto-test
+  (let [queries (atom [])
+        details {:endpoint "http://sparql.invalid/query" :default-graph graph}]
+    (with-redefs [execute/execute-sparql-query
+                  (fn [_ query _]
+                    (swap! queries conj query)
+                    [true {:results {:bindings [(class-binding (str graph "Persoon") 12)
+                                                (class-binding "http://xmlns.com/foaf/0.1/Agent" 3)]}}])]
+      (testing "each discovered class becomes a table named by its shortened URI"
+        (let [{:keys [tables]} (database/describe-database :sparql {:details details})
+              by-name          (into {} (map (juxt :name identity)) tables)]
+          (is (= #{"Persoon" "http://xmlns.com/foaf/0.1/Agent"} (set (keys by-name))))
+          (is (= "Agent" (:display-name (by-name "http://xmlns.com/foaf/0.1/Agent"))))
+          (is (str/includes? (:description (by-name "Persoon")) "Instances: 12"))))
+      (testing "class-limit (a string in the manifest) bounds the discovery query; default is 100"
+        (reset! queries [])
+        (database/describe-database :sparql {:details (assoc details :class-limit " 5 ")})
+        (database/describe-database :sparql {:details details})
+        (is (str/ends-with? (first @queries) "LIMIT 5"))
+        (is (str/ends-with? (second @queries) "LIMIT 100")))
+      (testing "hide-foreign-uris drops classes outside the Default Graph"
+        (is (= #{"Persoon"}
+               (set (map :name (:tables (database/describe-database
+                                         :sparql {:details (assoc details :hide-foreign-uris true)}))))))))
+    (testing "an endpoint failure degrades to no tables instead of failing the sync"
+      (with-redefs [execute/execute-sparql-query (fn [_ _ _] [false "boom" :db])]
+        (is (= {:tables #{}} (database/describe-database :sparql {:details details})))))))
+
+;; ---------------------------------------------------------------------------
+;; shacl strategy (SHACL fetch stubbed at shacl/metadata)
+;; ---------------------------------------------------------------------------
+
+(def ^:private shapes
+  [{:class-uri   (str graph "Persoon")
+    :description "Een persoon"
+    :properties  [{:property-uri (str graph "naam") :base-type :type/Text :order 1}
+                  {:property-uri    (str graph "geboorteplaats")
+                   :base-type       :type/Text
+                   :semantic-type   :type/FK
+                   :fk-target-class (str graph "Plaats")
+                   :iri-kind?       true
+                   :order           2}]}
+   {:class-uri  (str graph "Plaats")
+    :properties [{:property-uri (str graph "label") :base-type :type/Text}]}
+   {:class-uri  "http://xmlns.com/foaf/0.1/Agent"
+    :properties [{:property-uri (str graph "kent") :base-type :type/Text :fk-target-class (str graph "Persoon")}]}])
+
+(defn- shacl-db [& {:as details}]
+  {:name    "shacl"
+   :details (merge {:metadata-sync-strategy "shacl"
+                    :shacl-url              "https://example.org/shapes.ttl"
+                    :default-graph          graph}
+                   details)})
+
+(deftest shacl-strategy-test
+  (let [calls (atom [])]
+    (with-redefs [shacl/metadata (fn [url lang opts] (swap! calls conj [url lang opts]) shapes)]
+      (testing "describe-database: one table per shape"
+        (is (= #{"Persoon" "Plaats" "http://xmlns.com/foaf/0.1/Agent"}
+               (set (map :name (:tables (database/describe-database :sparql (shacl-db)))))))
+        (is (= #{"Persoon" "Plaats"}
+               (set (map :name (:tables (database/describe-database
+                                         :sparql (shacl-db :hide-foreign-uris true))))))))
+      (testing "describe-table: the matching shape's properties, PK first"
+        (let [{:keys [fields]} (database/describe-table :sparql (shacl-db) {:name "Persoon"})
+              by-name          (into {} (map (juxt :name identity)) fields)]
+          (is (= #{"subject" "naam" "geboorteplaats"} (set (keys by-name))))
+          (is (= "uri" (:database-type (by-name "geboorteplaats"))))
+          (is (= :type/FK (:semantic-type (by-name "geboorteplaats"))))))
+      (testing "describe-table: a table with no shape keeps only the synthetic PK"
+        (is (= #{"subject"}
+               (set (map :name (:fields (database/describe-table :sparql (shacl-db) {:name "Onbekend"})))))))
+      (testing "fks: one row per sh:class property, pointing at the target's subject"
+        (is (= #{{:fk-table-name "Persoon" :fk-table-schema nil :fk-column-name "geboorteplaats"
+                  :pk-table-name "Plaats"  :pk-table-schema nil :pk-column-name "subject"}
+                 {:fk-table-name "http://xmlns.com/foaf/0.1/Agent" :fk-table-schema nil :fk-column-name "kent"
+                  :pk-table-name "Persoon" :pk-table-schema nil :pk-column-name "subject"}}
+               (set (database/fks (shacl-db)))))
+        (is (= ["Persoon"]
+               (map :fk-table-name (database/fks (shacl-db :hide-foreign-uris true))))))
+      (testing "connection settings reach the SHACL fetch: seconds -> ms, MB -> bytes, language"
+        (reset! calls [])
+        (database/describe-database :sparql (shacl-db :default-language "nl"
+                                                      :shacl-connect-timeout "5"
+                                                      :shacl-socket-timeout "60"
+                                                      :shacl-max-size-mb "2"))
+        (is (= [["https://example.org/shapes.ttl" "nl"
+                 {:connect-timeout-ms 5000 :socket-timeout-ms 60000 :max-bytes 2097152}]]
+               @calls))))
+    (testing "a failed SHACL fetch degrades to an empty schema instead of failing the sync"
+      (with-redefs [shacl/metadata (fn [& _] (throw (ex-info "Failed to fetch" {:status 500})))]
+        (is (= {:tables #{}} (database/describe-database :sparql (shacl-db))))
+        (is (empty? (database/fks (shacl-db))))
+        (is (= #{"subject"}
+               (set (map :name (:fields (database/describe-table :sparql (shacl-db) {:name "Persoon"}))))))))))

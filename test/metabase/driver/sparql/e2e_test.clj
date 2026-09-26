@@ -1,9 +1,10 @@
 (ns metabase.driver.sparql.e2e-test
-  "End-to-end tests: real pMBQL queries compiled by driver/mbql->native and run
-  through driver/execute-reducible-query against the live SPARQL endpoint from
-  the smoke harness (make smoke). Covers the full pipeline the unit tests skip:
-  returned-columns/->legacy-MBQL, the QP-store detail lookup, and conversion of
-  live results into rows and column metadata."
+  "End-to-end tests: real pMBQL queries compiled the way the QP does
+  (preprocessing, then driver/mbql->native) and run through
+  driver/execute-reducible-query against the live SPARQL endpoint from the
+  smoke harness (make smoke). Covers what the unit tests cannot: that the
+  generated SPARQL behaves as intended on a real engine, the QP-store detail
+  lookup, and conversion of live results into rows and column metadata."
   (:require [clojure.set :as set]
             [clojure.string :as str]
             [clojure.test :refer :all]
@@ -39,7 +40,7 @@
 
 (deftest ^:integration default-projection-includes-subject-test
   (let [{:keys [cols rows]} (tu/run-query (tu/person-query))]
-    (is (= 4 (count cols)))
+    (is (= 6 (count cols)))
     (is (= :type/URL (:base_type (first cols))))
     (is (= #{"https://example.org/alice" "https://example.org/bob"}
            (set (map first rows))))))
@@ -84,6 +85,38 @@
                   (lib/filter (lib/between age 26 35)))
         {:keys [rows]} (tu/run-query q)]
     (is (= [["Alice" 30]] rows))))
+
+(deftest ^:integration date-filter-test
+  (testing "a date range from the UI matches typed xsd:date values"
+    (let [q     (tu/person-query)
+          label (tu/column q tu/rdfs-label)
+          born  (tu/column q "birthDate")
+          {:keys [rows]} (tu/run-query (-> q
+                                           (lib/with-fields [label])
+                                           (lib/filter (lib/between born "1990-01-01" "1999-12-31"))))]
+      (is (= [["Alice"]] rows)))))
+
+(deftest ^:integration datetime-filter-mixed-timezones-test
+  ;; Alice's value carries a timezone, Bob's does not. XSD comparisons between
+  ;; the two forms are indeterminate, so a single bound would drop Bob here.
+  (let [q     (tu/person-query)
+        label (tu/column q tu/rdfs-label)
+        upd   (tu/column q "updated")
+        run   #(:rows (tu/run-query (-> q (lib/with-fields [label]) (lib/filter %))))]
+    (testing "a timezone-less value is compared against the local bound"
+      (is (= [["Bob"]] (run (lib/< upd "2024-01-01")))))
+    (testing "a timezoned value is compared against the offset bound"
+      (is (= [["Alice"]] (run (lib/>= upd "2024-01-01")))))))
+
+(deftest ^:integration relative-date-filter-test
+  (testing "a relative preset (desugared by the QP) runs on the endpoint"
+    (let [q     (tu/person-query)
+          label (tu/column q tu/rdfs-label)
+          born  (tu/column q "birthDate")
+          {:keys [rows]} (tu/run-query (-> q
+                                           (lib/with-fields [label])
+                                           (lib/filter (lib/time-interval born -200 :year))))]
+      (is (= #{["Alice"] ["Bob"]} (set rows))))))
 
 (deftest ^:integration order-by-limit-test
   (let [q     (tu/person-query)
