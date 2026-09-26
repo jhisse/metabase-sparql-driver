@@ -10,7 +10,7 @@
 (def ^:private coerce-semantic-type @#'shacl/coerce-semantic-type)
 (def ^:private xsd-base-type @#'shacl/xsd-base-type)
 
-(def ^:private base "https://odis.q.libis.be/")
+(def ^:private base "https://example.org/")
 
 (def ^:private turtle
   (str
@@ -18,7 +18,7 @@
    "@prefix xsd: <http://www.w3.org/2001/XMLSchema#> .\n"
    "@prefix rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .\n"
    "@prefix mb:  <https://data.metabase.com/> .\n"
-   "@prefix ex:  <https://odis.q.libis.be/> .\n"
+   "@prefix ex:  <https://example.org/> .\n"
    "\n"
    "ex:EntiteitShape a sh:NodeShape ;\n"
    "  sh:targetClass ex:Entiteit ;\n"
@@ -117,7 +117,7 @@
   (testing "a NodeShape written as a blank node keeps its own and inherited properties"
     (let [ttl    (str "@prefix sh:  <http://www.w3.org/ns/shacl#> .\n"
                       "@prefix xsd: <http://www.w3.org/2001/XMLSchema#> .\n"
-                      "@prefix ex:  <https://odis.q.libis.be/> .\n"
+                      "@prefix ex:  <https://example.org/> .\n"
                       "ex:EntiteitShape a sh:NodeShape ; sh:targetClass ex:Entiteit ;\n"
                       "  sh:property [ sh:path ex:bron ; sh:datatype xsd:string ] .\n"
                       "[] a sh:NodeShape ; sh:targetClass ex:Boek ; sh:node ex:EntiteitShape ;\n"

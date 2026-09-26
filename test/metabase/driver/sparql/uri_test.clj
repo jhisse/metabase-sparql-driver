@@ -28,7 +28,7 @@
 
 (deftest has-scheme?-test
   (testing "any RFC-3986 scheme shape counts, case-insensitively"
-    (is (uri/has-scheme? "https://ex.org/x"))
+    (is (uri/has-scheme? "https://example.org/x"))
     (is (uri/has-scheme? "HTTPS://EX.ORG/X"))
     (is (uri/has-scheme? "did:example:123"))
     (is (uri/has-scheme? "URN:isbn:123"))
@@ -41,8 +41,8 @@
 
 (deftest iri-shaped?-test
   (testing "http(s) and urn shapes are IRIs"
-    (is (uri/iri-shaped? "https://ex.org/x"))
-    (is (uri/iri-shaped? "http://ex.org/x"))
+    (is (uri/iri-shaped? "https://example.org/x"))
+    (is (uri/iri-shaped? "http://example.org/x"))
     (is (uri/iri-shaped? "urn:isbn:123")))
   (testing "plain strings and non-strings are not"
     (is (not (uri/iri-shaped? "note: see above")))
@@ -56,18 +56,18 @@
     (is (= "<https://data.example.org/Item>"
            (uri/iri-ref "https://data.example.org/Item"))))
   (testing "a `>` in the body is percent-encoded so it cannot close the IRIREF early"
-    (is (= "<https://ex.org/a%3Eb>" (uri/iri-ref "https://ex.org/a>b"))))
+    (is (= "<https://example.org/a%3Eb>" (uri/iri-ref "https://example.org/a>b"))))
   (testing "a `<` in the body is percent-encoded too"
-    (is (= "<https://ex.org/a%3Cb>" (uri/iri-ref "https://ex.org/a<b"))))
+    (is (= "<https://example.org/a%3Cb>" (uri/iri-ref "https://example.org/a<b"))))
   (testing "a space is percent-encoded"
-    (is (= "<https://ex.org/a%20b>" (uri/iri-ref "https://ex.org/a b"))))
+    (is (= "<https://example.org/a%20b>" (uri/iri-ref "https://example.org/a b"))))
   (testing "a control char (newline) is percent-encoded"
     (is (= "<a%0Ab>" (uri/iri-ref "a\nb"))))
   (testing "already percent-encoded input is not double-encoded (`%` is left alone)"
-    (is (= "<https://ex.org/a%20b>" (uri/iri-ref "https://ex.org/a%20b"))))
+    (is (= "<https://example.org/a%20b>" (uri/iri-ref "https://example.org/a%20b"))))
   (testing "other IRIREF-illegal chars are percent-encoded"
-    (is (= "<https://ex.org/%22%7B%7D%7C%5E%60%5C>"
-           (uri/iri-ref "https://ex.org/\"{}|^`\\")))))
+    (is (= "<https://example.org/%22%7B%7D%7C%5E%60%5C>"
+           (uri/iri-ref "https://example.org/\"{}|^`\\")))))
 
 ;; ---------------------------------------------------------------------------
 ;; Namespace-prefix naming context
@@ -78,26 +78,26 @@
     (is (= [["foaf" "http://xmlns.com/foaf/0.1/"]]
            (uri/parse-prefixes "  foaf = http://xmlns.com/foaf/0.1/  "))))
   (testing "pairs come out longest-URI-first so the most specific namespace wins"
-    (is (= [["deep" "http://ex.org/a/b/"] ["shallow" "http://ex.org/"]]
-           (uri/parse-prefixes "shallow=http://ex.org/\ndeep=http://ex.org/a/b/"))))
+    (is (= [["deep" "http://example.org/a/b/"] ["shallow" "http://example.org/"]]
+           (uri/parse-prefixes "shallow=http://example.org/\ndeep=http://example.org/a/b/"))))
   (testing "blank and malformed lines are ignored"
-    (is (= [["ok" "http://ex.org/"]]
-           (uri/parse-prefixes "\nno-equals-sign\n=http://x/\nok=http://ex.org/\n"))))
+    (is (= [["ok" "http://example.org/"]]
+           (uri/parse-prefixes "\nno-equals-sign\n=http://x.example/\nok=http://example.org/\n"))))
   (testing "a line with trailing tokens (e.g. an inline comment) is ignored whole"
     (is (= [] (uri/parse-prefixes "foaf=http://xmlns.com/foaf/0.1/ # people"))))
   (testing "a non-absolute URI value is rejected"
     (is (= [] (uri/parse-prefixes "foaf=foaf/")))
     (is (= [] (uri/parse-prefixes "p=notauri"))))
   (testing "a prefix containing the __ separator is rejected"
-    (is (= [] (uri/parse-prefixes "a__b=http://ex.org/"))))
+    (is (= [] (uri/parse-prefixes "a__b=http://example.org/"))))
   (testing "duplicate prefixes: first occurrence wins"
-    (is (= [["p" "http://first/"]]
-           (uri/parse-prefixes "p=http://first/\np=http://x/"))))
+    (is (= [["p" "http://first.example/"]]
+           (uri/parse-prefixes "p=http://first.example/\np=http://x.example/"))))
   (testing "prefix names colliding under __ (one is the other plus _) are rejected, first kept"
-    (is (= [["a" "http://A/"]]
-           (uri/parse-prefixes "a=http://A/\na_=http://B/")))
-    (is (= [["a_" "http://B/"]]
-           (uri/parse-prefixes "a_=http://B/\na=http://A/"))))
+    (is (= [["a" "http://a.example/"]]
+           (uri/parse-prefixes "a=http://a.example/\na_=http://b.example/")))
+    (is (= [["a_" "http://b.example/"]]
+           (uri/parse-prefixes "a_=http://b.example/\na=http://a.example/"))))
   (testing "nil/blank input parses to no prefixes"
     (is (= [] (uri/parse-prefixes nil)))
     (is (= [] (uri/parse-prefixes "")))))
@@ -112,8 +112,8 @@
       (is (= "Person" (uri/shorten-uri "https://example.org/Person" naming)))
       (is (= "https://example.org/Person" (uri/absolute-uri "Person" naming))))
     (testing "an unrelated URI stays full and expands unchanged (it has a scheme)"
-      (is (= "http://other.org/x" (uri/shorten-uri "http://other.org/x" naming)))
-      (is (= "http://other.org/x" (uri/absolute-uri "http://other.org/x" naming))))
+      (is (= "http://other.example/x" (uri/shorten-uri "http://other.example/x" naming)))
+      (is (= "http://other.example/x" (uri/absolute-uri "http://other.example/x" naming))))
     (testing "a prefix local name containing __ is not shortened (would not round-trip)"
       (is (= "http://xmlns.com/foaf/0.1/a__b"
              (uri/shorten-uri "http://xmlns.com/foaf/0.1/a__b" naming))))
@@ -132,28 +132,28 @@
       (is (= "https://example.org/other__x" (uri/absolute-uri "other__x" naming))))
     (testing "the longest matching namespace URI wins"
       (let [naming {:default-graph nil
-                    :prefixes (uri/parse-prefixes "base=http://ex.org/\nsub=http://ex.org/sub/")}]
-        (is (= "sub__x" (uri/shorten-uri "http://ex.org/sub/x" naming)))
-        (is (= "base__sub" (uri/shorten-uri "http://ex.org/sub" naming)))))
+                    :prefixes (uri/parse-prefixes "base=http://example.org/\nsub=http://example.org/sub/")}]
+        (is (= "sub__x" (uri/shorten-uri "http://example.org/sub/x" naming)))
+        (is (= "base__sub" (uri/shorten-uri "http://example.org/sub" naming)))))
     (testing "with a colliding prefix rejected at parse, the survivor round-trips unambiguously"
       ;; #{a, a_} would make `a___x` ambiguous; parse keeps only `a`, so
-      ;; http://B/ is simply unknown and stays a full URI.
+      ;; http://b.example/ is simply unknown and stays a full URI.
       (let [naming {:default-graph nil
-                    :prefixes (uri/parse-prefixes "a=http://A/\na_=http://B/")}]
-        (is (= "a__x" (uri/shorten-uri "http://A/x" naming)))
-        (is (= "http://A/x" (uri/absolute-uri "a__x" naming)))
-        (is (= "http://B/x" (uri/shorten-uri "http://B/x" naming)))))))
+                    :prefixes (uri/parse-prefixes "a=http://a.example/\na_=http://b.example/")}]
+        (is (= "a__x" (uri/shorten-uri "http://a.example/x" naming)))
+        (is (= "http://a.example/x" (uri/absolute-uri "a__x" naming)))
+        (is (= "http://b.example/x" (uri/shorten-uri "http://b.example/x" naming)))))))
 
 (deftest legacy-string-base-still-works-test
   (testing "the 2-arity string base behaves exactly as before"
     (is (= "naam" (uri/shorten-uri "https://example.org/naam" "https://example.org/")))
     (is (= "https://example.org/naam" (uri/absolute-uri "naam" "https://example.org/")))
-    (is (uri/foreign-uri? "http://other.org/x" "https://example.org/"))
+    (is (uri/foreign-uri? "http://other.example/x" "https://example.org/"))
     (is (not (uri/foreign-uri? "https://example.org/x" "https://example.org/")))
     (testing "blank default-graph is a no-op"
-      (is (= "http://x/y" (uri/shorten-uri "http://x/y" nil)))
+      (is (= "http://x.example/y" (uri/shorten-uri "http://x.example/y" nil)))
       (is (= "nm" (uri/absolute-uri "nm" nil)))
-      (is (not (uri/foreign-uri? "http://x/y" nil))))))
+      (is (not (uri/foreign-uri? "http://x.example/y" nil))))))
 
 (deftest foreign-uri?-with-prefixes-test
   (let [naming {:default-graph "https://example.org/"
@@ -161,9 +161,9 @@
     (testing "prefix-namespace URIs count as local"
       (is (not (uri/foreign-uri? "http://xmlns.com/foaf/0.1/name" naming)))
       (is (not (uri/foreign-uri? "https://example.org/x" naming)))
-      (is (uri/foreign-uri? "http://other.org/x" naming))))
+      (is (uri/foreign-uri? "http://other.example/x" naming))))
   (testing "prefixes alone (no Default Graph) also define what is local"
     (let [naming {:default-graph nil
                   :prefixes      (uri/parse-prefixes "foaf=http://xmlns.com/foaf/0.1/")}]
       (is (not (uri/foreign-uri? "http://xmlns.com/foaf/0.1/name" naming)))
-      (is (uri/foreign-uri? "http://other.org/x" naming)))))
+      (is (uri/foreign-uri? "http://other.example/x" naming)))))
