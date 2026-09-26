@@ -123,6 +123,12 @@
              (f [:and [:= [:field "naam" nil] "Jan"] [:> [:field "leeftijd" nil] 18]])))
       (is (= "((?naam = \"Jan\") || (?naam = \"Piet\"))"
              (f [:or [:= [:field "naam" nil] "Jan"] [:= [:field "naam" nil] "Piet"]]))))
+    (testing "boolean combinators keep every condition, not just the first two"
+      (is (= "((?naam = \"Jan\") && (?leeftijd > 18) && (?naam != \"Piet\"))"
+             (f [:and [:= [:field "naam" nil] "Jan"] [:> [:field "leeftijd" nil] 18] [:!= [:field "naam" nil] "Piet"]])))
+      (is (= "((?naam = \"A\") || (?naam = \"B\") || (?naam = \"C\") || (?naam = \"D\"))"
+             (f [:or [:= [:field "naam" nil] "A"] [:= [:field "naam" nil] "B"]
+                 [:= [:field "naam" nil] "C"] [:= [:field "naam" nil] "D"]]))))
     (testing "a dangerous rhs (quote + backslash) is routed through the shared escaper, so the emitted SPARQL literal stays well-formed"
       (is (= (str "(?naam = " (uri/string-literal "a\"b\\") ")")
              (f [:= [:field "naam" nil] "a\"b\\"]))))

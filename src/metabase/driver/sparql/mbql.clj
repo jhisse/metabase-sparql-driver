@@ -228,13 +228,13 @@
    it cannot translate."
   [filter-clause field-id->var pair->target-var]
   (when (sequential? filter-clause)
-    (let [[op lhs rhs maybe-opts & more] filter-clause]
+    (let [[op lhs rhs maybe-opts] filter-clause]
       (case op
-        :and (let [parts (->> (concat [lhs rhs] more)
+        :and (let [parts (->> (rest filter-clause)
                               (keep #(compile-filter-expr % field-id->var pair->target-var)))]
                (when (seq parts)
                  (str "(" (str/join " && " parts) ")")))
-        :or  (let [parts (->> (concat [lhs rhs] more)
+        :or  (let [parts (->> (rest filter-clause)
                               (keep #(compile-filter-expr % field-id->var pair->target-var)))]
                (when (seq parts)
                  (str "(" (str/join " || " parts) ")")))
