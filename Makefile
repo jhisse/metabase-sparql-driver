@@ -103,8 +103,10 @@ demo-down:
 	@bash bin/demo.sh down
 
 # Run the Metabase API tests against the demo environment, then tear it down
-e2e: demo
-	@METABASE_E2E_URL=http://localhost:3000 clojure -X:test :nses '[metabase.driver.sparql.metabase-api-test]'; \
+# (also when the environment fails to start, so no containers are left behind)
+e2e:
+	@bash bin/demo.sh up && \
+		METABASE_E2E_URL=http://localhost:3000 clojure -X:test :nses '[metabase.driver.sparql.metabase-api-test]'; \
 		status=$$?; bash bin/demo.sh down; exit $$status
 
 # Run tests with coverage analysis
