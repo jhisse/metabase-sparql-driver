@@ -9,7 +9,7 @@ Read it and follow it strictly before making any change. In particular:
 
 ## Working in this repo
 
-- Checks: `make lint`, `make splint`, `make test`, `make format`; `make smoke` runs the integration tests against an ephemeral Oxigraph endpoint (requires Docker)
+- Checks: `make lint`, `make splint`, `make test`, `make format`; `make smoke` runs the integration tests against an ephemeral Oxigraph endpoint (requires Docker); `make e2e` runs `metabase_api_test.clj` inside a real Metabase (`make build` first; CI runs it too), and `make demo` leaves that Metabase up at localhost:3000 for manual checks
 - Tests require Java 21+ and the `metabase/` git submodule initialized (`make init-metabase`). If the active JDK is older, the run fails with `No matching method newVirtualThreadPerTaskExecutor` — point `JAVA_HOME`/`PATH` at a JDK 21 before running `make test`.
 - If `git status` shows `M metabase`, the submodule checkout has drifted from the committed pointer: run `git submodule update --init metabase` to realign it (this does not change the pointer)
 - Integration tests must be tagged `^:integration` AND skip themselves when `SPARQL_TEST_ENDPOINT` is unset (use `skip-without-live-endpoint` from `test/metabase/driver/sparql/test_util.clj`; `metabase_api_test.clj` uses `skip-without-metabase` instead, since it needs the Metabase from `make e2e` and must not run under `make smoke`). The tag alone is not enough: `make coverage` ignores test selectors and runs every test namespace, so an unguarded integration test breaks CI.
