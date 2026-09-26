@@ -539,17 +539,67 @@
        {:select (format "(%s AS ?%s)" expr out)
         :var    out}))))
 
+(def ^:private temporal-bucket-exprs
+  "SPARQL expression per breakout `:temporal-unit`, as a format string over the
+   value's variable (`%1$s`). Truncations rebuild the value from its lexical form,
+   extractions return integers. MONTH()/DAY() on an xsd:date is not in SPARQL 1.1
+   but Oxigraph, Jena and RDF4J accept it."
+  ;; ponytail: buckets follow each value's own lexical timezone, not the report
+  ;; timezone; convert first if mixed-timezone data needs report-time buckets.
+  (let [quarter-index "<http://www.w3.org/2001/XMLSchema#integer>(FLOOR((MONTH(?%1$s)-1)/3))"]
+    {:year            (str "STRDT(CONCAT(SUBSTR(STR(?%1$s),1,4),\"-01-01\"), " xsd-date ")")
+     :quarter         (str "STRDT(CONCAT(SUBSTR(STR(?%1$s),1,5), SUBSTR(\"01040710\", "
+                           quarter-index "*2+1, 2), \"-01\"), " xsd-date ")")
+     :month           (str "STRDT(CONCAT(SUBSTR(STR(?%1$s),1,7),\"-01\"), " xsd-date ")")
+     :day             (str "STRDT(SUBSTR(STR(?%1$s),1,10), " xsd-date ")")
+     :hour            (str "STRDT(CONCAT(SUBSTR(STR(?%1$s),1,13),\":00:00\"), " xsd-datetime ")")
+     :minute          (str "STRDT(CONCAT(SUBSTR(STR(?%1$s),1,16),\":00\"), " xsd-datetime ")")
+     :quarter-of-year (str quarter-index "+1")
+     :month-of-year   "MONTH(?%1$s)"
+     :day-of-month    "DAY(?%1$s)"
+     :hour-of-day     "HOURS(?%1$s)"
+     :minute-of-hour  "MINUTES(?%1$s)"}))
+
+(defn- bucket-breakout
+  "Resolve breakout tokens to the variables to project and group by. A token with
+   a `:temporal-unit` groups by a new `?<var>_<unit>` bound to its bucket (see
+   [[temporal-bucket-exprs]]). Throws for a unit SPARQL cannot compute (week,
+   day-of-week, …) rather than grouping by the raw value.
+
+   Returns `{:vars […] :binds [\"  BIND(…)\" …] :token->var f}`, where `f`
+   resolves a breakout token (e.g. in `:order-by`) to its bucket var and any
+   other token through `token->var`."
+  [breakout token->var]
+  (let [bucket-key (juxt field-token->id (comp :temporal-unit field-token->opts) field-token->join-alias)
+        buckets    (for [tok  breakout
+                         :let [raw  (token->var tok)
+                               unit (:temporal-unit (field-token->opts tok))]
+                         :when raw]
+                     (if (contains? #{nil :default} unit)
+                       {:tok tok :var raw}
+                       (let [expr (or (get temporal-bucket-exprs unit)
+                                      (throw (ex-info (format "The SPARQL driver cannot group dates by %s." (name unit))
+                                                      {:type  driver-api/qp.error-type.unsupported-feature
+                                                       :clause tok})))
+                             v    (str raw "_" (sanitize-var-name (name unit)))]
+                         {:tok tok :var v :bind (format "  BIND(%s AS ?%s)" (format expr raw) v)})))
+        by-key     (into {} (map (juxt (comp bucket-key :tok) :var)) buckets)]
+    {:vars       (vec (distinct (map :var buckets)))
+     :binds      (vec (distinct (keep :bind buckets)))
+     :token->var (fn [tok] (or (get by-key (bucket-key tok)) (token->var tok)))}))
+
 (defn- compile-agg-order-by
   "Compile `:order-by` for an aggregation query. Order terms may reference a
-   breakout field (`[:field …]`) or an aggregation by index (`[:aggregation N]`)."
-  [order-by field-id->var pair->target-var]
+   breakout field (`[:field …]`, resolved by `token->var`) or an aggregation by
+   index (`[:aggregation N]`)."
+  [order-by token->var]
   (when (seq order-by)
     (let [parts (for [[dir tok & _] order-by
                       :let [v (cond
                                 (and (vector? tok) (= :aggregation (first tok)))
                                 (str "ag_" (second tok))
                                 (and (vector? tok) (= :field (first tok)))
-                                (var-for-token tok field-id->var pair->target-var)
+                                (token->var tok)
                                 :else nil)]
                       :when v]
                   (str (str/upper-case (name dir)) "(?" v ")"))]
@@ -868,8 +918,8 @@
         agg-projections (when agg?
                           (keep-indexed (fn [i a] (aggregation->projection a i token->var))
                                         aggregations))
-        breakout-vars   (when agg?
-                          (->> breakout (keep token->var) distinct vec))
+        bucketed        (bucket-breakout breakout token->var)
+        breakout-vars   (when agg? (:vars bucketed))
         ;; Non-aggregation SELECT var list: ?subject + direct fields + joined target vars.
         direct-select-vars (when-not agg?
                              (->> fields
@@ -910,7 +960,7 @@
         group-by-clause (when (and agg? (seq breakout-vars))
                           (str "GROUP BY " (str/join " " (map #(str "?" %) breakout-vars))))
         order-clause (if agg?
-                       (compile-agg-order-by order-by field-id->var pair->target-var)
+                       (compile-agg-order-by order-by (:token->var bucketed))
                        (compile-order-by order-by field-id->var pair->target-var))
         where-body  (->> (concat [(format "  ?subject a %s ." (uri/iri-ref class-uri))]
                                  triples-for-fields
@@ -918,6 +968,7 @@
                                  join-fk-triples
                                  join-target-triples
                                  (or (:triples reconciled) [])
+                                 (:binds bucketed)
                                  (or lang-filter-lines [])
                                  filters)
                          (str/join "\n"))
@@ -1006,8 +1057,8 @@
         agg-projections (when agg?
                           (vec (keep-indexed (fn [i a] (aggregation->projection a i token->var true))
                                              aggregations)))
-        breakout-vars   (when agg?
-                          (->> breakout (keep token->var) distinct vec))
+        bucketed        (bucket-breakout breakout token->var)
+        breakout-vars   (when agg? (:vars bucketed))
         ;; Non-agg explicit projection: resolve every :fields token; fall back to
         ;; passthrough if any token cannot be resolved.
         projected-vars  (when (and (not agg?) (seq (:fields stage)))
@@ -1083,7 +1134,7 @@
         group-by-clause (when (and agg? (seq breakout-vars))
                           (str "GROUP BY " (str/join " " (map #(str "?" %) breakout-vars))))
         order-clause  (if agg?
-                        (compile-agg-order-by order-by outer-field-id->var pair->target-var)
+                        (compile-agg-order-by order-by (:token->var bucketed))
                         (compile-order-by order-by outer-field-id->var pair->target-var))
         filters       (when filter-clause
                         (or (compile-basic-filter filter-clause outer-field-id->var pair->target-var) []))
@@ -1094,6 +1145,8 @@
                              (str (str/join "\n" (map :optional remap-entries)) "\n"))
                            (when (seq (:optionals reconciled))
                              (str (str/join "\n" (:optionals reconciled)) "\n"))
+                           (when (seq (:binds bucketed))
+                             (str (str/join "\n" (:binds bucketed)) "\n"))
                            (when (seq filters)
                              (str (str/join "\n" filters) "\n"))
                            "}\n"

@@ -320,7 +320,7 @@
 
 (deftest order-by-test
   (let [ob     #(@#'mbql/compile-order-by % {"naam" "naam" "leeftijd" "leeftijd"} {})
-        agg-ob #(@#'mbql/compile-agg-order-by % {"naam" "naam"} {})]
+        agg-ob #(@#'mbql/compile-agg-order-by % (fn [t] (@#'mbql/var-for-token t {"naam" "naam"} {})))]
     (is (= "ORDER BY ASC(?naam)" (ob [[:asc [:field "naam" nil]]])))
     (is (= "ORDER BY DESC(?naam) ASC(?leeftijd)"
            (ob [[:desc [:field "naam" nil]] [:asc [:field "leeftijd" nil]]])))
@@ -439,6 +439,31 @@
         (is (= ["naam"] vars))
         (is (str/includes? sparql "SELECT ?naam\n"))
         (is (str/includes? sparql "GROUP BY ?naam"))))))
+
+(deftest compile-base-stage-temporal-breakout-test
+  (with-fixture
+    (testing "a breakout with a temporal unit groups and orders by its bucket"
+      (let [tok [:field 11 {:temporal-unit :month}]
+            {:keys [sparql vars]}
+            (compile-stage* {:source-table 100
+                             :aggregation  [[:count]]
+                             :breakout     [tok]
+                             :order-by     [[:asc tok]]})]
+        (is (= ["geboorte_datum_month" "ag_0"] vars))
+        (is (str/includes? sparql "BIND(STRDT(CONCAT(SUBSTR(STR(?geboorte_datum),1,7),\"-01\")"))
+        (is (str/includes? sparql "GROUP BY ?geboorte_datum_month"))
+        (is (str/includes? sparql "ORDER BY ASC(?geboorte_datum_month)"))))
+    (testing "every supported unit compiles to valid SPARQL"
+      (doseq [unit (keys @#'mbql/temporal-bucket-exprs)]
+        (testing unit
+          (compile-stage* {:source-table 100
+                           :aggregation  [[:count]]
+                           :breakout     [[:field 11 {:temporal-unit unit}]]}))))
+    (testing "a unit SPARQL cannot compute is rejected instead of grouping raw values"
+      (is (thrown-with-msg? clojure.lang.ExceptionInfo #"cannot group dates by week"
+                            (compile-stage* {:source-table 100
+                                             :aggregation  [[:count]]
+                                             :breakout     [[:field 11 {:temporal-unit :week}]]}))))))
 
 (deftest compile-base-stage-fk-join-test
   (with-fixture
