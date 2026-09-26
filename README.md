@@ -388,7 +388,7 @@ dbo:PersonShape    a sh:NodeShape ; sh:targetClass dbo:Person    ; sh:node dbo:A
 dbo:ScientistShape a sh:NodeShape ; sh:targetClass dbo:Scientist ; sh:node dbo:PersonShape .
 ```
 
-`ScientistShape` ends up with **all** properties from `PersonShape` and `AgentShape`, plus its own. If the child redefines a `sh:path` that a parent already defined, the child's declaration wins (different `sh:description`, different `sh:minCount`, etc.). Cycles are broken with a visited set. `sh:node` references that don't resolve to another visible NodeShape with its own `sh:targetClass` (e.g. an abstract parent shape without `sh:targetClass`, a shape flagged `metabase:hide`, or the class IRI itself) are silently ignored — their properties are **not** inherited. Give each NodeShape an IRI (not a blank node) so it can take part in inheritance.
+`ScientistShape` ends up with **all** properties from `PersonShape` and `AgentShape`, plus its own. If the child redefines a `sh:path` that a parent already defined, the child's declaration wins (different `sh:description`, different `sh:minCount`, etc.). Cycles are broken with a visited set. `sh:node` references that don't resolve to another visible NodeShape with its own `sh:targetClass` (e.g. an abstract parent shape without `sh:targetClass`, a shape flagged `metabase:hide`, or the class IRI itself) are silently ignored — their properties are **not** inherited. A parent NodeShape needs an IRI (not a blank node) so `sh:node` can reference it.
 
 ### Worked example
 

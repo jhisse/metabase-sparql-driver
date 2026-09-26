@@ -273,18 +273,21 @@
    broken with a visited set."
   [shapes]
   (let [by-iri (into {} (for [s shapes :when (:node-iri s)] [(:node-iri s) s]))]
-    (letfn [(collect [visited node-iri]
+    (letfn [(collect-shape [visited s]
+              (let [parents (apply merge
+                                   (map #(collect visited %) (:parent-shape-iris s)))
+                    own     (into {} (map (juxt :property-uri identity) (:properties s)))]
+                (merge parents own)))
+            (collect [visited node-iri]
               (if (or (visited node-iri) (not (by-iri node-iri)))
                 {}
-                (let [s        (by-iri node-iri)
-                      visited' (conj visited node-iri)
-                      parents  (apply merge
-                                      (map #(collect visited' %) (:parent-shape-iris s)))
-                      own      (into {} (map (juxt :property-uri identity) (:properties s)))]
-                  (merge parents own))))]
+                (collect-shape (conj visited node-iri) (by-iri node-iri))))]
+      ;; Start from the shape itself, not its IRI: a blank-node shape has no
+      ;; :node-iri and would otherwise lose all of its properties.
       (mapv (fn [s]
               (assoc s :properties
-                     (-> (collect #{} (:node-iri s)) vals vec)))
+                     (-> (collect-shape (cond-> #{} (:node-iri s) (conj (:node-iri s))) s)
+                         vals vec)))
             shapes))))
 
 (defn- merge-shapes-by-class
