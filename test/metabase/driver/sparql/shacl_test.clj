@@ -113,6 +113,21 @@
       (is (= #{(str base "label")}
              (set (map :property-uri (:properties plaats))))))))
 
+(deftest shacl->metadata-blank-node-shape-test
+  (testing "a NodeShape written as a blank node keeps its own and inherited properties"
+    (let [ttl    (str "@prefix sh:  <http://www.w3.org/ns/shacl#> .\n"
+                      "@prefix xsd: <http://www.w3.org/2001/XMLSchema#> .\n"
+                      "@prefix ex:  <https://odis.q.libis.be/> .\n"
+                      "ex:EntiteitShape a sh:NodeShape ; sh:targetClass ex:Entiteit ;\n"
+                      "  sh:property [ sh:path ex:bron ; sh:datatype xsd:string ] .\n"
+                      "[] a sh:NodeShape ; sh:targetClass ex:Boek ; sh:node ex:EntiteitShape ;\n"
+                      "  sh:property [ sh:path ex:titel ; sh:datatype xsd:string ] .\n")
+          boek   (->> (shacl->metadata (shacl/parse-turtle ttl base) "nl")
+                      (filter #(= (str base "Boek") (:class-uri %)))
+                      first)]
+      (is (= #{(str base "titel") (str base "bron")}
+             (set (keys (props-by-uri boek))))))))
+
 (deftest shacl->metadata-language-test
   (testing "switching the language re-picks sh:name literals"
     (let [shapes (shacl->metadata (shacl/parse-turtle turtle base) "en")
