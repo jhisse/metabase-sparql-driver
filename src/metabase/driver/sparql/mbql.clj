@@ -890,7 +890,7 @@
                                         target-var (get pair->target-var [fid alias])
                                         inter-var (get alias->intermediate-var alias)
                                         path (join-path alias)]
-                                  :when (and prop target-var inter-var path)]
+                                  :when (and prop target-var path)]
                               (emit-optional-group (conj path (triple-pattern inter-var prop target-var))))
         _ (log/debugf "[mbql] Triples: fields=%d extras=%d join-fk=%d join-targets=%d"
                       (count triples-for-fields) (count triples-for-extras)
@@ -1065,12 +1065,10 @@
                           (let [vs (map token->var (:fields stage))]
                             (when (every? some? vs)
                               (vec (distinct vs)))))
-        ;; When Lib's expected columns are known, reconcile the SELECT against them:
-        ;; remap columns resolve via `pair->target-var` (or are synthesized as an extra
-        ;; OPTIONAL); every other column takes the inner sub-SELECT var with its name
-        ;; (`:lib/desired-column-alias`, or `:name` for a column not reached through a
-        ;; join, e.g. `count` → `ag_0`), else the next unused one in order. Order alone
-        ;; is not enough: an FK remap puts its label before the FK in the sub-SELECT.
+        ;; When Lib's expected columns are known, reconcile the SELECT against them.
+        ;; Remap columns resolve via `pair->target-var` (or an extra OPTIONAL); the rest
+        ;; match inner vars by desired alias or Lib name (`count` → `ag_0`) before
+        ;; position, since an FK remap reorders the sub-SELECT.
         reconciled    (when (and expected-cols (not agg?))
                         (let [inner-vars  (atom (:vars inner))
                               placeholder (atom 0)]
