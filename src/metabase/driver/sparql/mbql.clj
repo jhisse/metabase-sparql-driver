@@ -419,6 +419,20 @@
   ([source-var property-uri target-var]
    (emit-optional-group [(triple-pattern source-var property-uri target-var)])))
 
+(defn- emit-remap-optional
+  "Render the OPTIONAL that reads `property` off `fk-var`, a variable bound by a
+   sub-SELECT. `fk-var` is unbound on rows without the FK, and a plain
+   `OPTIONAL { ?fk-var <p> ?t }` (or one guarded by `BOUND(?fk-var)`) would then
+   bind it to every node with `<p>`. Matching a fresh var and comparing it with
+   `=` does not: the comparison errors on the unbound row, so the row is kept
+   without a value."
+  ;; ponytail: the fresh var scans every `<p>` triple; fine for remaps, revisit
+  ;; if a derived stage ever remaps over a very large property.
+  [fk-var property-uri target-var]
+  (let [node (str fk-var "_node")]
+    (emit-optional-group [(triple-pattern node property-uri target-var)
+                          (format "FILTER(?%s = ?%s)" node fk-var)])))
+
 (defn- joined-var-name
   "Build a SPARQL var name for a joined column: `<alias>__<field-name>`,
    sanitized. `field-name` may be nil; falls back to `f`."
@@ -1030,7 +1044,7 @@
                                    prop   (when nm (uri/absolute-uri nm naming))
                                    rvar   (joined-var-name alias (or nm (str "f_" tid)))]
                             :when (and fk-var prop)]
-                        {:optional (emit-optional-triple fk-var prop rvar)
+                        {:optional (emit-remap-optional fk-var prop rvar)
                          :var      rvar
                          :tid      tid
                          :alias    alias})
@@ -1089,7 +1103,7 @@
                                    (-> acc
                                        (update :vars conj rvar)
                                        (update :optionals conj
-                                               (emit-optional-triple fk-var prop rvar))))
+                                               (emit-remap-optional fk-var prop rvar))))
 
                                  (seq @inner-vars)
                                  (let [unused (set @inner-vars)

@@ -647,6 +647,23 @@
             {:keys [vars]} (compile-stage* {:source-query card})]
         (is (= ["naam" "ag_0"] vars))))))
 
+(deftest compile-derived-stage-remap-test
+  (with-fixture
+    (testing "an outer-stage remap reads the label through a fresh var compared with ="
+      ;; A plain OPTIONAL off ?geboorteplaats would bind it, when a row has no FK,
+      ;; to every node carrying a label.
+      (let [{:keys [sparql]}
+            (compile-stage* {:source-query {:source-table 100
+                                            :fields       [[:field 1 nil] [:field 4 nil]]}
+                             :fields       [[:field "geboorteplaats" nil]
+                                            [:field 10 {:join-alias "Plaats"}]]
+                             :joins        [{:alias     "Plaats"
+                                             :condition [:= [:field "geboorteplaats" nil]
+                                                         [:field 1 {:join-alias "Plaats"}]]}]})]
+        (is (str/includes? sparql
+                           (str "OPTIONAL { ?geboorteplaats_node <" base "label> ?Plaats__label . "
+                                "FILTER(?geboorteplaats_node = ?geboorteplaats) }")))))))
+
 (deftest compile-derived-stage-outer-filter-test
   (with-fixture
     (testing "an outer filter on an aggregated card resolves a column whose name is not a valid SPARQL var"
