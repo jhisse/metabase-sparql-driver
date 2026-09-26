@@ -162,6 +162,17 @@
         (is (= 2 (count cols)))
         (is (= [] rows))))))
 
+(deftest ^:integration native-join-aggregation-test
+  (testing "a native query joining Company to City aggregates per group"
+    (let [{:keys [rows]} (tu/run-native
+                          "PREFIX ex: <https://example.org/>
+                           PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
+                           SELECT ?city (COUNT(?c) AS ?companies) (SUM(?emp) AS ?employees)
+                           WHERE { ?c a ex:Company ; ex:employees ?emp ; ex:headquarters ?hq .
+                                   ?hq rdfs:label ?city }
+                           GROUP BY ?city ORDER BY ?city")]
+      (is (= [["Shelbyville" 1 300] ["Springfield" 2 165]] rows)))))
+
 (deftest ^:integration native-ask-returns-boolean-test
   (let [{:keys [cols rows]} (tu/run-native "ASK { ?s a <https://example.org/Person> }")]
     (is (= [{:name "boolean" :display_name "boolean" :base_type :type/Boolean}]

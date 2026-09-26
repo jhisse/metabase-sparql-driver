@@ -1,9 +1,9 @@
 # Fixture dataset for the smoke/integration suite (test/metabase/driver/sparql/smoke_test.clj).
 #
 # Loaded into an ephemeral Oxigraph endpoint by bin/smoke-test.sh via the SPARQL
-# Graph Store Protocol. Kept deliberately tiny: two RDF classes so describe-database
-# discovers two "tables", and a Person with several properties so describe-table
-# discovers several "columns". `updated` is timezoned for Alice and local for Bob,
+# Graph Store Protocol. Three RDF classes (Person, Company, City) so describe-database
+# discovers several "tables", with typed properties and IRI links between them
+# (knows, worksFor, headquarters) that smoke-shapes.ttl declares as SHACL FKs. `updated` is timezoned for Alice and local for Bob,
 # so temporal filters must compare each value against the matching bound form.
 # The ex: namespace is the dataset's graph IRI; bin/smoke-test.sh (SPARQL_TEST_GRAPH,
 # default https://example.org/) seeds these triples into that named graph and the
@@ -17,13 +17,44 @@ ex:alice a ex:Person ;
     ex:age 30 ;
     ex:birthDate "1994-03-10"^^xsd:date ;
     ex:updated "2024-06-01T10:00:00Z"^^xsd:dateTime ;
-    ex:knows ex:bob .
+    ex:knows ex:bob ;
+    ex:worksFor ex:acme .
 
 ex:bob a ex:Person ;
     rdfs:label "Bob" ;
     ex:age 25 ;
     ex:birthDate "2001-07-22"^^xsd:date ;
-    ex:updated "2023-12-31T23:00:00"^^xsd:dateTime .
+    ex:updated "2023-12-31T23:00:00"^^xsd:dateTime ;
+    ex:worksFor ex:globex .
 
 ex:acme a ex:Company ;
-    rdfs:label "Acme Inc" .
+    rdfs:label "Acme Inc" ;
+    ex:foundedOn "1990-05-01"^^xsd:date ;
+    ex:employees 120 ;
+    ex:revenue 1500000.50 ;
+    ex:listed true ;
+    ex:headquarters ex:springfield .
+
+ex:globex a ex:Company ;
+    rdfs:label "Globex" ;
+    ex:foundedOn "2005-09-15"^^xsd:date ;
+    ex:employees 45 ;
+    ex:revenue 320000.00 ;
+    ex:listed false ;
+    ex:headquarters ex:springfield .
+
+ex:initech a ex:Company ;
+    rdfs:label "Initech" ;
+    ex:foundedOn "2012-01-20"^^xsd:date ;
+    ex:employees 300 ;
+    ex:revenue 4200000.00 ;
+    ex:listed true ;
+    ex:headquarters ex:shelbyville .
+
+ex:springfield a ex:City ;
+    rdfs:label "Springfield" ;
+    ex:population 30000 .
+
+ex:shelbyville a ex:City ;
+    rdfs:label "Shelbyville" ;
+    ex:population 12000 .

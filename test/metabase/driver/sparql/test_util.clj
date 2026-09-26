@@ -45,6 +45,15 @@
   "Database map in the shape the driver's sync/execute fns take directly."
   {:details {:endpoint endpoint :default-graph default-graph}})
 
+(def shacl-db
+  "[[db]] synced with the `shacl` strategy from the fixture's shapes
+  (test/resources/fixtures/smoke-shapes.ttl), which bin/smoke-test.sh seeds into
+  their own named graph and exports as SPARQL_TEST_SHACL_URL (a Graph Store GET)."
+  (update db :details assoc
+          :metadata-sync-strategy "shacl"
+          :shacl-url (or (System/getenv "SPARQL_TEST_SHACL_URL")
+                         "http://localhost:7878/store?graph=https%3A%2F%2Fexample.org%2Fshapes")))
+
 (defn skip-without-live-endpoint
   "`use-fixtures :once` guard for every :integration namespace: only run against
   a live endpoint (i.e. under `make smoke`, which sets SPARQL_TEST_ENDPOINT and
