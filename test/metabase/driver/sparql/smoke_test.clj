@@ -5,7 +5,8 @@
    These are tagged `^:integration` and are EXCLUDED from the hermetic `make test`
    run. They are driven by `make smoke`, which starts an ephemeral Oxigraph
    endpoint (docker-compose.test.yml), seeds it with test/resources/fixtures/smoke.ttl
-   into the named graph <https://example.org/>, and points `SPARQL_TEST_ENDPOINT`
+   into the named graph <https://example.org/> (and smoke-shapes.ttl into
+   <https://example.org/shapes> for the SHACL sync tests), and points `SPARQL_TEST_ENDPOINT`
    here. Run directly with:
 
      SPARQL_TEST_ENDPOINT=http://localhost:7878/query clojure -X:test :includes '[:integration]'"
@@ -52,7 +53,8 @@
                            (map :name)
                            set)]
       (is (contains? table-names "Person"))
-      (is (contains? table-names "Company")))))
+      (is (contains? table-names "Company"))
+      (is (contains? table-names "City")))))
 
 (deftest ^:integration describe-table-discovers-fields-test
   (testing "describe-table discovers the synthetic PK plus the class's properties"
@@ -69,3 +71,34 @@
       (testing "IRI-valued properties get the \"uri\" database-type; literal ones stay \"string\""
         (is (= "uri" (:database-type (by-name "knows"))))
         (is (= "string" (:database-type (by-name "age"))))))))
+
+(deftest ^:integration shacl-describe-database-test
+  (testing "the shacl strategy takes its tables from the shapes served by the endpoint"
+    (let [tables (:tables (database/describe-database :sparql tu/shacl-db))
+          by-name (into {} (map (juxt :name identity)) tables)]
+      (is (= #{"Person" "Company" "City"} (set (keys by-name))))
+      (is (= "A company that employs people" (:description (by-name "Company")))))))
+
+(deftest ^:integration shacl-describe-table-test
+  (testing "field types come from sh:datatype, IRI links from sh:class"
+    (let [fields  (:fields (database/describe-table :sparql tu/shacl-db {:name "Company"}))
+          by-name (into {} (map (juxt :name identity)) fields)]
+      (is (= {"subject"      :type/Text
+              tu/rdfs-label  :type/Text
+              "foundedOn"    :type/Date
+              "employees"    :type/Integer
+              "revenue"      :type/Float
+              "listed"       :type/Boolean
+              "headquarters" :type/Text}
+             (update-vals by-name :base-type)))
+      (is (= "uri" (:database-type (by-name "headquarters"))))
+      (is (= :type/FK (:semantic-type (by-name "headquarters"))))
+      (is (true? (:database-required (by-name tu/rdfs-label)))))))
+
+(deftest ^:integration shacl-fks-test
+  (testing "sh:class property shapes become FKs to the target class's subject"
+    (is (= #{["Person" "knows" "Person"]
+             ["Person" "worksFor" "Company"]
+             ["Company" "headquarters" "City"]}
+           (set (map (juxt :fk-table-name :fk-column-name :pk-table-name)
+                     (database/fks tu/shacl-db)))))))
