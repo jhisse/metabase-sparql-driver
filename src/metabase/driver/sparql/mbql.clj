@@ -119,14 +119,18 @@
    - If the token carries `:join-alias`, look up the joined target var via
      `pair->target-var` keyed by `[field-id alias]`.
    - Otherwise the subject (PK) field always maps to `?subject`.
-   - Otherwise look up the regular alias from `field-id->var`."
+   - Otherwise look up the regular alias from `field-id->var`. A string ref
+     (a source-query column name, e.g. `birth-date`) also tries its sanitized
+     form, since derived stages key their columns by SPARQL var name."
   [field-token field-id->var pair->target-var]
   (let [fid   (field-token->id field-token)
         alias (field-token->join-alias field-token)]
     (cond
       (and fid alias) (get pair->target-var [fid alias])
       (and fid (id-field? fid)) "subject"
-      fid (get field-id->var fid))))
+      fid (or (get field-id->var fid)
+              (when (string? fid)
+                (get field-id->var (sanitize-var-name fid)))))))
 
 (defn- condition->fk-ref
   "Extract the FK-source field token from a join `:condition`. The condition is

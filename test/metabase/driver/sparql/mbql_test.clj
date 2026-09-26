@@ -261,7 +261,8 @@
    2  {:name "naam" :database-type "string"}
    3  {:name "leeftijd" :database-type "string"}
    4  {:name "geboorteplaats" :database-type "string"}
-   10 {:name "label" :database-type "string"}})
+   10 {:name "label" :database-type "string"}
+   11 {:name "geboorte-datum" :database-type "string"}})
 
 (defn- compile-stage* [stage]
   (@#'mbql/compile-stage stage))
@@ -505,6 +506,13 @@
 
 (deftest compile-derived-stage-outer-filter-test
   (with-fixture
+    (testing "an outer filter on an aggregated card resolves a column whose name is not a valid SPARQL var"
+      (let [card {:source-table 100 :aggregation [[:count]] :breakout [[:field 11 nil]]}
+            {:keys [sparql]}
+            (compile-stage* {:source-query card
+                             :aggregation  [[:count]]
+                             :filter [:= [:field "geboorte-datum" nil] "x"]})]
+        (is (str/includes? sparql "FILTER (?geboorte_datum = \"x\")"))))
     (testing "an outer filter on a saved card is applied around the sub-SELECT"
       (let [card {:source-table 100 :aggregation [[:count]] :breakout [[:field 2 nil]]}
             {:keys [sparql vars]}
