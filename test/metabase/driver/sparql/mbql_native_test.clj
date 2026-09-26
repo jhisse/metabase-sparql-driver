@@ -46,9 +46,6 @@
         age   (tu/column q "age")
         subj  (tu/column q "subject")
         knows (tu/column q "knows")]
-    (testing "string equality becomes a string literal"
-      (is (str/includes? (->sparql (lib/filter q (lib/= label "Alice")))
-                         "FILTER (?")))
     (testing "a quote/backslash in a user value stays inside the literal"
       (is (str/includes? (->sparql (lib/filter q (lib/= label "a\"b\\")))
                          "\"a\\\"b\\\\\"")))

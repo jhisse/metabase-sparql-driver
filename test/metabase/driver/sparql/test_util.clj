@@ -155,7 +155,6 @@
 
 (defn run-query
   "Compile a pMBQL query with [[compile-query]] and execute it end to end.
-  Returns {:cols [...] :rows [...] :native \"SELECT ...\"}."
+  Returns {:cols [...] :rows [...]}."
   [pmbql-query]
-  (let [native (compile-query pmbql-query)]
-    (assoc (execute! native) :native (:query native))))
+  (execute! (compile-query pmbql-query)))

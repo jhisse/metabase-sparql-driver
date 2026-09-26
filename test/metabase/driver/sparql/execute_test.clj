@@ -81,64 +81,65 @@
         (is (some? @responded))
         (is (= [["1"]] (:rows @responded)))))))
 
+(def ^:private ok-response {:status 200 :body "{\"boolean\":true}"})
+
 (defn- capture-post
-  "Call execute-sparql-query with http/post stubbed to `respond`; returns
-  {:result … :url … :opts …} with the request clj-http would have sent."
-  ([options] (capture-post options (fn [_ _] {:status 200 :body "{\"boolean\":true}"})))
+  "Run `f` with http/post stubbed to `respond`; returns {:result … :url … :opts …}
+  with the request clj-http would have sent."
+  [respond f]
+  (let [req (atom nil)]
+    (with-redefs [http/post (fn [url opts] (reset! req {:url url :opts opts}) (respond url opts))]
+      (let [result (f)]
+        (assoc @req :result result)))))
+
+(defn- post-with
+  "capture-post for execute-sparql-query called with `options`."
+  ([options] (post-with options (constantly ok-response)))
   ([options respond]
-   (let [req (atom nil)]
-     (with-redefs [http/post (fn [url opts] (reset! req {:url url :opts opts}) (respond url opts))]
-       (let [result (execute/execute-sparql-query "http://sparql.invalid/query" "ASK {}" options)]
-         (assoc @req :result result))))))
+   (capture-post respond #(execute/execute-sparql-query "http://sparql.invalid/query" "ASK {}" options))))
 
 (deftest execute-sparql-query-request-shape-test
   (testing "the query goes in a POST form body and JSON results are requested"
-    (let [{:keys [url opts result]} (capture-post {})]
+    (let [{:keys [url opts result]} (post-with {})]
       (is (= "http://sparql.invalid/query" url))
       (is (= {:query "ASK {}"} (:form-params opts)))
       (is (= :json (:accept opts)))
       (is (false? (:throw-exceptions opts)) "non-200s must reach process-response, not throw")
       (is (= [true {:boolean true}] result))))
   (testing "no options: no default graph, TLS verification on, no credentials"
-    (let [{:keys [opts]} (capture-post {})]
-      (is (not (contains? opts :query-params)))
-      (is (not (contains? opts :insecure?)))
-      (is (not (contains? opts :basic-auth)))
-      (is (not (contains? opts :headers)))))
+    (let [{:keys [opts]} (post-with {})]
+      (is (empty? (select-keys opts [:query-params :insecure? :basic-auth :headers])))))
   (testing "default graph travels as the default-graph-uri protocol parameter"
     (is (= {:default-graph-uri "https://example.org/"}
-           (:query-params (:opts (capture-post {:default-graph "https://example.org/"}))))))
+           (:query-params (:opts (post-with {:default-graph "https://example.org/"}))))))
   (testing "use-insecure disables TLS verification"
-    (is (true? (:insecure? (:opts (capture-post {:insecure? true}))))))
+    (is (true? (:insecure? (:opts (post-with {:insecure? true}))))))
   (testing "auth fragments from auth/http-options are merged into the request"
     (is (= ["alice" "secret"]
-           (:basic-auth (:opts (capture-post {:auth {:basic-auth ["alice" "secret"]}})))))
+           (:basic-auth (:opts (post-with {:auth {:basic-auth ["alice" "secret"]}})))))
     (is (= {"Authorization" "Bearer t0k"}
-           (:headers (:opts (capture-post {:auth {:headers {"Authorization" "Bearer t0k"}}})))))))
+           (:headers (:opts (post-with {:auth {:headers {"Authorization" "Bearer t0k"}}})))))))
 
 (deftest execute-sparql-query-transport-failure-test
   (testing "an exception from the HTTP client becomes [false message :transport]"
     (is (= [false "Connection refused" :transport]
-           (:result (capture-post {} (fn [_ _] (throw (java.net.ConnectException. "Connection refused")))))))))
+           (:result (post-with {} (fn [_ _] (throw (java.net.ConnectException. "Connection refused")))))))))
 
 (deftest execute-reducible-query-uses-configured-endpoint-and-auth-test
   (testing "the endpoint and credentials always come from the database details;
             a native query cannot redirect stored credentials elsewhere"
-    (let [req (atom nil)]
-      (with-redefs [driver-api/metadata-provider (constantly ::provider)
-                    driver-api/database          (fn [_] {:details {:endpoint      "http://configured.invalid/query"
-                                                                    :default-graph "https://example.org/"
-                                                                    :auth-type     "basic"
-                                                                    :auth-username "alice"
-                                                                    :auth-password "secret"}})
-                    http/post                    (fn [url opts]
-                                                   (reset! req {:url url :opts opts})
-                                                   {:status 200 :body "{\"boolean\":true}"})]
-        (execute/execute-reducible-query
-         {:endpoint "http://attacker.invalid/"
-          :native   {:query "ASK {}" :endpoint "http://attacker.invalid/"}}
-         nil
-         (fn [_ rows] (vec rows)))
-        (is (= "http://configured.invalid/query" (:url @req)))
-        (is (= ["alice" "secret"] (:basic-auth (:opts @req))))
-        (is (= {:default-graph-uri "https://example.org/"} (:query-params (:opts @req))))))))
+    (with-redefs [driver-api/metadata-provider (constantly ::provider)
+                  driver-api/database          (fn [_] {:details {:endpoint      "http://configured.invalid/query"
+                                                                  :default-graph "https://example.org/"
+                                                                  :auth-type     "basic"
+                                                                  :auth-username "alice"
+                                                                  :auth-password "secret"}})]
+      (let [{:keys [url opts]} (capture-post (constantly ok-response)
+                                             #(execute/execute-reducible-query
+                                               {:endpoint "http://attacker.invalid/"
+                                                :native   {:query "ASK {}" :endpoint "http://attacker.invalid/"}}
+                                               nil
+                                               (fn [_ rows] (vec rows))))]
+        (is (= "http://configured.invalid/query" url))
+        (is (= ["alice" "secret"] (:basic-auth opts)))
+        (is (= {:default-graph-uri "https://example.org/"} (:query-params opts)))))))
