@@ -342,8 +342,11 @@
           (when-not var
             (unsupported-filter! (str "a reference to an unresolved column (" (pr-str lhs) ")")
                                  filter-clause))
-          (let [unit (:temporal-unit (field-token->opts lhs))]
-            (when (and unit (not= unit :default))
+          (let [unit        (:temporal-unit (field-token->opts lhs))
+                null-check? (or (contains? #{:is-null :not-null} op)
+                                (and (contains? #{:= :!=} op) (nil? v)))]
+            ;; A null check does not depend on the grouping, so it stays valid.
+            (when (and unit (not= unit :default) (not null-check?))
               (unsupported-filter! (str "a date grouped by " (name unit)) filter-clause)))
           (let [term (fn [x render]
                        (cond

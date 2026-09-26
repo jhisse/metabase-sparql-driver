@@ -267,6 +267,10 @@
           (is (= (str "(" (dt-cmp "gewijzigd" ">=" "2024-01-01T00:00:00Z" "2024-01-01T00:00:00") ")")
                  (g [:>= [:field "gewijzigd" {:base-type :type/DateTime}]
                      [:absolute-datetime (java.time.LocalDate/parse "2024-01-01") :default]])))))
+      (testing "null checks ignore the grouping (e.g. drilling into the \"(empty)\" bar of a by-month chart)"
+        (is (= "(!BOUND(?geboren))" (f [:is-null [:field 1 {:temporal-unit :month}]])))
+        (is (= "(BOUND(?geboren))" (f [:not-null [:field 1 {:temporal-unit :month}]])))
+        (is (= "(!BOUND(?geboren))" (f [:= [:field 1 {:temporal-unit :month}] nil]))))
       (testing "a filter on a date grouped by a unit Metabase could not turn into a range throws"
         (is (thrown-with-msg? clojure.lang.ExceptionInfo #"month-of-year"
                               (f [:!= [:field 1 {:temporal-unit :month-of-year}] 1]))))
