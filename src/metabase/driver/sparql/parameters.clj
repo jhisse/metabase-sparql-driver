@@ -67,7 +67,7 @@
       (or (boolean? v) (number? v)) (str v)
       (uri/iri-shaped? v)   (uri/iri-ref v)
       (string? v)           (uri/string-literal v)
-      :else                 (do (log/warnf "[sparql.params] Unrecognized parameter value class %s; falling back to (str v)"
+      :else                 (do (log/warnf "[sparql.params] Unrecognized parameter value class %s; falling back to a string literal"
                                            (class v))
                                 (uri/string-literal v)))))
 
