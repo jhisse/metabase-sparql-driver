@@ -132,6 +132,16 @@
              (:values (api :get (format "/api/field/%d/values"
                                         (get-in company [:fields "listed" :id])))))))))
 
+(deftest ^:integration result-column-display-names-test
+  (testing "MBQL result columns keep Metabase's display names, not SPARQL var names"
+    (let [company (get (tables :shacl) "Company")
+          {:keys [data]} (api :post "/api/dataset"
+                              {:database (db-id :shacl)
+                               :type     :query
+                               :query    {:source-table (:id company)
+                                          :aggregation  [[:sum (field-ref company "revenue")]]}})]
+      (is (= ["Sum of Revenue"] (mapv :display_name (:cols data)))))))
+
 (deftest ^:integration native-query-through-api-test
   (let [{:keys [status error data]}
         (api :post "/api/dataset"
