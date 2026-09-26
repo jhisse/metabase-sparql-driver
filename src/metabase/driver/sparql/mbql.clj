@@ -265,12 +265,22 @@
                            now
                            (u.date/bucket (u.date/add now b a) b)))))
 
+(def ^:private ^DateTimeFormatter xsd-local-datetime-format
+  (DateTimeFormatter/ofPattern "uuuu-MM-dd'T'HH:mm:ss"))
+
 (defn- temporal->sparql
   "Render a java.time value as a typed literal matching the column: xsd:date
-   for `:type/Date` columns, xsd:dateTime otherwise. Comparing a typed date
-   column against a plain string literal matches nothing."
-  [field-id t]
-  (let [base-type (:base-type (field-id->metadata field-id))
+   for `:type/Date` columns, xsd:dateTime otherwise. The column type comes from
+   field metadata or, for a source-query column ref, the ref's own options.
+
+   An xsd:dateTime bound is returned as `{:tz … :local …}`: the same instant
+   with and without a timezone offset. XSD comparisons between a value with a
+   timezone and one without are indeterminate, so [[compare-expr]] picks the
+   bound matching each value's `TZ()`."
+  [field-id opts t]
+  (let [base-type (or (:base-type (field-id->metadata field-id))
+                      (:effective-type opts)
+                      (:base-type opts))
         date?     (if base-type
                     (isa? base-type :type/Date)
                     (instance? LocalDate t))]
@@ -281,13 +291,22 @@
                   OffsetDateTime (.toLocalDate ^OffsetDateTime t)
                   ZonedDateTime  (.toLocalDate (.withZoneSameInstant ^ZonedDateTime t (query-zone))))
            "\"^^" xsd-date)
-      (str "\"" (.format xsd-datetime-format
-                         (condp instance? t
-                           LocalDate      (.atStartOfDay ^LocalDate t (query-zone))
-                           LocalDateTime  (.atZone ^LocalDateTime t (query-zone))
-                           OffsetDateTime t
-                           ZonedDateTime  t))
-           "\"^^" xsd-datetime))))
+      (let [^ZonedDateTime zdt (condp instance? t
+                                 LocalDate      (.atStartOfDay ^LocalDate t (query-zone))
+                                 LocalDateTime  (.atZone ^LocalDateTime t (query-zone))
+                                 OffsetDateTime (.atZoneSameInstant ^OffsetDateTime t (query-zone))
+                                 ZonedDateTime  (.withZoneSameInstant ^ZonedDateTime t (query-zone)))]
+        {:tz    (str "\"" (.format xsd-datetime-format zdt) "\"^^" xsd-datetime)
+         :local (str "\"" (.format xsd-local-datetime-format zdt) "\"^^" xsd-datetime)}))))
+
+(defn- compare-expr
+  "`?var op term`. For a `{:tz … :local …}` dateTime bound, compare each value
+   against the form that matches whether it carries a timezone."
+  [var op term]
+  (if (map? term)
+    (format "((TZ(?%s) != \"\" && ?%s %s %s) || (TZ(?%s) = \"\" && ?%s %s %s))"
+            var var op (:tz term) var var op (:local term))
+    (format "?%s %s %s" var op term)))
 
 (defn- compile-filter-expr
   "Compile a filter clause to a SPARQL boolean expression string. Throws
@@ -328,38 +347,38 @@
               (unsupported-filter! (str "a date grouped by " (name unit)) filter-clause)))
           (let [term (fn [x render]
                        (cond
-                         (temporal-clause? x) (temporal->sparql fid (temporal-clause->value x))
+                         (temporal-clause? x) (temporal->sparql fid (field-token->opts lhs) (temporal-clause->value x))
                          (vector? x)          (unsupported-filter! (str "comparing against a " (name (first x)) " clause")
                                                                    filter-clause)
                          :else                (render x)))]
             (case op
               := (if (nil? v)
                    (format "(!BOUND(?%s))" var)
-                   (format "(?%s = %s)" var (term v #(value->term fid %))))
+                   (str "(" (compare-expr var "=" (term v #(value->term fid %))) ")"))
               :!= (if (nil? v)
                     (format "(BOUND(?%s))" var)
-                    (format "(?%s != %s)" var (term v #(value->term fid %))))
-              :> (and (some? v) (format "(?%s > %s)" var (term v literal->sparql)))
-              :>= (and (some? v) (format "(?%s >= %s)" var (term v literal->sparql)))
-              :< (and (some? v) (format "(?%s < %s)" var (term v literal->sparql)))
-              :<= (and (some? v) (format "(?%s <= %s)" var (term v literal->sparql)))
+                    (str "(" (compare-expr var "!=" (term v #(value->term fid %))) ")"))
+              :> (and (some? v) (str "(" (compare-expr var ">" (term v literal->sparql)) ")"))
+              :>= (and (some? v) (str "(" (compare-expr var ">=" (term v literal->sparql)) ")"))
+              :< (and (some? v) (str "(" (compare-expr var "<" (term v literal->sparql)) ")"))
+              :<= (and (some? v) (str "(" (compare-expr var "<=" (term v literal->sparql)) ")"))
               ;; [:between field min max] — min is rhs (`v`), max is the next arg.
               :between (let [hi (let [x maybe-opts]
                                   (if (and (vector? x) (= :value (first x))) (second x) x))]
                          (when (and (some? v) (some? hi))
-                           (format "(?%s >= %s && ?%s <= %s)"
-                                   var (term v literal->sparql) var (term hi literal->sparql))))
-              :starts-with (let [needle (term v literal->sparql)
+                           (str "(" (compare-expr var ">=" (term v literal->sparql))
+                                " && " (compare-expr var "<=" (term hi literal->sparql)) ")")))
+              :starts-with (let [needle (let [t (term v literal->sparql)] (if (map? t) (:tz t) t))
                                  expr (if insensitive?
                                         (format "STRSTARTS(LCASE(STR(?%s)), LCASE(%s))" var needle)
                                         (format "STRSTARTS(STR(?%s), %s)" var needle))]
                              (str "(" expr ")"))
-              :ends-with (let [needle (term v literal->sparql)
+              :ends-with (let [needle (let [t (term v literal->sparql)] (if (map? t) (:tz t) t))
                                expr (if insensitive?
                                       (format "STRENDS(LCASE(STR(?%s)), LCASE(%s))" var needle)
                                       (format "STRENDS(STR(?%s), %s)" var needle))]
                            (str "(" expr ")"))
-              :contains (let [needle (term v literal->sparql)
+              :contains (let [needle (let [t (term v literal->sparql)] (if (map? t) (:tz t) t))
                               expr (if insensitive?
                                      (format "CONTAINS(LCASE(STR(?%s)), LCASE(%s))" var needle)
                                      (format "CONTAINS(STR(?%s), %s)" var needle))]

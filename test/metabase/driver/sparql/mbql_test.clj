@@ -235,27 +235,38 @@
                 mbql/query-now  (constantly (java.time.ZonedDateTime/parse "2026-09-26T10:15:30Z"))]
     (let [f      #(@#'mbql/compile-filter-expr % {1 "geboren" 2 "gewijzigd" 3 "naam"} {})
           date   "^^<http://www.w3.org/2001/XMLSchema#date>"
-          dtime  "^^<http://www.w3.org/2001/XMLSchema#dateTime>"]
+          dtime  "^^<http://www.w3.org/2001/XMLSchema#dateTime>"
+          ;; dateTime bounds compare each value against the form matching its TZ()
+          dt-cmp (fn [v op tz local]
+                   (str "((TZ(?" v ") != \"\" && ?" v " " op " \"" tz "\"" dtime ")"
+                        " || (TZ(?" v ") = \"\" && ?" v " " op " \"" local "\"" dtime "))"))]
       (testing "relative dates are resolved to the start of the unit, plus n units"
         (is (= (str "(?geboren >= \"2026-08-27\"" date ")")
                (f [:>= [:field 1 {:temporal-unit :default}] [:relative-datetime -30 :day]])))
         (is (= (str "(?geboren < \"2026-09-01\"" date ")")
                (f [:< [:field 1 nil] [:relative-datetime 0 :month]])))
-        (is (= (str "(?gewijzigd >= \"2026-09-26T10:00:00Z\"" dtime ")")
+        (is (= (str "(" (dt-cmp "gewijzigd" ">=" "2026-09-26T10:00:00Z" "2026-09-26T10:00:00") ")")
                (f [:>= [:field 2 nil] [:relative-datetime 0 :hour]]))))
       (testing ":current resolves to now"
-        (is (= (str "(?gewijzigd <= \"2026-09-26T10:15:30Z\"" dtime ")")
+        (is (= (str "(" (dt-cmp "gewijzigd" "<=" "2026-09-26T10:15:30Z" "2026-09-26T10:15:30") ")")
                (f [:<= [:field 2 nil] [:relative-datetime :current]]))))
       (testing "absolute dates render with the column's datatype"
         (is (= (str "(?geboren >= \"2024-01-01\"" date " && ?geboren <= \"2024-01-31\"" date ")")
                (f [:between [:field 1 nil]
                    [:absolute-datetime (java.time.LocalDate/parse "2024-01-01") :default]
                    [:absolute-datetime (java.time.LocalDate/parse "2024-01-31") :default]])))
-        (is (= (str "(?gewijzigd = \"2024-01-01T00:00:00Z\"" dtime ")")
+        (is (= (str "(" (dt-cmp "gewijzigd" "=" "2024-01-01T00:00:00Z" "2024-01-01T00:00:00") ")")
                (f [:= [:field 2 nil] [:absolute-datetime (java.time.LocalDate/parse "2024-01-01") :default]])))
-        (is (= (str "(?gewijzigd >= \"2024-01-01T08:30:00+02:00\"" dtime ")")
+        (is (= (str "(" (dt-cmp "gewijzigd" ">=" "2024-01-01T06:30:00Z" "2024-01-01T06:30:00") ")")
                (f [:>= [:field 2 nil]
                    [:absolute-datetime (java.time.OffsetDateTime/parse "2024-01-01T08:30:00+02:00") :default]]))))
+      (testing "a source-query column ref (no field metadata) takes its type from the ref's options"
+        (let [g #(@#'mbql/compile-filter-expr % {"geboren" "geboren" "gewijzigd" "gewijzigd"} {})]
+          (is (= (str "(?geboren >= \"2026-08-27\"" date ")")
+                 (g [:>= [:field "geboren" {:base-type :type/Date}] [:relative-datetime -30 :day]])))
+          (is (= (str "(" (dt-cmp "gewijzigd" ">=" "2024-01-01T00:00:00Z" "2024-01-01T00:00:00") ")")
+                 (g [:>= [:field "gewijzigd" {:base-type :type/DateTime}]
+                     [:absolute-datetime (java.time.LocalDate/parse "2024-01-01") :default]])))))
       (testing "a filter on a date grouped by a unit Metabase could not turn into a range throws"
         (is (thrown-with-msg? clojure.lang.ExceptionInfo #"month-of-year"
                               (f [:!= [:field 1 {:temporal-unit :month-of-year}] 1]))))
