@@ -13,7 +13,7 @@ METABASE_PATH := $(MAKEFILE_DIR)/metabase
 # Target directory for the compiled driver
 TARGET_DIR := $(DRIVER_PATH)/target
 
-.PHONY: build clean init-metabase help all lint format splint test smoke coverage
+.PHONY: build clean init-metabase help all lint format splint test smoke coverage demo demo-down e2e
 
 # Default rule
 all: build
@@ -93,6 +93,22 @@ smoke:
 	@bash bin/smoke-test.sh
 	@echo "Smoke tests completed."
 
+# Start Metabase + the built driver + a seeded Oxigraph at http://localhost:3000
+# (idempotent). Requires `make build` first, Docker (Compose v2), curl and python3.
+demo:
+	@bash bin/demo.sh up
+
+# Stop the demo environment
+demo-down:
+	@bash bin/demo.sh down
+
+# Run the Metabase API tests against the demo environment, then tear it down
+# (also when the environment fails to start, so no containers are left behind)
+e2e:
+	@bash bin/demo.sh up && \
+		METABASE_E2E_URL=http://localhost:3000 clojure -X:test :nses '[metabase.driver.sparql.metabase-api-test]'; \
+		status=$$?; bash bin/demo.sh down; exit $$status
+
 # Run tests with coverage analysis
 coverage:
 	@echo "Running tests with coverage analysis..."
@@ -142,6 +158,9 @@ help:
 	@echo "  make splint              - Run splint static code analysis"
 	@echo "  make test                - Run unit tests (hermetic)"
 	@echo "  make smoke               - Run smoke/integration tests (ephemeral Oxigraph via Docker)"
+	@echo "  make demo                - Start Metabase + driver + seeded Oxigraph (localhost:3000)"
+	@echo "  make demo-down           - Stop the demo environment"
+	@echo "  make e2e                 - Run the Metabase API tests against the demo environment"
 	@echo "  make coverage            - Run tests with coverage analysis"
 	@echo "  make docker-build        - Build docker image"
 	@echo "  make docker-run          - Run docker image"

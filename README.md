@@ -516,6 +516,8 @@ make docker-build
 - `make splint`: Run splint static code analysis
 - `make test`: Run the hermetic unit tests
 - `make smoke`: Run the smoke/integration tests against an ephemeral Oxigraph endpoint (requires Docker)
+- `make demo` / `make demo-down`: Start / stop a local Metabase with the built driver (see below)
+- `make e2e`: Run the Metabase API tests against that environment, then stop it
 - `make coverage`: Run the unit tests with coverage analysis
 - `make docker-build`: Build docker image
 - `make docker-run`: Run docker image
@@ -523,6 +525,19 @@ make docker-build
 - `make docker-clean`: Clean old container
 - `make docker-build-driver`: Build driver with docker
 - `make help`: Display this help
+
+## :test_tube: Try It Locally
+
+`make demo` starts Metabase with your locally built driver and an Oxigraph endpoint seeded with the smoke fixture (`test/resources/fixtures/`). Metabase comes already set up with two databases, `SPARQL auto` (auto sync) and `SPARQL SHACL` (SHACL sync, with FK display-value remapping):
+
+```bash
+make build   # the demo mounts target/sparql.metabase-driver.jar
+make demo    # idempotent; the first start takes a minute or two
+```
+
+Open <http://localhost:3000> and log in as `admin@example.org` / `Sparql-demo-2026`. After changing the driver, run `make build && make demo-down && make demo` (a plain container restart keeps loading the old jar). Stop with `make demo-down`.
+
+Requires Docker (Compose v2), curl and python3. The login and database ids are written to `target/demo/env.json` for scripts and tests. `make e2e` runs the Metabase API tests (`metabase_api_test.clj`) against this environment.
 
 ## Run with debug logs
 

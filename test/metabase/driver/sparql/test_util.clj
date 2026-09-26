@@ -64,6 +64,15 @@
   (when (System/getenv "SPARQL_TEST_ENDPOINT")
     (t)))
 
+(defn skip-without-metabase
+  "`use-fixtures :once` guard for metabase_api_test.clj: only run against the
+  Metabase that `make e2e` starts (bin/demo.sh) and exports as METABASE_E2E_URL.
+  Skipped under `make smoke`, `make coverage` and bare runners, like
+  [[skip-without-live-endpoint]]."
+  [t]
+  (when (System/getenv "METABASE_E2E_URL")
+    (t)))
+
 (def rdfs-label
   "Name of the fixture's label column: a foreign-prefix property, so sync keeps
   it as its full URI."

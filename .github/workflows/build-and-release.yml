@@ -209,6 +209,49 @@ jobs:
             ~/.deps.clj
           key: ${{ runner.os }}-clojure-${{ hashFiles('deps.edn', 'metabase/deps.edn') }}-${{ github.run_id }}
 
+  e2e:
+    name: E2E Tests
+    runs-on: ubuntu-latest
+    # Tests the jar from `build` inside a real Metabase. Like `smoke`, it gates
+    # merges but stays out of the release chain.
+    needs: build
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+        with:
+          submodules: 'recursive'
+
+      - name: Setup Java
+        uses: actions/setup-java@v6.0.1
+        with:
+          distribution: 'temurin'
+          java-version: '21'
+
+      - name: Setup Clojure Tools
+        uses: DeLaGuardo/setup-clojure@13.7.0
+        with:
+          cli: latest
+
+      - name: Restore Clojure dependencies cache
+        uses: actions/cache/restore@v6
+        with:
+          path: |
+            ~/.m2/repository
+            ~/.gitlibs
+            ~/.deps.clj
+          key: ${{ runner.os }}-clojure-${{ hashFiles('deps.edn', 'metabase/deps.edn') }}
+          restore-keys: |
+            ${{ runner.os }}-clojure-
+
+      - name: Download driver artifact
+        uses: actions/download-artifact@v8
+        with:
+          name: sparql-driver
+          path: target
+
+      - name: Run E2E Tests
+        run: make e2e
+
   release:
     name: Release Driver
     runs-on: ubuntu-latest
