@@ -211,6 +211,11 @@
     (testing "an unsupported branch inside :and throws instead of silently keeping only half the filter"
       (is (thrown? clojure.lang.ExceptionInfo
                    (f [:and [:> [:field "leeftijd" nil] 1] [:> [:integer [:field "leeftijd" nil]] 5]]))))
+    (testing "a field ref that resolves to no SPARQL variable throws instead of dropping the filter"
+      (is (thrown-with-msg? clojure.lang.ExceptionInfo #"unresolved column"
+                            (f [:= [:field "onbekend" nil] "x"])))
+      (is (thrown? clojure.lang.ExceptionInfo
+                   (f [:and [:> [:field "leeftijd" nil] 1] [:= [:field "onbekend" nil] "x"]]))))
     (testing "the error is typed as an unsupported feature"
       (is (= driver-api/qp.error-type.unsupported-feature
              (try (f [:> [:integer [:field "leeftijd" nil]] 5])
