@@ -1,11 +1,14 @@
 # SHACL shapes for the smoke fixture (smoke.ttl), used to test the `shacl`
 # metadata-sync strategy against a live endpoint.
 #
-# bin/smoke-test.sh seeds this file into its own named graph (SPARQL_TEST_SHAPES_GRAPH)
-# and the tests fetch it back as Turtle through Oxigraph's Graph Store Protocol
-# (GET /store?graph=…), which is the driver's `shacl-url`. The shapes stay out of
-# the data graph, so auto-sync and queries never see them.
+# bin/lib.sh (make smoke, make demo) seeds this file into its own named graph,
+# <https://example.org/shapes>, and the tests fetch it back as Turtle through
+# Oxigraph's Graph Store Protocol (GET /store?graph=…), the driver's `shacl-url`. The shapes stay out of
+# the data graph, so auto-sync and queries never see them. The FKs declare
+# mb:displayValueProperty so the post-sync hook (dimensions.clj) remaps them to
+# their target's label in a real Metabase (bin/demo.sh, metabase_api_test.clj).
 @prefix ex:   <https://example.org/> .
+@prefix mb:   <https://data.metabase.com/> .
 @prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
 @prefix sh:   <http://www.w3.org/ns/shacl#> .
 @prefix xsd:  <http://www.w3.org/2001/XMLSchema#> .
@@ -16,8 +19,8 @@ ex:PersonShape a sh:NodeShape ;
                 [ sh:path ex:age ; sh:datatype xsd:integer ; sh:order 2 ] ,
                 [ sh:path ex:birthDate ; sh:datatype xsd:date ; sh:order 3 ] ,
                 [ sh:path ex:updated ; sh:datatype xsd:dateTime ; sh:order 4 ] ,
-                [ sh:path ex:knows ; sh:class ex:Person ; sh:order 5 ] ,
-                [ sh:path ex:worksFor ; sh:class ex:Company ; sh:order 6 ] .
+                [ sh:path ex:knows ; sh:class ex:Person ; mb:displayValueProperty rdfs:label ; sh:order 5 ] ,
+                [ sh:path ex:worksFor ; sh:class ex:Company ; mb:displayValueProperty rdfs:label ; sh:order 6 ] .
 
 ex:CompanyShape a sh:NodeShape ;
     sh:targetClass ex:Company ;
@@ -27,7 +30,7 @@ ex:CompanyShape a sh:NodeShape ;
                 [ sh:path ex:employees ; sh:datatype xsd:integer ; sh:order 3 ] ,
                 [ sh:path ex:revenue ; sh:datatype xsd:decimal ; sh:order 4 ] ,
                 [ sh:path ex:listed ; sh:datatype xsd:boolean ; sh:order 5 ] ,
-                [ sh:path ex:headquarters ; sh:class ex:City ; sh:order 6 ] .
+                [ sh:path ex:headquarters ; sh:class ex:City ; mb:displayValueProperty rdfs:label ; sh:order 6 ] .
 
 ex:CityShape a sh:NodeShape ;
     sh:targetClass ex:City ;

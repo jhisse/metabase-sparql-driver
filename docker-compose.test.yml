@@ -1,6 +1,9 @@
 # Ephemeral SPARQL endpoint for the smoke/integration suite.
 # Brought up, seeded, and torn down by bin/smoke-test.sh (and by `make smoke`).
 # Not used by the hermetic `make test` run.
+#
+# The `demo` profile adds a real Metabase with the locally built driver jar
+# (bin/demo.sh, `make demo` / `make e2e`). `make smoke` does not enable it.
 services:
   oxigraph:
     # Pin the tag for reproducibility; never use `latest`.
@@ -8,3 +11,18 @@ services:
     command: ["serve", "--bind", "0.0.0.0:7878"]
     ports:
       - "7878:7878"
+
+  metabase:
+    profiles: ["demo"]
+    # Same Metabase as the Dockerfile and the metabase/ submodule.
+    image: metabase/metabase:v0.61.2.x
+    depends_on: [oxigraph]
+    environment:
+      MB_ANON_TRACKING_ENABLED: "false"
+      MB_CHECK_FOR_UPDATES: "false"
+    # A file bind mount pins the jar's inode and `make build` writes a new file,
+    # so pick up a rebuild by recreating the container (make demo-down && make demo).
+    volumes:
+      - ./target/sparql.metabase-driver.jar:/plugins/sparql.metabase-driver.jar:ro
+    ports:
+      - "3000:3000"
