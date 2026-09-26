@@ -686,6 +686,23 @@
         (is (= ["Place__label" "ag_0"] vars))
         (is (str/includes? sparql "FILTER (?Place__label = \"Leuven\")")
             "the Lib column name resolves to the joined SPARQL variable")))
+    (testing "columns match inner vars by name when an FK remap reorders the sub-SELECT"
+      ;; The FK remap puts the joined label first in the sub-SELECT, while Lib
+      ;; lists the FK, the count, then the label.
+      (let [card {:source-table 100
+                  :aggregation [[:count]]
+                  :breakout    [[:field 10 {:join-alias "Place"}] [:field 4 nil]]
+                  :joins       [{:alias "Place" :fk-field-id 4}]}
+            expected [{:name "geboorteplaats"}
+                      {:name "count"}
+                      {:name "label" :fk-field-id 4 :lib/desired-column-alias "Place__label"}]
+            {:keys [sparql vars]}
+            (compile-derived-stage*
+             {:source-query card
+              :filter [:> [:field "count" nil] 1]}
+             expected)]
+        (is (= ["geboorteplaats" "ag_0" "Place__label"] vars))
+        (is (str/includes? sparql "FILTER (?ag_0 > 1)"))))
     (testing "the same name-aliasing applies to order-by on a joined breakout column"
       (let [card {:source-table 100
                   :aggregation [[:count]]

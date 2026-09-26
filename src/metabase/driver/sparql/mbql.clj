@@ -1012,7 +1012,10 @@
                               (vec (distinct vs)))))
         ;; When Lib's expected columns are known, reconcile the SELECT against them:
         ;; remap columns resolve via `pair->target-var` (or are synthesized as an extra
-        ;; OPTIONAL), every other column consumes the next inner sub-SELECT var in order.
+        ;; OPTIONAL); every other column takes the inner sub-SELECT var with its name
+        ;; (`:lib/desired-column-alias`, or `:name` for a column not reached through a
+        ;; join, e.g. `count` → `ag_0`), else the next unused one in order. Order alone
+        ;; is not enough: an FK remap puts its label before the FK in the sub-SELECT.
         reconciled    (when (and expected-cols (not agg?))
                         (let [inner-vars  (atom (:vars inner))
                               placeholder (atom 0)]
@@ -1036,8 +1039,13 @@
                                                (emit-optional-triple fk-var prop rvar))))
 
                                  (seq @inner-vars)
-                                 (let [v (first @inner-vars)]
-                                   (swap! inner-vars rest)
+                                 (let [unused (set @inner-vars)
+                                       v      (or (some unused
+                                                        [(some-> (:lib/desired-column-alias col) sanitize-var-name)
+                                                         (when-not (:fk-field-id col)
+                                                           (get field-id->var (:name col)))])
+                                                  (first @inner-vars))]
+                                   (swap! inner-vars #(remove #{v} %))
                                    (update acc :vars conj v))
 
                                  :else

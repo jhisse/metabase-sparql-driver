@@ -113,6 +113,15 @@
                                            :aggregation  [[:sum (field-ref person "age")]]
                                            :breakout     [[:field label {:source-field knows}]]}))))))))
 
+(deftest ^:integration filter-on-aggregation-over-fk-breakout-test
+  (testing "an outer filter on the count resolves to the count, not to the FK column"
+    (let [company (get (tables :shacl) "Company")]
+      (is (= [["https://example.org/springfield" 2 "Springfield"]]
+             (:rows (run-mbql :shacl {:source-query {:source-table (:id company)
+                                                     :aggregation  [[:count]]
+                                                     :breakout     [(field-ref company "headquarters")]}
+                                      :filter       [:> [:field "count" {:base-type :type/Integer}] 1]})))))))
+
 (deftest ^:integration native-query-through-api-test
   (let [{:keys [status error data]}
         (api :post "/api/dataset"
