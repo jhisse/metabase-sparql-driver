@@ -16,6 +16,7 @@ This namespace IRI identifies this and all future versions of the vocabulary."""
   vann:preferredNamespaceUri "https://w3id.org/sban/ns#" ;
   owl:versionInfo "1.0" ;
   dcterms:issued "2026-09-26"^^xsd:date ;
+  dcterms:license <https://creativecommons.org/licenses/by/4.0/> ;
   dcterms:creator <https://github.com/jhisse> ;
   dcterms:source <https://github.com/jhisse/metabase-sparql-driver> .
 
