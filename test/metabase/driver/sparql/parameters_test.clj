@@ -49,12 +49,12 @@
 
 (deftest iri-parameter-with-illegal-chars-is-percent-encoded
   (testing "A scheme-shaped value with IRIREF-illegal chars is percent-encoded, not leaked raw"
-    (is (= "SELECT * WHERE { ?s a <https://ex.org/a%3E%20b> }"
+    (is (= "SELECT * WHERE { ?s a <https://example.org/a%3E%20b> }"
            (subst {:query         "SELECT * WHERE { ?s a {{cls}} }"
                    :template-tags {"cls" {:name "cls" :display-name "Class" :type :text}}
                    :parameters    [{:type "category"
                                     :target [:variable [:template-tag "cls"]]
-                                    :value "https://ex.org/a> b"}]})))))
+                                    :value "https://example.org/a> b"}]})))))
 
 (deftest whitespace-inside-braces-is-tolerated
   (testing "`{{ name }}` and `{{name}}` are both substituted"
@@ -74,21 +74,21 @@
 
 (deftest multi-value-renders-as-comma-list
   (testing "A vector of values renders as a comma-separated SPARQL term list"
-    (is (= "SELECT * WHERE { ?s a ?c FILTER (?c IN (<https://ex.org/A>, <https://ex.org/B>)) }"
+    (is (= "SELECT * WHERE { ?s a ?c FILTER (?c IN (<https://example.org/A>, <https://example.org/B>)) }"
            (subst {:query         "SELECT * WHERE { ?s a ?c FILTER (?c IN ({{cls}})) }"
                    :template-tags {"cls" {:name "cls" :display-name "Class" :type :text}}
                    :parameters    [{:type "category"
                                     :target [:variable [:template-tag "cls"]]
-                                    :value ["https://ex.org/A" "https://ex.org/B"]}]})))))
+                                    :value ["https://example.org/A" "https://example.org/B"]}]})))))
 
 (deftest multi-value-percent-encodes-illegal-chars-per-element
   (testing "Each IRI element of an IN(...) list is individually percent-encoded"
-    (is (= "SELECT * WHERE { ?s a ?c FILTER (?c IN (<https://ex.org/a%3Eb>, <https://ex.org/c%20d>)) }"
+    (is (= "SELECT * WHERE { ?s a ?c FILTER (?c IN (<https://example.org/a%3Eb>, <https://example.org/c%20d>)) }"
            (subst {:query         "SELECT * WHERE { ?s a ?c FILTER (?c IN ({{cls}})) }"
                    :template-tags {"cls" {:name "cls" :display-name "Class" :type :text}}
                    :parameters    [{:type "category"
                                     :target [:variable [:template-tag "cls"]]
-                                    :value ["https://ex.org/a>b" "https://ex.org/c d"]}]})))))
+                                    :value ["https://example.org/a>b" "https://example.org/c d"]}]})))))
 
 (deftest value-with-regex-meta-chars-survives
   (testing "A `$` or `\\` in the value is not interpreted as a regex backreference"

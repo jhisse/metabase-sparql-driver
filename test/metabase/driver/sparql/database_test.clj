@@ -19,11 +19,11 @@
 (def ^:private shacl-shape->table @#'database/shacl-shape->table)
 (def ^:private shacl-shape->describe-table @#'database/shacl-shape->describe-table)
 
-(def ^:private graph "https://odis.q.libis.be/")
+(def ^:private graph "https://example.org/")
 
 (deftest extract-class-name-test
   (testing "local name is taken after the last slash or hash"
-    (is (= "Persoon" (extract-class-name "https://odis.q.libis.be/Persoon")))
+    (is (= "Persoon" (extract-class-name "https://example.org/Persoon")))
     (is (= "Person"  (extract-class-name "http://xmlns.com/foaf/0.1/Person")))
     (is (= "name"    (extract-class-name "http://example.org/schema#name")))))
 
@@ -55,8 +55,8 @@
 
 (deftest parse-schema-config-test
   (testing "valid JSON is decoded with keyword keys"
-    (is (= {:tables [{:name "https://odis.q.libis.be/Persoon"}]}
-           (parse-schema-config "{\"tables\":[{\"name\":\"https://odis.q.libis.be/Persoon\"}]}"))))
+    (is (= {:tables [{:name "https://example.org/Persoon"}]}
+           (parse-schema-config "{\"tables\":[{\"name\":\"https://example.org/Persoon\"}]}"))))
   (testing "blank config yields nil"
     (is (nil? (parse-schema-config "")))
     (is (nil? (parse-schema-config nil))))
@@ -190,7 +190,7 @@
 
 (deftest describe-database-explicit-test
   (testing "explicit JSON config drives table discovery without any endpoint I/O"
-    (let [db {:name "ODIS"
+    (let [db {:name "example"
               :details {:metadata-sync-strategy "explicit"
                         :default-graph graph
                         :schema-config (str "{\"tables\":[{\"name\":\"" graph "Persoon\","
@@ -200,7 +200,7 @@
 
 (deftest describe-table-explicit-test
   (testing "explicit config resolves a (shortened) table name back to its fields"
-    (let [db {:name "ODIS"
+    (let [db {:name "example"
               :details {:metadata-sync-strategy "explicit"
                         :default-graph graph
                         :schema-config (str "{\"tables\":[{\"name\":\"" graph "Persoon\","
@@ -222,13 +222,13 @@
                  :schema-config (str "{\"tables\":[{\"name\":\"" graph "Persoon\","
                                      "\"fields\":[\"" graph "naam\","
                                      "\"http://xmlns.com/foaf/0.1/name\","
-                                     "\"http://other.org/x\"]}]}")}]
+                                     "\"http://other.example/x\"]}]}")}]
     (testing "a prefix-namespace property syncs as prefix__localName"
       (let [{:keys [fields]} (database/describe-table :sparql {:details details} {:name "Persoon"})
             names (set (map :name fields))]
         (is (contains? names "naam"))
         (is (contains? names "foaf__name"))
-        (is (contains? names "http://other.org/x"))))
+        (is (contains? names "http://other.example/x"))))
     (testing "hide-foreign keeps prefix-namespace properties and drops the rest"
       (let [{:keys [fields]} (database/describe-table
                               :sparql
@@ -236,4 +236,4 @@
                               {:name "Persoon"})
             names (set (map :name fields))]
         (is (contains? names "foaf__name"))
-        (is (not (contains? names "http://other.org/x")))))))
+        (is (not (contains? names "http://other.example/x")))))))

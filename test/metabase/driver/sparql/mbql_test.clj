@@ -172,11 +172,11 @@
 (deftest emit-optional-triple-escapes-iri-test
   (let [emit @#'mbql/emit-optional-triple]
     (testing "the property IRI is routed through uri/iri-ref, so an illegal char is percent-encoded"
-      (is (= (str "  OPTIONAL { ?subject " (uri/iri-ref "http://ex.org/a b") " ?t . }")
-             (emit "http://ex.org/a b" "t")))
+      (is (= (str "  OPTIONAL { ?subject " (uri/iri-ref "http://example.org/a b") " ?t . }")
+             (emit "http://example.org/a b" "t")))
       ;; a normal property URI is unchanged (iri-ref is a no-op)
-      (is (= "  OPTIONAL { ?s <http://ex.org/name> ?t . }"
-             (emit "s" "http://ex.org/name" "t"))))))
+      (is (= "  OPTIONAL { ?s <http://example.org/name> ?t . }"
+             (emit "s" "http://example.org/name" "t"))))))
 
 (deftest lang-filter-line-escapes-tag-test
   (let [lang-line @#'mbql/lang-filter-line]
@@ -224,7 +224,7 @@
 ;; Stage compilation (metadata accessors stubbed)
 ;; ---------------------------------------------------------------------------
 
-(def ^:private base "https://odis.q.libis.be/")
+(def ^:private base "https://example.org/")
 
 (def ^:private fixture-fields
   {1  {:name "subject"}
@@ -237,7 +237,7 @@
   (@#'mbql/compile-stage stage))
 
 (defmacro ^:private with-fixture
-  "Run `body` with the four metadata accessors stubbed for the ODIS fixture."
+  "Run `body` with the four metadata accessors stubbed for the test fixture."
   [& body]
   `(with-redefs-fn
      {#'mbql/field-id->metadata        (fn [id#] (get fixture-fields id#))
