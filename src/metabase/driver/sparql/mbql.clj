@@ -401,13 +401,23 @@
     (log/debugf "[mbql] Built %d var aliases" (count aliases))
     aliases))
 
+(defn- triple-pattern
+  "Render `?source <property> ?target .`."
+  [source-var property-uri target-var]
+  (format "?%s %s ?%s ." source-var (uri/iri-ref property-uri) target-var))
+
+(defn- emit-optional-group
+  "Render a SPARQL `OPTIONAL { <pattern> <pattern> … }` line."
+  [patterns]
+  (str "  OPTIONAL { " (str/join " " patterns) " }"))
+
 (defn- emit-optional-triple
   "Render a SPARQL `OPTIONAL { ?source <property> ?target . }` line.
    Single-arity defaults the source var to the synthetic subject (`?subject`)."
   ([property-uri target-var]
    (emit-optional-triple "subject" property-uri target-var))
   ([source-var property-uri target-var]
-   (format "  OPTIONAL { ?%s %s ?%s . }" source-var (uri/iri-ref property-uri) target-var)))
+   (emit-optional-group [(triple-pattern source-var property-uri target-var)])))
 
 (defn- joined-var-name
   "Build a SPARQL var name for a joined column: `<alias>__<field-name>`,
@@ -581,7 +591,7 @@
 
    Returns `{:vars [...] :triples [...]}`."
   [expected-cols {:keys [field-id->var pair->target-var alias->intermediate-var
-                         fk-fid->alias naming]}]
+                         fk-fid->alias join-path naming]}]
   (let [placeholder (atom 0)]
     (reduce
      (fn [acc col]
@@ -594,7 +604,8 @@
            existing
            (update acc :vars conj existing)
 
-           ;; Joined column the compiler missed: bind it off the join's intermediate var.
+           ;; Joined column the compiler missed: bind it off the join's intermediate var,
+           ;; behind the join's FK path (see compile-base-stage).
            (and fid alias (get alias->intermediate-var alias))
            (let [inter (get alias->intermediate-var alias)]
              (if (id-field? fid)
@@ -605,7 +616,9 @@
                  (-> acc
                      (update :vars conj v)
                      (update :triples conj
-                             (emit-optional-triple inter prop v))))))
+                             (emit-optional-group
+                              (conj (vec (join-path alias))
+                                    (triple-pattern inter prop v))))))))
 
            ;; Direct column the compiler missed: bind it off ?subject.
            (and fid (not alias) (not (id-field? fid)) (:name (field-id->metadata fid)))
@@ -631,16 +644,19 @@
   "Compile a base MBQL stage (one with `:source-table`) to a SPARQL query.
 
    Left joins (implicit ones added by `add-implicit-joins`, e.g. for FK-remap
-   dimensions, as well as explicit notebook joins) are emitted as a pair of
-   independent OPTIONALs:
+   dimensions, as well as explicit notebook joins) are emitted as OPTIONALs
+   that each repeat the join's FK path from `?subject`:
 
-     OPTIONAL { ?<src> <fk-prop> ?<alias>_subject . }
-     OPTIONAL { ?<alias>_subject <target-prop> ?<alias>__<field-name> . }
+     OPTIONAL { ?subject <fk-prop> ?<alias>_subject . }
+     OPTIONAL { ?subject <fk-prop> ?<alias>_subject .
+                ?<alias>_subject <target-prop> ?<alias>__<field-name> . }
 
-   `?<src>` is `?subject` for joins reached directly from the source table.
-   For chained implicit joins (e.g. Item → Provider → Owner), the FK field
-   lives on a previously joined table; `alias->source-var` resolves `?<src>`
-   to that prior join's intermediate var so the chain stays connected.
+   Without the path, a row whose FK is missing would leave `?<alias>_subject`
+   unbound, and the second OPTIONAL would bind it to every node carrying
+   `<target-prop>`. For chained joins (e.g. Item → Provider → Owner) the FK
+   field lives on a previously joined table; `alias->source-var` resolves each
+   hop's source to that prior join's intermediate var, and the path chains
+   the hops.
 
    Aggregation queries (`:aggregation` present) project only breakout columns
    and aggregate expressions, with a `GROUP BY` over the breakouts. `[:count]`
@@ -736,6 +752,20 @@
                                                   (condition->fk-field-id (:condition j) (:alias j)))]
                                   :when fk-id]
                               [fk-id (:alias j)]))
+        ;; FK triple patterns from ?subject down to `alias`'s intermediate var, one
+        ;; per hop. nil when a hop cannot be resolved (no FK property).
+        inter-var->alias (set/map-invert alias->intermediate-var)
+        join-path (fn join-path
+                    ([alias] (join-path alias #{}))
+                    ([alias seen]
+                     (let [src    (get alias->source-var alias "subject")
+                           fk     (get alias->fk-prop alias)
+                           inter  (get alias->intermediate-var alias)
+                           parent (get inter-var->alias src)]
+                       (when (and fk inter (not (seen alias)))
+                         (let [prefix (when parent (join-path parent (conj seen alias)))]
+                           (when (or (nil? parent) prefix)
+                             (conj (vec prefix) (triple-pattern src fk inter))))))))
         ;; Per joined-pair: the SPARQL var that carries the value. The joined entity's
         ;; own subject column IS the intermediate var (no extra triple needed); every
         ;; other joined column gets a unique `<alias>__<field-name>` var.
@@ -796,12 +826,9 @@
                              (ensure-triple-for-field prop var))
         ;; OPTIONAL triples introduced by left-joins.
         join-fk-triples (for [j joins
-                              :let [alias (:alias j)
-                                    fk-prop (get alias->fk-prop alias)
-                                    inter-var (get alias->intermediate-var alias)
-                                    src-var (get alias->source-var alias "subject")]
-                              :when (and fk-prop inter-var)]
-                          (emit-optional-triple src-var fk-prop inter-var))
+                              :let [path (join-path (:alias j))]
+                              :when path]
+                          (emit-optional-group path))
         ;; One triple per joined column. The joined entity's own subject column needs
         ;; no triple — it IS the intermediate var, already bound by the FK triple.
         join-target-triples (for [[fid alias] joined-pairs
@@ -809,9 +836,10 @@
                                   :let [nm (:name (field-id->metadata fid))
                                         prop (uri/absolute-uri nm naming)
                                         target-var (get pair->target-var [fid alias])
-                                        inter-var (get alias->intermediate-var alias)]
-                                  :when (and prop target-var inter-var)]
-                              (emit-optional-triple inter-var prop target-var))
+                                        inter-var (get alias->intermediate-var alias)
+                                        path (join-path alias)]
+                                  :when (and prop target-var inter-var path)]
+                              (emit-optional-group (conj path (triple-pattern inter-var prop target-var))))
         _ (log/debugf "[mbql] Triples: fields=%d extras=%d join-fk=%d join-targets=%d"
                       (count triples-for-fields) (count triples-for-extras)
                       (count join-fk-triples) (count join-target-triples))
@@ -866,6 +894,7 @@
                         :pair->target-var        pair->target-var
                         :alias->intermediate-var alias->intermediate-var
                         :fk-fid->alias           fk-fid->alias
+                        :join-path               join-path
                         :naming                  naming}))
         result-vars (cond
                       agg?       (vec (concat breakout-vars (keep :var agg-projections)))

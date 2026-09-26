@@ -435,7 +435,7 @@
 
 (deftest compile-base-stage-fk-join-test
   (with-fixture
-    (testing "an implicit FK join emits a pair of OPTIONAL triples"
+    (testing "an implicit FK join repeats the FK path in the joined column's OPTIONAL"
       (let [{:keys [sparql vars]}
             (compile-stage* {:source-table 100
                              :fields [[:field 1 nil]
@@ -446,7 +446,7 @@
         (is (str/includes? sparql
                            (str "OPTIONAL { ?subject <" base "geboorteplaats> ?Plaats_subject . }")))
         (is (str/includes? sparql
-                           (str "OPTIONAL { ?Plaats_subject <" base "label> ?Plaats__label . }")))))))
+                           (str "OPTIONAL { ?subject <" base "geboorteplaats> ?Plaats_subject . ?Plaats_subject <" base "label> ?Plaats__label . }")))))))
 
 (deftest compile-base-stage-implicit-join-projection-test
   (testing "Lib's result-metadata strips :lib/join-alias from implicit-joinable
@@ -521,10 +521,10 @@
                                  (str "OPTIONAL { ?subject <" base "provider> ?Provider_subject . }"))))
             (testing "Provider → Owner hop (the bug fix — explicit-join chained case)"
               (is (str/includes? sparql
-                                 (str "OPTIONAL { ?Provider_subject <" base "owner> ?Owner_subject . }"))))
+                                 (str "OPTIONAL { ?subject <" base "provider> ?Provider_subject . ?Provider_subject <" base "owner> ?Owner_subject . }"))))
             (testing "leaf property triple"
               (is (str/includes? sparql
-                                 (str "OPTIONAL { ?Owner_subject <" base "owner_name> ?Owner__owner_name . }"))))))))))
+                                 (str "OPTIONAL { ?subject <" base "provider> ?Provider_subject . ?Provider_subject <" base "owner> ?Owner_subject . ?Owner_subject <" base "owner_name> ?Owner__owner_name . }"))))))))))
 
 (deftest compile-base-stage-explicit-chained-join-without-table-id-test
   (testing "Same chained explicit join, but `field-id->metadata` returns NO `:table-id`
@@ -561,7 +561,7 @@
                                   :condition    [:= [:field 30 {:join-alias "Provider"}]
                                                  [:field 31 {:join-alias "Owner"}]]}]})]
             (is (str/includes? sparql
-                               (str "OPTIONAL { ?Provider_subject <" base "owner> ?Owner_subject . }"))
+                               (str "OPTIONAL { ?subject <" base "provider> ?Provider_subject . ?Provider_subject <" base "owner> ?Owner_subject . }"))
                 "Owner FK triple must be anchored on ?Provider_subject even without :table-id metadata")))))))
 
 (deftest compile-base-stage-chained-fk-join-test
@@ -589,10 +589,10 @@
                                  (str "OPTIONAL { ?subject <" base "provider> ?Provider_subject . }"))))
             (testing "Provider → Owner hop is anchored on ?Provider_subject (the bug fix)"
               (is (str/includes? sparql
-                                 (str "OPTIONAL { ?Provider_subject <" base "owner> ?Owner_subject . }"))))
+                                 (str "OPTIONAL { ?subject <" base "provider> ?Provider_subject . ?Provider_subject <" base "owner> ?Owner_subject . }"))))
             (testing "leaf property triple anchors on ?Owner_subject"
               (is (str/includes? sparql
-                                 (str "OPTIONAL { ?Owner_subject <" base "owner_name> ?Owner__owner_name . }"))))))))))
+                                 (str "OPTIONAL { ?subject <" base "provider> ?Provider_subject . ?Provider_subject <" base "owner> ?Owner_subject . ?Owner_subject <" base "owner_name> ?Owner__owner_name . }"))))))))))
 
 (deftest compile-derived-stage-aggregation-test
   (with-fixture
@@ -709,13 +709,14 @@
           ctx {:field-id->var           {2 "naam" 3 "leeftijd"}
                :pair->target-var        {[10 "Plaats"] "Plaats__label"}
                :alias->intermediate-var {"Plaats" "Plaats_subject"}
+               :join-path               {"Plaats" [(str "?subject <" base "geboorteplaats> ?Plaats_subject .")]}
                :naming                  {:default-graph base :prefixes []}}]
       (testing "columns the compiler already projects reuse their variable"
         (is (= {:vars ["subject" "naam" "Plaats__label"] :triples []}
                (f [{:id 1} {:id 2} {:id 10 :lib/join-alias "Plaats"}] ctx))))
       (testing "a joined column the compiler missed is synthesized off the intermediate var"
         (is (= {:vars    ["subject" "Plaats__naam"]
-                :triples [(str "  OPTIONAL { ?Plaats_subject <" base "naam> ?Plaats__naam . }")]}
+                :triples [(str "  OPTIONAL { ?subject <" base "geboorteplaats> ?Plaats_subject . ?Plaats_subject <" base "naam> ?Plaats__naam . }")]}
                (f [{:id 1} {:id 2 :lib/join-alias "Plaats"}] ctx))))
       (testing "an unresolvable column still gets a (placeholder) variable"
         (is (= {:vars ["undefined_1"] :triples []}
@@ -740,7 +741,7 @@
         (testing "the missing column is synthesized off the join's intermediate var"
           (is (str/includes?
                sparql
-               (str "OPTIONAL { ?Plaats_subject <" base "leeftijd> ?Plaats__leeftijd . }"))))))))
+               (str "OPTIONAL { ?subject <" base "geboorteplaats> ?Plaats_subject . ?Plaats_subject <" base "leeftijd> ?Plaats__leeftijd . }"))))))))
 
 (deftest compile-base-stage-lib-driven-order-test
   (with-fixture
