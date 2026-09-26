@@ -122,6 +122,16 @@
                                                      :breakout     [(field-ref company "headquarters")]}
                                       :filter       [:> [:field "count" {:base-type :type/Integer}] 1]})))))))
 
+(deftest ^:integration breakout-without-aggregation-test
+  (let [company (get (tables :shacl) "Company")]
+    (testing "a breakout alone returns distinct values (two companies share Springfield)"
+      (is (= 2 (count (:rows (run-mbql :shacl {:source-table (:id company)
+                                               :breakout     [(field-ref company "headquarters")]}))))))
+    (testing "a field's filter-value list has no duplicates"
+      (is (= [[false] [true]]
+             (:values (api :get (format "/api/field/%d/values"
+                                        (get-in company [:fields "listed" :id])))))))))
+
 (deftest ^:integration native-query-through-api-test
   (let [{:keys [status error data]}
         (api :post "/api/dataset"

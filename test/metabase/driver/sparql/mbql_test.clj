@@ -431,7 +431,14 @@
                              :aggregation [[:sum [:field 3 nil]]]
                              :breakout [[:field 2 nil]]})]
         (is (= ["naam" "ag_0"] vars))
-        (is (str/includes? sparql "(SUM(?leeftijd) AS ?ag_0)"))))))
+        (is (str/includes? sparql "(SUM(?leeftijd) AS ?ag_0)"))))
+    (testing "a breakout without aggregations still groups (distinct values)"
+      (let [{:keys [sparql vars]}
+            (compile-stage* {:source-table 100
+                             :breakout [[:field 2 nil]]})]
+        (is (= ["naam"] vars))
+        (is (str/includes? sparql "SELECT ?naam\n"))
+        (is (str/includes? sparql "GROUP BY ?naam"))))))
 
 (deftest compile-base-stage-fk-join-test
   (with-fixture

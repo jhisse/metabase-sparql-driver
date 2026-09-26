@@ -658,8 +658,8 @@
    hop's source to that prior join's intermediate var, and the path chains
    the hops.
 
-   Aggregation queries (`:aggregation` present) project only breakout columns
-   and aggregate expressions, with a `GROUP BY` over the breakouts. `[:count]`
+   Aggregation and breakout-only queries project only breakout columns and
+   aggregate expressions, with a `GROUP BY` over the breakouts. `[:count]`
    compiles to `COUNT(DISTINCT ?subject)`.
 
    When `expected-cols` (Lib's authoritative column list) is supplied for a
@@ -679,7 +679,9 @@
         joins         (:joins inner)
         aggregations  (:aggregation inner)
         breakout      (:breakout inner)
-        agg?          (boolean (seq aggregations))
+        ;; Grouped mode: a breakout without aggregations still groups (distinct
+        ;; values, e.g. the query behind a field's filter-value list).
+        agg?          (boolean (or (seq aggregations) (seq breakout)))
         ;; In aggregation mode raw :fields are not projected; the columns that
         ;; need WHERE triples are the breakout columns and the aggregated columns.
         output-tokens (if agg?
@@ -995,7 +997,9 @@
         token->var       (fn [tok] (var-for-token tok field-id->var pair->target-var))
         aggregations  (:aggregation stage)
         breakout      (:breakout stage)
-        agg?          (boolean (seq aggregations))
+        ;; Grouped mode: a breakout without aggregations still groups (distinct
+        ;; values, e.g. the query behind a field's filter-value list).
+        agg?          (boolean (or (seq aggregations) (seq breakout)))
         filter-clause (:filter stage)
         order-by      (:order-by stage)
         limit         (:limit stage)
