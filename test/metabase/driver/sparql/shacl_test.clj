@@ -1,8 +1,9 @@
 (ns metabase.driver.sparql.shacl-test
-  "Unit tests for SHACL-based metadata extraction. These exercise the pure
-   parse/extract path (`parse-turtle` -> `shacl->metadata`); the HTTP fetch and
-   caching in `metadata` are not covered here."
-  (:require [clojure.test :refer :all]
+  "Unit tests for SHACL-based metadata extraction: the pure parse/extract path
+   (`parse-turtle` -> `shacl->metadata`), plus the HTTP fetch and the cache in
+   `metadata` with the HTTP client stubbed."
+  (:require [clj-http.client :as http]
+            [clojure.test :refer :all]
             [metabase.driver.sparql.shacl :as shacl]))
 
 (def ^:private shacl->metadata @#'shacl/shacl->metadata)
@@ -160,3 +161,50 @@
   (is (= :type/Date           (xsd-base-type "http://www.w3.org/2001/XMLSchema#date")))
   (testing "non-XSD datatypes are not resolved here"
     (is (nil? (xsd-base-type "http://www.w3.org/1999/02/22-rdf-syntax-ns#langString")))))
+
+(deftest fetch-shacl-test
+  (let [req (atom nil)
+        respond-with (fn [resp] (fn [url opts] (reset! req {:url url :opts opts}) resp))]
+    (testing "a 200 returns the body and asks for Turtle with the default limits"
+      (with-redefs [http/get (respond-with {:status 200 :body "ttl"})]
+        (is (= "ttl" (shacl/fetch-shacl "https://example.org/shapes.ttl")))
+        (is (= "text/turtle" (get-in @req [:opts :headers "Accept"])))
+        (is (= 10000 (get-in @req [:opts :connection-timeout])))
+        (is (= 30000 (get-in @req [:opts :socket-timeout])))))
+    (testing "configured timeouts are forwarded"
+      (with-redefs [http/get (respond-with {:status 200 :body "ttl"})]
+        (shacl/fetch-shacl "https://example.org/shapes.ttl" {:connect-timeout-ms 1 :socket-timeout-ms 2})
+        (is (= [1 2] ((juxt :connection-timeout :socket-timeout) (:opts @req))))))
+    (testing "a non-200 throws with the status, instead of parsing an error page"
+      (with-redefs [http/get (respond-with {:status 404 :body "not found"})]
+        (let [e (is (thrown? clojure.lang.ExceptionInfo (shacl/fetch-shacl "https://example.org/x.ttl")))]
+          (is (= 404 (:status (ex-data e)))))))
+    (testing "a body over the size cap is rejected (counted in UTF-8 bytes, not chars)"
+      (with-redefs [http/get (respond-with {:status 200 :body "ééé"})]
+        (is (= "ééé" (shacl/fetch-shacl "https://example.org/x.ttl" {:max-bytes 6})))
+        (let [e (is (thrown? clojure.lang.ExceptionInfo
+                             (shacl/fetch-shacl "https://example.org/x.ttl" {:max-bytes 5})))]
+          (is (= 6 (:bytes (ex-data e)))))))))
+
+(deftest metadata-cache-test
+  (let [url     "https://example.org/cache-test.ttl"
+        fetches (atom 0)]
+    (with-redefs [shacl/fetch-shacl (fn [_ _] (swap! fetches inc) turtle)]
+      (shacl/invalidate! url)
+      (testing "the first call fetches, a repeat within the TTL is served from cache"
+        (is (= 3 (count (shacl/metadata url "nl"))))
+        (shacl/metadata url "nl")
+        (is (= 1 @fetches)))
+      (testing "labels are resolved per language, so a new language is a cache miss"
+        (shacl/metadata url "en")
+        (is (= 2 @fetches)))
+      (testing "an entry older than the TTL is refetched"
+        (swap! @#'shacl/cache assoc-in [[url "nl"] :at] 0)
+        (shacl/metadata url "nl")
+        (is (= 3 @fetches)))
+      (testing "invalidate! drops every language for the URL"
+        (shacl/invalidate! url)
+        (shacl/metadata url "nl")
+        (shacl/metadata url "en")
+        (is (= 5 @fetches)))
+      (shacl/invalidate! url))))

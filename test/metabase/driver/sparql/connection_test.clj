@@ -14,8 +14,26 @@
       (is (= {:version "SPARQL 1.1"}
              (connection/dbms-version :sparql database)))))
 
+  (testing "uses the VALUES probe when the BIND probe is rejected"
+    (with-redefs [execute/execute-sparql-query
+                  (fn [_ query _]
+                    (if (re-find #"(?i)\bVALUES\b" query)
+                      [true {:results {:bindings [{:version {:type "literal" :value "SPARQL 1.1"}}]}}]
+                      [false "SPARQL endpoint returned status: 400" :query]))]
+      (is (= {:version "SPARQL 1.1"}
+             (connection/dbms-version :sparql database)))))
+
   (testing "falls back to SPARQL 1.0 when both probes fail"
     (with-redefs [execute/execute-sparql-query
                   (fn [_ _ _] [false "SPARQL endpoint returned status: 400" :query])]
       (is (= {:version "SPARQL 1.0"}
              (connection/dbms-version :sparql database))))))
+
+(deftest can-connect?-test
+  (testing "a successful probe returns true"
+    (with-redefs [execute/execute-sparql-query (fn [_ _ _] [true {:boolean true}])]
+      (is (true? (connection/can-connect? "http://example.org/sparql" {})))))
+  (testing "a failed probe throws with the endpoint's reason, for the connection form to show"
+    (with-redefs [execute/execute-sparql-query (fn [_ _ _] [false "SPARQL endpoint returned status: 401" :db])]
+      (is (thrown-with-msg? Exception #"Connection failed: SPARQL endpoint returned status: 401"
+                            (connection/can-connect? "http://example.org/sparql" {}))))))

@@ -5,11 +5,14 @@
    metadata provider through four private accessors
    (`field-id->metadata`, `table-id->class-uri`, `database-naming-context`,
    `database-default-language`); those are stubbed with `with-redefs-fn` so the
-   full compile path can be exercised without a running Metabase app DB."
+   full compile path can be exercised without a running Metabase app DB.
+   Every compiled stage is also run through a real SPARQL parser, so fragment
+   assertions cannot pass on a malformed query."
   (:require [clojure.string :as str]
             [clojure.test :refer :all]
             [metabase.driver-api.core :as driver-api]
             [metabase.driver.sparql.mbql :as mbql]
+            [metabase.driver.sparql.test-util :as tu]
             [metabase.driver.sparql.uri :as uri]))
 
 ;; ---------------------------------------------------------------------------
@@ -204,6 +207,37 @@
         (is (= "(?leeftijd >= 18 && ?leeftijd <= 65)"
                (f [:between [:field "leeftijd" nil] [:value 18 {}] [:value 65 {}]])))))))
 
+(deftest string-match-and-negation-filters-test
+  (let [f #(@#'mbql/compile-filter-expr % {"naam" "naam"} {})]
+    (testing "case-sensitive string matches compare the STR() of the value"
+      (is (= "(STRSTARTS(STR(?naam), \"Ja\"))" (f [:starts-with [:field "naam" nil] "Ja"])))
+      (is (= "(STRENDS(STR(?naam), \"an\"))"   (f [:ends-with [:field "naam" nil] "an"])))
+      (is (= "(CONTAINS(STR(?naam), \"a\"))"   (f [:contains [:field "naam" nil] "a"]))))
+    (testing "case-insensitive variants lower-case both sides"
+      (is (= "(STRSTARTS(LCASE(STR(?naam)), LCASE(\"ja\")))"
+             (f [:starts-with [:field "naam" nil] "ja" {:case-sensitive false}])))
+      (is (= "(STRENDS(LCASE(STR(?naam)), LCASE(\"AN\")))"
+             (f [:ends-with [:field "naam" nil] "AN" {:case-sensitive false}]))))
+    (testing ":not wraps its inner expression (does-not-contain arrives as [:not [:contains …]])"
+      (is (= "(!(CONTAINS(STR(?naam), \"x\")))"
+             (f [:not [:contains [:field "naam" nil] "x"]]))))
+    (testing ":is-null / :not-null map to BOUND checks"
+      (is (= "(!BOUND(?naam))" (f [:is-null [:field "naam" nil]])))
+      (is (= "(BOUND(?naam))"  (f [:not-null [:field "naam" nil]]))))
+    (testing "a hostile needle stays inside its string literal"
+      (is (= "(STRSTARTS(STR(?naam), \"\\\") || true || (\\\"\"))"
+             (f [:starts-with [:field "naam" nil] "\") || true || (\""]))))))
+
+(deftest avg-max-count-field-projection-test
+  (let [f @#'mbql/aggregation->projection]
+    (is (= {:select "(AVG(?amount) AS ?ag_0)" :var "ag_0"}
+           (f [:avg [:field "amount" nil]] 0 (constantly "amount"))))
+    (is (= {:select "(MAX(?amount) AS ?ag_2)" :var "ag_2"}
+           (f [:max [:field "amount" nil]] 2 (constantly "amount"))))
+    (testing "count over a field counts that variable, not the subject"
+      (is (= {:select "(COUNT(?amount) AS ?ag_0)" :var "ag_0"}
+             (f [:count [:field "amount" nil]] 0 (constantly "amount")))))))
+
 (deftest unsupported-filter-clause-test
   (let [f #(@#'mbql/compile-filter-expr % {"naam" "naam" "leeftijd" "leeftijd"} {})]
     (testing "a custom-expression function on the lhs throws instead of dropping the filter"
@@ -246,7 +280,13 @@
         (is (= (str "(?geboren < \"2026-09-01\"" date ")")
                (f [:< [:field 1 nil] [:relative-datetime 0 :month]])))
         (is (= (str "(" (dt-cmp "gewijzigd" ">=" "2026-09-26T10:00:00Z" "2026-09-26T10:00:00") ")")
-               (f [:>= [:field 2 nil] [:relative-datetime 0 :hour]]))))
+               (f [:>= [:field 2 nil] [:relative-datetime 0 :hour]])))
+        (testing "year and quarter truncate to the start of the period (\"this year\", \"last 30 years\")"
+          ;; regression: :year used to be *extracted* (-> 1996) instead of truncated
+          (is (= (str "(?geboren >= \"1996-01-01\"" date ")")
+                 (f [:>= [:field 1 nil] [:relative-datetime -30 :year]])))
+          (is (= (str "(?geboren < \"2026-10-01\"" date ")")
+                 (f [:< [:field 1 nil] [:relative-datetime 1 :quarter]])))))
       (testing ":current resolves to now"
         (is (= (str "(" (dt-cmp "gewijzigd" "<=" "2026-09-26T10:15:30Z" "2026-09-26T10:15:30") ")")
                (f [:<= [:field 2 nil] [:relative-datetime :current]]))))
@@ -315,8 +355,27 @@
    10 {:name "label" :database-type "string"}
    11 {:name "geboorte-datum" :database-type "string"}})
 
+(defn- parsed
+  "Assert that a compiled stage's SPARQL parses, then return the stage."
+  [{:keys [sparql] :as compiled}]
+  (is (nil? (tu/sparql-syntax-error sparql)) sparql)
+  compiled)
+
 (defn- compile-stage* [stage]
-  (@#'mbql/compile-stage stage))
+  (parsed (@#'mbql/compile-stage stage)))
+
+(def ^:private reused-agg-alias-error
+  "KNOWN BUG: an aggregation on a derived stage re-binds `?ag_N`, which the
+  sub-SELECT already projects. SPARQL 1.1 §18.2.4.1 forbids an `AS` target that
+  is already in scope; RDF4J (and Jena) reject the query, Oxigraph tolerates it.
+  Tests asserting this message must flip to `(is (nil? …))` once it is fixed."
+  "projection alias 'ag_0' was previously used")
+
+(defn- compile-base-stage* [stage expected-cols]
+  (parsed (@#'mbql/compile-base-stage stage expected-cols)))
+
+(defn- compile-derived-stage* [stage expected-cols]
+  (parsed (@#'mbql/compile-derived-stage stage expected-cols)))
 
 (defmacro ^:private with-fixture
   "Run `body` with the four metadata accessors stubbed for the test fixture."
@@ -417,7 +476,7 @@
                 expected [{:id 1}
                           {:id 20}
                           {:id 40 :fk-field-id 20}]
-                {:keys [sparql vars]} (@#'mbql/compile-base-stage stage expected)]
+                {:keys [sparql vars]} (compile-base-stage* stage expected)]
             (testing "the remap column resolves to the qualified join target var"
               (is (= ["subject" "geslacht" "Geslacht__via__geslacht__waarde"] vars))
               (is (str/includes? sparql "?Geslacht__via__geslacht__waarde")))
@@ -541,8 +600,9 @@
       ;; This is the regression case: a 'Minimum of Count' on a count-by-breakout card.
       (let [card {:source-table 100 :aggregation [[:count]] :breakout [[:field 2 nil]]}
             {:keys [sparql vars]}
-            (compile-stage* {:source-query card
-                             :aggregation [[:min [:field "ag_0" nil]]]})]
+            (@#'mbql/compile-stage {:source-query card
+                                    :aggregation [[:min [:field "ag_0" nil]]]})]
+        (is (= reused-agg-alias-error (tu/sparql-syntax-error sparql)))
         (is (= ["ag_0"] vars))
         (is (str/includes? sparql "(MIN(?ag_0) AS ?ag_0)"))
         (testing "the outer stage adds no GROUP BY (only the inner card's remains)"
@@ -560,9 +620,10 @@
     (testing "an outer filter on an aggregated card resolves a column whose name is not a valid SPARQL var"
       (let [card {:source-table 100 :aggregation [[:count]] :breakout [[:field 11 nil]]}
             {:keys [sparql]}
-            (compile-stage* {:source-query card
-                             :aggregation  [[:count]]
-                             :filter [:= [:field "geboorte-datum" nil] "x"]})]
+            (@#'mbql/compile-stage {:source-query card
+                                    :aggregation  [[:count]]
+                                    :filter [:= [:field "geboorte-datum" nil] "x"]})]
+        (is (= reused-agg-alias-error (tu/sparql-syntax-error sparql)))
         (is (str/includes? sparql "FILTER (?geboorte_datum = \"x\")"))))
     (testing "an outer filter on a saved card is applied around the sub-SELECT"
       (let [card {:source-table 100 :aggregation [[:count]] :breakout [[:field 2 nil]]}
@@ -618,7 +679,7 @@
             ;; driver's invented SPARQL var "Place__label".
             expected [{:name "Birthplace"} {:name "count"}]
             {:keys [sparql vars]}
-            (@#'mbql/compile-derived-stage
+            (compile-derived-stage*
              {:source-query card
               :filter [:= [:field "Birthplace" nil] "Leuven"]}
              expected)]
@@ -632,7 +693,7 @@
                   :joins       [{:alias "Place" :fk-field-id 4}]}
             expected [{:name "Birthplace"} {:name "count"}]
             {:keys [sparql]}
-            (@#'mbql/compile-derived-stage
+            (compile-derived-stage*
              {:source-query card
               :order-by [[:asc [:field "Birthplace" nil]]]}
              expected)]
@@ -672,7 +733,7 @@
             expected [{:id 1} {:id 2}
                       {:id 10 :lib/join-alias "Plaats"}
                       {:id 3  :lib/join-alias "Plaats"}]
-            {:keys [sparql vars]} (@#'mbql/compile-base-stage stage expected)]
+            {:keys [sparql vars]} (compile-base-stage* stage expected)]
         (is (= 4 (count vars)) "one SELECT variable per Lib expected column")
         (is (= ["subject" "naam" "Plaats__label" "Plaats__leeftijd"] vars))
         (is (str/includes? sparql "SELECT ?subject ?naam ?Plaats__label ?Plaats__leeftijd"))
@@ -686,7 +747,7 @@
     (testing "expected-cols drives column order, independent of :fields order"
       (let [stage {:source-table 100
                    :fields [[:field 1 nil] [:field 2 nil] [:field 3 nil]]}
-            {:keys [vars]} (@#'mbql/compile-base-stage stage [{:id 1} {:id 3} {:id 2}])]
+            {:keys [vars]} (compile-base-stage* stage [{:id 1} {:id 3} {:id 2}])]
         (is (= ["subject" "leeftijd" "naam"] vars))))))
 
 (deftest compile-derived-stage-lib-driven-projection-test
@@ -694,7 +755,7 @@
     (testing "expected-cols drives the derived-stage SELECT and preserves the column count"
       (let [card {:source-table 100 :aggregation [[:count]] :breakout [[:field 2 nil]]}
             ;; the inner card projects [naam ag_0]; Lib expects a third column
-            {:keys [vars]} (@#'mbql/compile-derived-stage
+            {:keys [vars]} (compile-derived-stage*
                             {:source-query card}
                             [{:id 2} {:id 3} {:id 99 :lib/join-alias "Missing"}])]
         (is (= 3 (count vars)))

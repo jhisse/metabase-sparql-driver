@@ -3,21 +3,27 @@
 # Loaded into an ephemeral Oxigraph endpoint by bin/smoke-test.sh via the SPARQL
 # Graph Store Protocol. Kept deliberately tiny: two RDF classes so describe-database
 # discovers two "tables", and a Person with several properties so describe-table
-# discovers several "columns".
+# discovers several "columns". `updated` is timezoned for Alice and local for Bob,
+# so temporal filters must compare each value against the matching bound form.
 # The ex: namespace is the dataset's graph IRI; bin/smoke-test.sh (SPARQL_TEST_GRAPH,
 # default https://example.org/) seeds these triples into that named graph and the
 # test queries it. Keep this prefix equal to that default.
 @prefix ex:   <https://example.org/> .
 @prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix xsd:  <http://www.w3.org/2001/XMLSchema#> .
 
 ex:alice a ex:Person ;
     rdfs:label "Alice" ;
     ex:age 30 ;
+    ex:birthDate "1994-03-10"^^xsd:date ;
+    ex:updated "2024-06-01T10:00:00Z"^^xsd:dateTime ;
     ex:knows ex:bob .
 
 ex:bob a ex:Person ;
     rdfs:label "Bob" ;
-    ex:age 25 .
+    ex:age 25 ;
+    ex:birthDate "2001-07-22"^^xsd:date ;
+    ex:updated "2023-12-31T23:00:00"^^xsd:dateTime .
 
 ex:acme a ex:Company ;
     rdfs:label "Acme Inc" .

@@ -35,6 +35,8 @@
            ;; tools.deps doesn't try to reconcile a git dep with the mvn artifact.
                 metosin/malli {:git/url "https://github.com/metabase/malli"
                                :git/sha "b4a2d78647a049870b316753d7aae7fb4ade3ae5"}
+                ;; Test-only SPARQL parser: generated queries are parsed as a syntax oracle.
+                org.eclipse.rdf4j/rdf4j-queryparser-sparql {:mvn/version "5.0.3"}
                 io.github.cognitect-labs/test-runner {:git/tag "v0.5.1" :git/sha "dfb30dd"}}
    :main-opts ["-m" "cognitect.test-runner"]
    :exec-fn cognitect.test-runner.api/test
@@ -47,6 +49,7 @@
                              :sha "4a37feaf817a2a6b5ef688c927f6fd4375964433"}
                 metosin/malli {:git/url "https://github.com/metabase/malli"
                                :git/sha "b4a2d78647a049870b316753d7aae7fb4ade3ae5"}
+                org.eclipse.rdf4j/rdf4j-queryparser-sparql {:mvn/version "5.0.3"}
                 cloverage/cloverage {:mvn/version "1.2.4"}}
    :main-opts ["-m" "cloverage.coverage" 
                "--src-ns-path" "src"
@@ -54,4 +57,6 @@
                "--summary"
                "--no-html"
                "--no-text"
-               "--fail-threshold" "0"]}}}
+               ;; Fails the build below this % of covered forms (cloverage
+               ;; gates on min(forms, lines)). Ratchet it up, never down.
+               "--fail-threshold" "65"]}}}

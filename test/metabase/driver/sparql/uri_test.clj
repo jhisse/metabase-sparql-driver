@@ -150,6 +150,10 @@
     (is (= "https://example.org/naam" (uri/absolute-uri "naam" "https://example.org/")))
     (is (uri/foreign-uri? "http://other.example/x" "https://example.org/"))
     (is (not (uri/foreign-uri? "https://example.org/x" "https://example.org/")))
+    (testing "stripping never yields a blank name (uri == default-graph)"
+      (is (= "https://example.org/" (uri/shorten-uri "https://example.org/" "https://example.org/"))))
+    (testing "a blank name expands to itself"
+      (is (= "" (uri/absolute-uri "" "https://example.org/"))))
     (testing "blank default-graph is a no-op"
       (is (= "http://x.example/y" (uri/shorten-uri "http://x.example/y" nil)))
       (is (= "nm" (uri/absolute-uri "nm" nil)))

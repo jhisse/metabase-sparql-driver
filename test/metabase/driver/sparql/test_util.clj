@@ -1,8 +1,9 @@
 (ns metabase.driver.sparql.test-util
-  "Shared support for the :integration suites (smoke_test.clj, e2e_test.clj):
-  the live-endpoint configuration and skip guard, plus a minimal Lib metadata
-  provider mirroring the smoke fixture (test/resources/fixtures/smoke.ttl) and
-  runners that drive the real driver multimethods under a QP store.
+  "Shared test support: the live-endpoint configuration and skip guard for the
+  :integration suites (smoke_test.clj, e2e_test.clj), a minimal Lib metadata
+  provider mirroring the smoke fixture (test/resources/fixtures/smoke.ttl),
+  runners that drive the real driver multimethods under a QP store, and a
+  SPARQL syntax oracle for generated queries.
 
   The provider is hand-rolled because Metabase's mock providers live under
   metabase/test/, which is not on this project's test classpath."
@@ -11,7 +12,22 @@
             [metabase.driver.sparql]
             [metabase.lib.core :as lib]
             [metabase.lib.metadata :as lib.metadata]
-            [metabase.lib.metadata.protocols :as lib.metadata.protocols]))
+            [metabase.lib.metadata.protocols :as lib.metadata.protocols]
+            [metabase.query-processor.compile :as qp.compile])
+  (:import [org.eclipse.rdf4j.query MalformedQueryException]
+           [org.eclipse.rdf4j.query.parser.sparql SPARQLParser]))
+
+(defn sparql-syntax-error
+  "Parse `query` with RDF4J's SPARQL 1.1 parser. Returns nil when it parses,
+  otherwise the parser's error message. Use as `(is (nil? (sparql-syntax-error q)) q)`:
+  asserting on fragments with `str/includes?` passes even when the query around
+  them is malformed."
+  [query]
+  (try
+    (.parseQuery (SPARQLParser.) query nil)
+    nil
+    (catch MalformedQueryException e
+      (ex-message e))))
 
 (def endpoint
   "Live SPARQL endpoint under test (set by bin/smoke-test.sh)."
@@ -67,11 +83,14 @@
   ;; age is declared Integer so Lib accepts numeric filters on it; the compiler
   ;; itself only reads :name/:table-id. knows carries the "uri" marker the
   ;; auto-sync discovery now stamps on IRI-valued properties (?isIri), so
-  ;; equality filters on it compile to <iri> terms.
+  ;; equality filters on it compile to <iri> terms. birthDate / updated are
+  ;; declared temporal for the same reason as age: auto-sync types them as text.
   [(col 101 0 "subject" :type/Text "uri")
    (col 102 1 rdfs-label :type/Text "string")
    (col 103 2 "age" :type/Integer "string")
-   (col 104 3 "knows" :type/Text "uri")])
+   (col 104 3 "knows" :type/Text "uri")
+   (col 105 4 "birthDate" :type/Date "string")
+   (col 106 5 "updated" :type/DateTime "string")])
 
 (def provider
   "Minimal MetadataProvider over the fixture's schema. Carries the endpoint and
@@ -124,10 +143,18 @@
   [sparql]
   (execute! {:query sparql}))
 
-(defn run-query
-  "Compile a pMBQL query with driver/mbql->native and execute it end to end.
-  Returns {:cols [...] :rows [...] :native \"SELECT ...\"}."
+(defn compile-query
+  "Compile a pMBQL query the way the QP does — preprocessing middleware
+  (desugaring, date-literal and value wrapping, …) then driver/mbql->native —
+  without an app DB. Calling driver/mbql->native directly would skip the
+  preprocessing, so it would compile queries the driver never receives.
+  Returns the native map {:query \"SELECT ...\" …}."
   [pmbql-query]
-  (let [native (driver-api/with-metadata-provider provider
-                 (driver/mbql->native :sparql pmbql-query))]
-    (assoc (execute! native) :native (:query native))))
+  (driver-api/with-metadata-provider provider
+    (qp.compile/compile pmbql-query)))
+
+(defn run-query
+  "Compile a pMBQL query with [[compile-query]] and execute it end to end.
+  Returns {:cols [...] :rows [...]}."
+  [pmbql-query]
+  (execute! (compile-query pmbql-query)))
