@@ -664,6 +664,20 @@
                            (str "OPTIONAL { ?geboorteplaats_node <" base "label> ?Plaats__label . "
                                 "FILTER(?geboorteplaats_node = ?geboorteplaats) }")))))))
 
+(deftest compile-derived-stage-over-temporal-bucket-test
+  (with-fixture
+    (testing "an outer stage finds a bucketed column by its raw name"
+      (let [card {:source-table 100
+                  :aggregation  [[:count]]
+                  :breakout     [[:field 11 {:temporal-unit :month}]]}
+            {:keys [sparql vars]}
+            (compile-stage* {:source-query card
+                             :aggregation  [[:sum [:field "count" nil]]]
+                             :breakout     [[:field "geboorte-datum" nil]]})]
+        (is (= "geboorte_datum_month" (first vars)))
+        (is (= 2 (count (re-seq #"GROUP BY \?geboorte_datum_month" sparql)))
+            "the outer stage groups by the bucket too")))))
+
 (deftest compile-derived-stage-outer-filter-test
   (with-fixture
     (testing "an outer filter on an aggregated card resolves a column whose name is not a valid SPARQL var"

@@ -580,9 +580,10 @@
    [[temporal-bucket-exprs]]). Throws for a unit SPARQL cannot compute (week,
    day-of-week, …) rather than grouping by the raw value.
 
-   Returns `{:vars […] :binds [\"  BIND(…)\" …] :token->var f}`, where `f`
-   resolves a breakout token (e.g. in `:order-by`) to its bucket var and any
-   other token through `token->var`."
+   Returns `{:vars […] :binds [\"  BIND(…)\" …] :token->var f :aliases {raw bucket}}`,
+   where `f` resolves a breakout token (e.g. in `:order-by`) to its bucket var and
+   any other token through `token->var`, and `:aliases` lets a later stage find a
+   bucket by the raw column name Lib still uses."
   [breakout token->var]
   (let [bucket-key (juxt field-token->id (comp :temporal-unit field-token->opts) field-token->join-alias)
         buckets    (for [tok  breakout
@@ -600,7 +601,8 @@
         by-key     (into {} (map (juxt (comp bucket-key :tok) :var)) buckets)]
     {:vars       (vec (distinct (map :var buckets)))
      :binds      (vec (distinct (keep :bind buckets)))
-     :token->var (fn [tok] (or (get by-key (bucket-key tok)) (token->var tok)))}))
+     :token->var (fn [tok] (or (get by-key (bucket-key tok)) (token->var tok)))
+     :aliases    (into {} (for [{:keys [tok var bind]} buckets :when bind] [(token->var tok) var]))}))
 
 (defn- compile-agg-order-by
   "Compile `:order-by` for an aggregation query. Order terms may reference a
@@ -731,7 +733,8 @@
    driver's column count and order always match what the `annotate` middleware
    expects — see [[reconcile-base-projection]].
 
-   Returns `{:sparql <query string> :vars <SELECT var names, in order>}`."
+   Returns `{:sparql <query string> :vars <SELECT var names, in order>
+              :aliases <raw column var → temporal bucket var>}`."
   [inner expected-cols]
   (let [limit         (:limit inner)
         table-id      (:source-table inner)
@@ -994,8 +997,9 @@
                          (when order-clause (str order-clause "\n"))
                          (when limit-part (str limit-part)))]
     (log/debugf "[sparql.mbql] Compiled base stage: %s" query)
-    {:sparql query
-     :vars   result-vars}))
+    {:sparql  query
+     :vars    result-vars
+     :aliases (:aliases bucketed)}))
 
 (defn- inner-var-for-ref
   "Determine the SPARQL variable a base/inner stage projects for `fk-ref` — a
@@ -1028,7 +1032,7 @@
    driver's column count and order always match what the `annotate` middleware
    expects.
 
-   Returns `{:sparql … :vars …}`."
+   Returns `{:sparql … :vars … :aliases …}` (see [[compile-base-stage]])."
   [stage expected-cols]
   (let [naming        (database-naming-context)
         inner         (compile-stage (:source-query stage))
@@ -1056,7 +1060,9 @@
         ;; but a later stage references them by Lib's name (`count`, `sum`, …), so we
         ;; add those aliases (drilling on an aggregation value relies on this).
         field-id->var    (merge (into {} (for [v passthrough-vars] [v (sanitize-var-name v)]))
-                                (aggregation-name->var (:aggregation (:source-query stage))))
+                                (aggregation-name->var (:aggregation (:source-query stage)))
+                                ;; a temporal bucket keeps its raw column name in Lib
+                                (:aliases inner))
         pair->target-var (into {} (for [{:keys [tid alias var]} remap-entries]
                                     [[tid alias] var]))
         token->var       (fn [tok] (var-for-token tok field-id->var pair->target-var))
@@ -1166,8 +1172,9 @@
                            (when order-clause (str order-clause "\n"))
                            (when (number? limit) (str "LIMIT " limit)))]
     (log/debugf "[sparql.mbql] Compiled derived stage: %s" query)
-    {:sparql query
-     :vars   result-vars}))
+    {:sparql  query
+     :vars    result-vars
+     :aliases (:aliases bucketed)}))
 
 (defn- compile-stage
   "Compile one MBQL stage, recursing through `:source-query` wrappers.
