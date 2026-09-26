@@ -91,7 +91,7 @@
       (is (= "uri" (:database-type (by-name "kent")))))
     (testing "?isIri = 0 stays a plain string property"
       (is (= "string" (:database-type (by-name "naam")))))
-    (testing "a row without ?isIri (older endpoint shape) defaults to string"
+    (testing "a row without ?isIri (the fallback query shape) defaults to string"
       (let [fields (build graph false [{:property {:type "uri" :value (str graph "los")}}])]
         (is (= "string" (:database-type (first (filter #(= "los" (:name %)) fields)))))))))
 

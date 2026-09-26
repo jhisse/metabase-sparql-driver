@@ -56,7 +56,7 @@
                               :actions false ;; Will not support writeback actions by now
                               :table-privileges false
                               :uploads false
-                              :schemas false ;; SPARQL does not have schemas but we can use it to group RDF graphs
+                              :schemas false ;; SPARQL has no schemas; could be used in the future to group RDF graphs
                               :multi-level-schema false
                               :actions/custom false ;; Will not support writeback actions by now
                               :test/jvm-timezone-setting false
@@ -92,8 +92,9 @@
     (log/debugf "[database-supports?] - Checking feature: %s, Supported: %s" feature supported?)
     supported?))
 
-;; Implement database-supports? for features that need to be checked dynamically using the features module.
-;; Add new features to this vector as needed in the future.
+;; Delegate these features to the features module: :now is probed against the endpoint,
+;; :basic-aggregations is always true, and the rest have no implementation there yet, so
+;; they fall through to its :default (false).
 (doseq [feature [:basic-aggregations
                  :expression-aggregations
                  :nested-queries

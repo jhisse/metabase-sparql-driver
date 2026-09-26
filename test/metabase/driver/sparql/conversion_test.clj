@@ -95,7 +95,7 @@
              {:a {:type "literal"}}]))))
 
   (testing "cells of a promoted Float column all convert to numbers (type/value coherence)"
-    ;; Pins the current contract until D1 unifies cell classification: the
+    ;; Pins the current contract until cell classification is unified: the
     ;; column may say :type/Float while integer cells convert to Long — both
     ;; must at least be java.lang.Number so numeric consumers don't break.
     (let [rows [{:a {:type "literal" :datatype (str xsd "integer") :value "1"}}

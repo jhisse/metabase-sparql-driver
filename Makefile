@@ -87,7 +87,7 @@ test:
 	@echo "Tests completed."
 
 # Run the smoke/integration suite against an ephemeral Oxigraph endpoint.
-# Requires Docker (Compose v2) and an initialized metabase/ submodule.
+# Requires Docker (Compose v2), curl, python3, Java 21+ and an initialized metabase/ submodule.
 smoke:
 	@echo "Running smoke/integration tests..."
 	@bash bin/smoke-test.sh

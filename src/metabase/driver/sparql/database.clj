@@ -246,7 +246,8 @@
 
 (defn- shacl-shapes
   "Fetch and cache SHACL shapes for `database`. Returns `nil` if no URL is
-   configured (we treat this as a misconfiguration and let the caller error).
+   configured or the fetch fails; callers log a warning and degrade to an
+   empty result.
    Language preference (for `sh:name`/`sh:description`) and the HTTP
    timeout/size-cap settings are read from the connection details and
    forwarded to the SHACL extractor."

@@ -1,6 +1,7 @@
 (ns metabase.driver.sparql.mbql
   "Simple MBQL → SPARQL transpilation. Supports projection, filters, ordering,
-   implicit joins, and aggregations."
+   implicit and explicit left joins, aggregations, and multi-stage (sub-SELECT)
+   queries."
   (:require
    [clojure.string :as str]
    [clojure.set :as set]
@@ -73,8 +74,8 @@
 
 (defn- lang-string-field?
   "True when the field's `:database-type` indicates an `rdf:langString` property
-   (set during SHACL sync). Other sync strategies always emit `\"string\"`, so
-   this is effectively a SHACL-only signal."
+   (set during SHACL sync). Other sync strategies never emit `\"langString\"`,
+   so this is effectively a SHACL-only signal."
   [field-id]
   (= "langString" (:database-type (field-id->metadata field-id))))
 
@@ -307,7 +308,7 @@
     triple))
 
 (defn- compile-basic-filter
-  "Compile a filter clause to one or more FILTER lines."
+  "Compile a filter clause to a vector holding a single FILTER line, or nil."
   [filter-clause field-id->var pair->target-var]
   (when-let [expr (compile-filter-expr filter-clause field-id->var pair->target-var)]
     [(str "  FILTER " expr)]))
@@ -514,11 +515,12 @@
 (defn- compile-base-stage
   "Compile a base MBQL stage (one with `:source-table`) to a SPARQL query.
 
-   Left-joins (added by `add-implicit-joins` for FK-remap dimensions) are
-   emitted as a pair of independent OPTIONALs:
+   Left joins (implicit ones added by `add-implicit-joins`, e.g. for FK-remap
+   dimensions, as well as explicit notebook joins) are emitted as a pair of
+   independent OPTIONALs:
 
      OPTIONAL { ?<src> <fk-prop> ?<alias>_subject . }
-     OPTIONAL { ?<alias>_subject <target-prop> ?<alias>__<target-var> . }
+     OPTIONAL { ?<alias>_subject <target-prop> ?<alias>__<field-name> . }
 
    `?<src>` is `?subject` for joins reached directly from the source table.
    For chained implicit joins (e.g. Item → Provider → Owner), the FK field
@@ -799,9 +801,10 @@
       :else         nil)))
 
 (defn- compile-derived-stage
-  "Compile a derived MBQL stage (one with `:source-query`). The QP adds these
-   wrapper stages when a saved card / model is used as a source, or when an FK
-   display-value remap is layered on top of an aggregation.
+  "Compile a derived MBQL stage (one with `:source-query`). These arise e.g.
+   when a saved card / model is used as a source, when an FK display-value
+   remap is layered on top of an aggregation, or from user multi-stage queries
+   (such as drilling on an aggregation value).
 
    The inner stage is compiled as a SPARQL sub-`SELECT`; the derived stage's
    remap joins are emitted as OPTIONALs around it. The outer stage's own
@@ -978,10 +981,8 @@
    reconcile the outermost SELECT against them, so the driver's column count and order
    can never drift from what the `annotate` middleware expects.
 
-   Multi-stage queries (a saved card / model used as a source, or an FK
-   display-value remap layered on an aggregation) are compiled stage by stage:
-   the inner stage becomes a SPARQL sub-`SELECT` and the outer stage's remap
-   joins wrap it. See [[compile-base-stage]] for the per-stage details."
+   Multi-stage queries are compiled stage by stage (inner stage → sub-`SELECT`).
+   See [[compile-base-stage]] and [[compile-derived-stage]]."
   [_driver outer-query]
   (let [expected-cols    (expected-result-columns outer-query)
         legacy-query     (driver-api/->legacy-MBQL outer-query)

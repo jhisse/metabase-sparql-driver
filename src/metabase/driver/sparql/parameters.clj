@@ -5,7 +5,7 @@
    values, rendering each value as a syntactically correct SPARQL term:
 
      - strings → `\"escaped\"`
-     - IRIs (URLs with a scheme) → `<value>`
+     - IRIs (`http(s)://` or `urn:` values) → `<value>`
      - numbers / booleans → bare literal
      - sequential collections → comma-separated SPARQL terms (only valid inside
        `IN(...)` / `VALUES`; template authors must wrap accordingly)
