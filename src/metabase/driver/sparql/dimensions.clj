@@ -4,16 +4,16 @@
 
    Why this exists:
      `describe-table` returns per-field metadata, but Metabase's FK display-value
-     (a.k.a. external remapping) lives in the `metabase_field.dimension` app-DB
+     (a.k.a. external remapping) lives in the `dimension` app-DB
      table, not in field metadata. There is no driver-API surface for writing
      `Dimension` rows during sync. We hook the post-sync event
      `:event/sync-metadata-end`, walk the SHACL shapes for the SPARQL database,
      and upsert one `Dimension` row per (FK field, display-value field) pair.
 
-   Coupling: this ns reaches into two Metabase-internal namespaces
-   (`metabase.events.core`, the `:model/Dimension` / `:model/Field` toucan
-   models). If `notify-database-updated` ever grows a `:sparql`-aware variant
-   in the driver-API, this should migrate there."
+   Coupling: this ns reaches into Metabase internals (`metabase.events.core`,
+   the `:model/Dimension` / `:model/Field` / `:model/Database` toucan models,
+   and the raw `metabase_field` / `metabase_table` tables). If the driver API
+   ever gains a post-sync hook, this should migrate there."
   (:require
    [metabase.driver.sparql.shacl :as shacl]
    [metabase.driver.sparql.uri :as uri]

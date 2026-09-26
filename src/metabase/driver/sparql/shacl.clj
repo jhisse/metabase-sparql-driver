@@ -79,7 +79,7 @@
    `:max-bytes`; each falls back to a built-in default. `http` URLs are
    accepted alongside `https` so a local endpoint can be used while testing.
 
-   Throws an `ex-info` on non-2xx responses or when the body exceeds the
+   Throws an `ex-info` on any non-200 response or when the body exceeds the
    configured size cap."
   ([url] (fetch-shacl url nil))
   ([url {:keys [connect-timeout-ms socket-timeout-ms max-bytes]}]
@@ -142,7 +142,7 @@
   (first (get-in spo [subject pred-iri])))
 
 (defn- objects
-  "All objects for `subject`/`pred-iri`, or `()` if none."
+  "All objects for `subject`/`pred-iri`, or `nil` if none."
   [spo subject pred-iri]
   (get-in spo [subject pred-iri]))
 
@@ -163,7 +163,8 @@
 
 (defn- coerce-semantic-type
   "Accept either a literal like \"type/URL\" or `:type/URL` and return the
-   keyword, or `nil` for blank/unrecognized input."
+   keyword (any other non-blank literal/IRI value is keywordized as-is), or
+   `nil` for blank input."
   [t]
   (when t
     (let [s (when (or (literal? t) (iri? t)) (:value t))]
@@ -266,8 +267,9 @@
 (defn- resolve-inheritance
   "For each shape that references parents via `sh:node`, recursively merge in
    the parents' properties. Child wins for any property that shares a path
-   with a parent. Parent shapes that aren't themselves NodeShapes (e.g. when
-   `sh:node` points at the target class IRI) are silently ignored. Cycles are
+   with a parent. Parent shapes that aren't themselves visible class-targeted
+   shapes (no `sh:targetClass`, flagged `metabase:hide`, or when `sh:node`
+   points at the target class IRI) are silently ignored. Cycles are
    broken with a visited set."
   [shapes]
   (let [by-iri (into {} (for [s shapes :when (:node-iri s)] [(:node-iri s) s]))]
@@ -287,7 +289,8 @@
 
 (defn- merge-shapes-by-class
   "When multiple NodeShapes target the same class, merge their property lists
-   (later wins per property URI)."
+   (on a property-URI conflict an arbitrary one wins — input order comes from
+   a hash set)."
   [shapes]
   (->> shapes
        (group-by :class-uri)
@@ -310,10 +313,12 @@
         :description \"…\" or nil
         :properties ({:property-uri \"…\"
                       :base-type :type/Text
-                      :semantic-type :type/FK or nil
+                      :semantic-type keyword (e.g. :type/FK, :type/URL) or nil
                       :description \"…\" or nil
                       :fk-target-class \"…\" or nil
                       :display-value-property \"…\" or nil
+                      :order long or nil
+                      :iri-kind? true|false
                       :database-required true|false
                       :lang-string? true|false
                       :hidden? false}
@@ -366,8 +371,8 @@
   "Return the cached SHACL metadata for `url` resolved under language `lang`.
    Fetches and parses if needed. `opts` is forwarded to [[fetch-shacl]] (HTTP
    timeouts and size cap); it does not affect the parsed result, so the cache
-   key stays `[url lang]`. The cache key includes `lang` so switching language
-   re-derives labels without forcing a fresh HTTP fetch on every call."
+   key stays `[url lang]`. Because labels are resolved per language, a new
+   `lang` is a cache miss and refetches the document."
   ([url lang] (metadata url lang nil))
   ([url lang opts]
    (let [k [url lang]]

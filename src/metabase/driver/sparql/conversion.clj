@@ -68,7 +68,7 @@
      Metabase base type (:type/URL, :type/Text, :type/Integer, etc.)"
   [sparql-type datatype]
   (cond
-    ;; URIs are represented as text
+    ;; URIs are typed as :type/URL (a Text subtype)
     (= sparql-type "uri") :type/URL
 
     ;; Blank nodes
@@ -87,7 +87,7 @@
       (= datatype (str xsd "time"))               :type/Time
       :else :type/Text)
 
-    ;; Literals with language tags are treated as text
+    ;; Untyped literals (plain or language-tagged) are treated as text
     :else :type/Text))
 
 (defn convert-value
@@ -143,8 +143,8 @@
    are all null or all integers no longer misses a later type flip. The rows
    are already fully materialized in memory; a single pass collects the distinct
    (type, datatype) pairs per column (typically one or two), which are then
-   classified — so the cost is one traversal of the present cells, not the
-   ~20-branch datatype dispatch per cell.
+   classified — so the cost is one traversal of the present cells, not a
+   datatype classification per cell.
 
    Trade-off of the full scan: the column type is now sensitive to every row,
    so a saved question's result_metadata can flip between runs when the

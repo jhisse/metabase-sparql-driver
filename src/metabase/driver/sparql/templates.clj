@@ -73,7 +73,7 @@
   "Returns a SPARQL query to discover properties of an RDF class.
   
   This query finds the most frequently used properties by instances of a specific RDF class,
-  ordered by frequency of occurrence. It uses SAMPLE to analyze a subset of instances,
+  ordered by frequency of occurrence. It uses a LIMITed sub-SELECT to analyze a subset of instances,
   which improves performance on large datasets.
   
   Parameters:
@@ -86,7 +86,8 @@
 
   Returns:
     A string containing a SPARQL SELECT query that returns the most common properties
-    used by instances of the class, along with their occurrence count.
+    used by instances of the class, along with their occurrence count and (when
+    detect-iri?) an ?isIri flag.
 
   Usage:
     Used by the driver/describe-table method to discover available 'fields' for a 'table'."
@@ -101,7 +102,7 @@
    ;; (MIN over the indicator): those properties sync as :database-type "uri"
    ;; so equality filters compare against <iri> terms. Mixed or literal-valued
    ;; properties stay 0. IF/aggregates are SPARQL 1.1, which this query
-   ;; already requires (COUNT/GROUP BY) — verified on Oxigraph and Fuseki — but
+   ;; already requires (COUNT/GROUP BY) — verified on Oxigraph (make smoke) — but
    ;; `detect-iri?` false drops the projection for endpoints that reject it.
    (str "SELECT ?property (COUNT(?instance) AS ?count) "
         (when detect-iri? "(MIN(IF(isIRI(?value), 1, 0)) AS ?isIri) ")

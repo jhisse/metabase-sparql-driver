@@ -16,9 +16,10 @@
      options - Map of additional options:
        :default-graph - URI of the default graph (optional)
        :insecure? - Flag to ignore SSL certificate validation (optional, derived from :use-insecure)
+       :auth - clj-http auth fragment from `auth/http-options` (optional)
    
    Returns:
-     true if the connection is successful, false otherwise."
+     true if the connection is successful; throws an Exception (\"Connection failed: ...\") otherwise."
   [endpoint options]
   (log/info "Trying to connect to SPARQL endpoint:" endpoint)
   (let [[success result] (execute/execute-sparql-query endpoint (templates/connection-test-query) options)]

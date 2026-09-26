@@ -20,7 +20,7 @@ This driver represents RDF classes as tables and properties as columns, allowing
 
 | Driver Version       | Metabase Version  | Notes                                            |
 |:---------------------|:------------------|:-------------------------------------------------|
-| **v0.0.11+**         | v0.61.x           | Built and tested against Metabase v0.61.1.       |
+| **v0.0.11+**         | v0.61.x           | Built and tested against Metabase v0.61.2.       |
 | **v0.0.10**          | v0.56.3 — v0.56.x | Requires `describe-database*` (added in 0.56.3). |
 | **v0.0.1 – v0.0.9**  | < v0.56.3         | Uses legacy `describe-database`.                 |
 
@@ -87,22 +87,21 @@ ASK { dbr:Albert_Einstein a dbo:Scientist }
 
 ## :arrows_counterclockwise: Automatic Type Conversion
 
-The driver automatically converts XSD / RDF datatypes to Metabase types. At **query time** (result rows) the mapping is sample-based and applies to every sync strategy; at **sync time** (SHACL strategy) the same mapping is applied directly from `sh:datatype`.
+Query-time mapping (every strategy). SHACL sync reads `sh:datatype` instead — see [SHACL → Metabase mapping](#shacl--metabase-mapping).
 
 | XSD / RDF Datatype                                                 | Metabase Base Type | Notes                                                                |
 |:-------------------------------------------------------------------|:-------------------|:---------------------------------------------------------------------|
 | `xsd:integer`, `xsd:int`, `xsd:long`, `xsd:short`, `xsd:byte`      | Integer            | `42`, `-100`                                                          |
-| `xsd:nonNegativeInteger`, `xsd:positiveInteger`, `xsd:unsigned*`   | Integer            | `0`, `1`, `255`                                                       |
+| `xsd:nonNegativeInteger`, `xsd:positiveInteger`, `xsd:nonPositiveInteger`, `xsd:negativeInteger`, `xsd:unsigned*` | Integer | `0`, `1`, `255`                               |
 | `xsd:decimal`, `xsd:float`, `xsd:double`                           | Float              | `3.14`, `2.718`                                                       |
 | `xsd:boolean`                                                      | Boolean            | `true`, `false`                                                       |
-| `xsd:dateTime`, `xsd:dateTimeStamp`, `xsd:gYear`, `xsd:gYearMonth` | DateTime / DateTimeWithTZ | `2024-01-15T10:30:00Z`                                          |
+| `xsd:dateTime`, `xsd:gYear`, `xsd:gYearMonth`                      | DateTime           | `2024-01-15T10:30:00Z`                                                |
 | `xsd:date`, `xsd:gMonthDay`, `xsd:gDay`, `xsd:gMonth`              | Date               | `2024-01-15`                                                          |
 | `xsd:time`                                                         | Time               | `10:30:00`                                                            |
-| `xsd:anyURI`                                                       | Text (semantic `type/URL`) | Stored as text but rendered as a URL                          |
-| `rdf:langString` *(SHACL only)*                                    | Text (`database-type: langString`) | Triggers per-column `FILTER(LANG(?x) = "<lang>")` when **Default Language** is set |
-| URIs (subject column)                                              | URL                | `http://dbpedia.org/resource/Berlin`                                  |
+| URIs (e.g. the subject column)                                     | URL                | `http://dbpedia.org/resource/Berlin`                                  |
+| Any other datatype (incl. `xsd:string`, `xsd:anyURI`, `xsd:dateTimeStamp`) | Text       | Value kept as its lexical string                                      |
 | Untagged literals                                                  | Text               | `"Hello"`                                                             |
-| Language-tagged literals not declared as `rdf:langString`          | Text               | `"Hello"@en` — value comes through, the language tag is stripped by SPARQL `STR()` when needed |
+| Language-tagged literals                                           | Text               | `"Hello"@en` comes through as `Hello` (the tag is not part of the value) |
 
 ## :wrench: Configuration
 
@@ -113,10 +112,15 @@ The driver automatically converts XSD / RDF datatypes to Metabase types. At **qu
 | Authentication                        |    ❌    | How to authenticate to the endpoint. `basic` reveals **Username** / **Password** (sent as HTTP Basic). `bearer` reveals **Bearer Token** (sent as `Authorization: Bearer <token>` — paste a static JWT or API key issued for this Metabase instance).      | `none` / `basic` / `bearer`         |
 | Default Graph URI                     |    ❌    | Default graph URI **and** implicit base prefix. RDF classes and properties whose URI starts with this value are shortened in the Metabase UI — `http://dbpedia.org/ontology/Person` becomes `Person`. The full URI is reconstructed automatically at query time. | `http://dbpedia.org/ontology/`      |
 | Default Language                      |    ❌    | BCP-47 language tag. When set, queries against `rdf:langString` columns are filtered to this language (untagged literals are still kept), and SHACL `sh:name` / `sh:description` literals are picked using this language first.                          | `nl`, `en`                          |
-| Hide URIs outside the Default Graph   |    ❌    | When enabled, RDF classes and properties whose URI does **not** start with the Default Graph URI are skipped during sync (less clutter when external vocabularies are sampled).                                                                          | `false`                             |
+| Namespace Prefixes                    |    ❌    | One `prefix=uri` per line. Classes and properties under a listed namespace sync as `prefix__localName` (e.g. `foaf__name`). **Re-sync after changing it** — until then, previously synced prefixed fields query the wrong URIs. | `foaf=http://xmlns.com/foaf/0.1/`   |
+| Hide URIs outside known namespaces    |    ❌    | When enabled, RDF classes and properties whose URI does **not** start with the Default Graph URI or a configured Namespace Prefix are skipped during sync (less clutter when external vocabularies are sampled). | `false`                             |
 | Metadata Sync Strategy (Advanced)     |    ❌    | How the driver discovers tables/fields.                                                                                                                                                                                                                  | `auto` / `none` / `explicit` / `shacl` |
 | Schema Configuration (Advanced)       |    ❌    | JSON schema. Visible when strategy is `explicit`.                                                                                                                                                                                                        | See JSON example below              |
-| SHACL URL (Advanced)                  |    ❌    | URL serving a SHACL document in Turtle. Visible when strategy is `shacl`. Fetched on every sync.                                                                                                                                                         | `https://example.org/schema.ttl`    |
+| SHACL URL (Advanced)                  |    ❌    | URL serving a SHACL document in Turtle. Visible when strategy is `shacl`. Fetched on every sync. HTTPS is recommended; plain HTTP is allowed for local testing. | `https://example.org/schema.ttl`    |
+| SHACL Connect / Read Timeout, Max Document Size (Advanced) | ❌ | Limits for fetching the SHACL document. Visible when strategy is `shacl`. | `10` s / `30` s / `10` MB (defaults) |
+
+> [!WARNING]
+> Because the Default Graph URI is also sent as `default-graph-uri`, it must name a graph the endpoint actually holds (or one the endpoint ignores). On DBpedia, for example, `http://dbpedia.org` is the real graph; `http://dbpedia.org/ontology/` gives shorter names but may return empty results.
 
 **Metadata Sync Strategy options:**
 
@@ -138,7 +142,7 @@ The **Default Graph URI** doubles as the implicit base prefix for the database. 
 | `http://dbpedia.org/ontology/`  | `http://dbpedia.org/ontology/birthPlace`          | `birthPlace`   |
 | `http://dbpedia.org/ontology/`  | `http://www.w3.org/1999/02/22-rdf-syntax-ns#type` | *(unchanged — foreign URI)* |
 
-This mirrors RDF/Turtle "base IRI" semantics: only URIs *under* the configured base get shortened. Foreign-namespace URIs always keep their full form so you can tell them apart. Enable **Hide URIs outside the Default Graph** to drop them from sync entirely.
+This mirrors RDF/Turtle "base IRI" semantics: only URIs *under* the configured base get shortened. Foreign-namespace URIs always keep their full form so you can tell them apart. Enable **Hide URIs outside known namespaces** to drop them from sync entirely. To shorten URIs from other namespaces too, list them under **Namespace Prefixes**.
 
 ### Language Handling
 
@@ -157,13 +161,14 @@ Native SPARQL questions can use Metabase's `{{tag}}` template parameters. The dr
 | Parameter value                           | Rendered as                  |
 |:------------------------------------------|:-----------------------------|
 | Text — `Alice`                            | `"Alice"` (quoted, escaped)  |
-| URL-shaped — `https://data.example/Item`  | `<https://data.example/Item>` (IRI) |
+| IRI-shaped (`http://`, `https://`, `urn:`) — `https://data.example/Item` | `<https://data.example/Item>` (IRI) |
 | Number — `25`                             | `25` (bare literal)          |
 | Boolean — `true`                          | `true` (bare literal)        |
-| Multi-value — `[A B C]`                   | `A, B, C` — wrap with `IN(...)` / `VALUES` |
+| Date / date range                         | `"2024-01-15"` / `"2024-01-01/2024-01-31"` (quoted string) |
+| Multi-value — `[A B C]`                   | `"A", "B", "C"` (each value rendered as above) — wrap with `IN(...)` / `VALUES` |
 | Missing optional                          | `{{tag}}` left in place + warning logged |
 
-Whitespace inside `{{ tag }}` is tolerated. Embedded `"`, `\`, newlines, and regex meta-characters in values are escaped safely. **Field Filters**, **Referenced Card Queries**, and **Referenced Query Snippets** are SQL-shaped template tag types and are not rendered to SPARQL — using them logs a warning and leaves the placeholder untouched so the endpoint surfaces a clear parse error.
+Whitespace inside `{{ tag }}` is tolerated. Embedded `"`, `\`, newlines, tabs, and `$` in values are escaped safely; characters that cannot appear inside `<...>` are percent-encoded in IRIs. **Field Filters**, **Referenced Card Queries**, **Referenced Query Snippets**, and **Referenced Tables** are SQL-shaped template tag types and are not rendered to SPARQL — using them logs a warning and leaves the placeholder untouched so the endpoint surfaces a clear parse error.
 
 Example:
 
@@ -271,10 +276,10 @@ When you control the ontology behind your SPARQL endpoint, **SHACL** is the clea
 To enable it:
 
 1. Set **Metadata Sync Strategy** to `shacl` (under Advanced).
-2. Fill in **SHACL URL** with the HTTPS URL of a Turtle document the Metabase container can reach.
+2. Fill in **SHACL URL** with the URL of a Turtle document the Metabase container can reach (HTTPS recommended; plain HTTP is allowed for local testing).
 3. (Optional) Set **Default Language** so multilingual `sh:name` / `sh:description` labels resolve to the right language.
 
-The driver re-fetches the SHACL on every sync (results are cached for ~30 seconds within a single sync run to keep things fast).
+The driver re-fetches the SHACL on every sync. The parsed result is cached for 30 seconds (per URL and Default Language), so the many lookups within one sync reuse a single fetch.
 
 ### SHACL → Metabase mapping
 
@@ -294,7 +299,7 @@ The driver re-fetches the SHACL on every sync (results are cached for ~30 second
 | `sh:name "…"` / `sh:description "…"`                       | Combined into the field's description. When multiple language-tagged literals exist, the **Default Language** wins, then untagged, then any. |
 | `sh:minCount n` *(n ≥ 1)*                                  | `:database-required true` — marks the column as required.                                                                     |
 | `sh:order n`                                               | Drives the column order in Metabase (ascending). Columns without `sh:order` sort to the end.                                  |
-| `sh:node OtherShape`                                       | **Inheritance.** Properties from `OtherShape` are merged into this shape (transitively). If both shapes define the same `sh:path`, the *child* wins. References to non-shape IRIs (e.g. when `sh:node` points at a class) are ignored. |
+| `sh:node OtherShape`                                       | **Inheritance.** Properties from `OtherShape` are merged into this shape (transitively). If both shapes define the same `sh:path`, the *child* wins. Details in [Inheritance](#inheritance-via-shnode). |
 
 A property of every table is added automatically:
 
@@ -383,7 +388,7 @@ dbo:PersonShape    a sh:NodeShape ; sh:targetClass dbo:Person    ; sh:node dbo:A
 dbo:ScientistShape a sh:NodeShape ; sh:targetClass dbo:Scientist ; sh:node dbo:PersonShape .
 ```
 
-`ScientistShape` ends up with **all** properties from `PersonShape` and `AgentShape`, plus its own. If the child redefines a `sh:path` that a parent already defined, the child's declaration wins (different `sh:description`, different `sh:minCount`, etc.). Cycles are broken with a visited set. `sh:node` references that don't resolve to another NodeShape (e.g. when they accidentally point at the class IRI itself) are silently ignored.
+`ScientistShape` ends up with **all** properties from `PersonShape` and `AgentShape`, plus its own. If the child redefines a `sh:path` that a parent already defined, the child's declaration wins (different `sh:description`, different `sh:minCount`, etc.). Cycles are broken with a visited set. `sh:node` references that don't resolve to another visible NodeShape with its own `sh:targetClass` (e.g. an abstract parent shape without `sh:targetClass`, a shape flagged `metabase:hide`, or the class IRI itself) are silently ignored — their properties are **not** inherited. Give each NodeShape an IRI (not a blank node) so it can take part in inheritance.
 
 ### Worked example
 

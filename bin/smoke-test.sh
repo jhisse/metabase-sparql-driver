@@ -4,8 +4,8 @@
 # seed it with the test fixture, run the :integration-tagged tests against it,
 # and always tear the container down.
 #
-# Invoked by `make smoke`. Requires Docker (with Compose v2) and a Java 21+
-# `clojure` on PATH. The metabase/ submodule must be initialized (make init-metabase).
+# Invoked by `make smoke`. Requires Docker (with Compose v2), curl, python3 and a
+# Java 21+ `clojure` on PATH. The metabase/ submodule must be initialized (make init-metabase).
 set -euo pipefail
 
 # Run from the repo root regardless of where the script is called from.
@@ -19,7 +19,7 @@ FIXTURE="test/resources/fixtures/smoke.ttl"
 # Single source of truth for the seed/query graph. The fixture is loaded into this
 # NAMED graph so it matches the driver's :default-graph detail (sent as the
 # ?default-graph-uri protocol param on every request). We export it to the test
-# process (smoke_test.clj reads SPARQL_TEST_GRAPH) and derive the URL-encoded
+# process (test_util.clj reads SPARQL_TEST_GRAPH) and derive the URL-encoded
 # Graph Store Protocol target from the same value, so the two never drift.
 GRAPH="${SPARQL_TEST_GRAPH:-https://example.org/}"
 GRAPH_ENC="$(python3 -c 'import urllib.parse,sys; print(urllib.parse.quote(sys.argv[1], safe=""))' "$GRAPH")"

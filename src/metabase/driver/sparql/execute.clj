@@ -105,6 +105,7 @@
      options - Map of additional options:
        :default-graph - URI of the default graph to query (optional)
        :insecure? - Boolean flag to ignore SSL certificate validation (optional)
+       :auth - clj-http auth fragment from `auth/http-options` (optional)
 
    Returns:
      On success: [true, response-body] where response-body is the parsed JSON response

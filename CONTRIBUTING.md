@@ -16,6 +16,10 @@ Thanks for your interest in improving the SPARQL driver. To keep the project rev
 - Generated reference docs, or docs that hardcode source line numbers. Code docstrings are the reference.
 - Unrelated churn: rewriting README examples, reformatting untouched files, renaming things outside the scope of the change.
 
+## Keeping docs accurate
+
+If your change affects user-visible behavior (a connection property, a type mapping, a supported feature, SHACL handling), update the matching README section and the docstrings that describe it in the same PR. Outdated docs count as a bug.
+
 ## Before opening a PR
 
 Run the full checklist (see also the PR template):
@@ -24,7 +28,7 @@ Run the full checklist (see also the PR template):
 make lint
 make splint
 make test    # requires Java 21+ and the metabase/ submodule (make init-metabase)
-make smoke   # integration tests against an ephemeral Oxigraph endpoint (requires Docker)
+make smoke   # integration tests against an ephemeral Oxigraph endpoint (requires Docker, curl, python3)
 make format  # if you changed Clojure sources
 ```
 
