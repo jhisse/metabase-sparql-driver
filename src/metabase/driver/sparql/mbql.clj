@@ -263,7 +263,7 @@
     :relative-datetime (let [now (query-now)]
                          (if (or (= a :current) (contains? #{nil :default} b))
                            now
-                           (u.date/bucket (u.date/add now b a) b)))))
+                           (u.date/truncate (u.date/add now b a) b)))))
 
 (def ^:private ^DateTimeFormatter xsd-local-datetime-format
   (DateTimeFormatter/ofPattern "uuuu-MM-dd'T'HH:mm:ss"))
