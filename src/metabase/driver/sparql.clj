@@ -78,7 +78,7 @@
                               :parameterized-sql false
                               :distinct-where false
                               :saved-question-sandboxing false
-                              :expressions/integer true
+                              :expressions/integer false
                               :expressions/text false
                               :expressions/date false
                               :expressions/datetime false

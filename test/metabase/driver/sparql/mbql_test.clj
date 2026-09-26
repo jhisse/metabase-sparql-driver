@@ -8,6 +8,7 @@
    full compile path can be exercised without a running Metabase app DB."
   (:require [clojure.string :as str]
             [clojure.test :refer :all]
+            [metabase.driver-api.core :as driver-api]
             [metabase.driver.sparql.mbql :as mbql]
             [metabase.driver.sparql.uri :as uri]))
 
@@ -196,6 +197,24 @@
       (testing "a [:value ...] wrapped bound is unwrapped"
         (is (= "(?leeftijd >= 18 && ?leeftijd <= 65)"
                (f [:between [:field "leeftijd" nil] [:value 18 {}] [:value 65 {}]])))))))
+
+(deftest unsupported-filter-clause-test
+  (let [f #(@#'mbql/compile-filter-expr % {"naam" "naam" "leeftijd" "leeftijd"} {})]
+    (testing "a custom-expression function on the lhs throws instead of dropping the filter"
+      (is (thrown-with-msg? clojure.lang.ExceptionInfo #"integer"
+                            (f [:> [:integer [:field "leeftijd" nil]] 5])))
+      (is (thrown-with-msg? clojure.lang.ExceptionInfo #"lower"
+                            (f [:= [:lower [:field "naam" nil]] "x"]))))
+    (testing "an unsupported operator throws"
+      (is (thrown-with-msg? clojure.lang.ExceptionInfo #"regex-match-first"
+                            (f [:regex-match-first [:field "naam" nil] "x"]))))
+    (testing "an unsupported branch inside :and throws instead of silently keeping only half the filter"
+      (is (thrown? clojure.lang.ExceptionInfo
+                   (f [:and [:> [:field "leeftijd" nil] 1] [:> [:integer [:field "leeftijd" nil]] 5]]))))
+    (testing "the error is typed as an unsupported feature"
+      (is (= driver-api/qp.error-type.unsupported-feature
+             (try (f [:> [:integer [:field "leeftijd" nil]] 5])
+                  (catch clojure.lang.ExceptionInfo e (:type (ex-data e)))))))))
 
 (deftest order-by-test
   (let [ob     #(@#'mbql/compile-order-by % {"naam" "naam" "leeftijd" "leeftijd"} {})

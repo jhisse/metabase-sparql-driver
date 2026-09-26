@@ -214,8 +214,18 @@
     (uri/iri-ref v)
     (literal->sparql v)))
 
+(defn- unsupported-filter!
+  "Throw for a filter the compiler cannot translate. Returning nil instead
+   would drop the filter and silently return unfiltered rows."
+  [what filter-clause]
+  (throw (ex-info (format "The SPARQL driver does not support %s in filters." what)
+                  {:type   driver-api/qp.error-type.unsupported-feature
+                   :clause filter-clause})))
+
 (defn- compile-filter-expr
-  "Compile a filter clause to a SPARQL boolean expression string."
+  "Compile a filter clause to a SPARQL boolean expression string. Throws
+   (via [[unsupported-filter!]]) for operators or custom-expression functions
+   it cannot translate."
   [filter-clause field-id->var pair->target-var]
   (when (sequential? filter-clause)
     (let [[op lhs rhs maybe-opts & more] filter-clause]
@@ -238,7 +248,12 @@
                   (if (and (vector? x) (= :value (first x)))
                     (second x)
                     x))]
-          (when (and fid var)
+          (when-not fid
+            (unsupported-filter! (if (and (vector? lhs) (keyword? (first lhs)))
+                                   (str "the " (name (first lhs)) "() function")
+                                   "this expression")
+                                 filter-clause))
+          (when var
             (case op
               := (if (nil? v)
                    (format "(!BOUND(?%s))" var)
@@ -273,7 +288,7 @@
                           (str "(" expr ")"))
               :is-null (format "(!BOUND(?%s))" var)
               :not-null (format "(BOUND(?%s))" var)
-              nil)))))))
+              (unsupported-filter! (str "the " (name op) " operator") filter-clause))))))))
 
 (defn- build-var-aliases
   "Map field-id to sanitized var name from the original column name."
