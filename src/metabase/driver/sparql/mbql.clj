@@ -232,6 +232,7 @@
 
 (def ^:private xsd-date     "<http://www.w3.org/2001/XMLSchema#date>")
 (def ^:private xsd-datetime "<http://www.w3.org/2001/XMLSchema#dateTime>")
+(def ^:private xsd-integer  "<http://www.w3.org/2001/XMLSchema#integer>")
 
 (def ^:private ^DateTimeFormatter xsd-datetime-format
   "xsd:dateTime lexical form. Seconds are always written: ISO_OFFSET_DATE_TIME
@@ -560,7 +561,7 @@
    but Oxigraph, Jena and RDF4J accept it."
   ;; ponytail: buckets follow each value's own lexical timezone, not the report
   ;; timezone; convert first if mixed-timezone data needs report-time buckets.
-  (let [quarter-index "<http://www.w3.org/2001/XMLSchema#integer>(FLOOR((MONTH(?%1$s)-1)/3))"]
+  (let [quarter-index (str xsd-integer "(FLOOR((MONTH(?%1$s)-1)/3))")]
     {:year            (str "STRDT(CONCAT(SUBSTR(STR(?%1$s),1,4),\"-01-01\"), " xsd-date ")")
      :quarter         (str "STRDT(CONCAT(SUBSTR(STR(?%1$s),1,5), SUBSTR(\"01040710\", "
                            quarter-index "*2+1, 2), \"-01\"), " xsd-date ")")
