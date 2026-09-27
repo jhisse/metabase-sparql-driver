@@ -475,6 +475,13 @@
 ;; Custom expressions (Metabase "custom columns") → SPARQL
 ;; ---------------------------------------------------------------------------
 
+(def ^:private null-term
+  "SPARQL has no null literal. Evaluating a variable nothing binds is an error,
+   which leaves a BIND unbound, makes IF unbound and is skipped by COALESCE:
+   the same result a SQL NULL gives."
+  ;; Collides only with a property whose local name is `__null`.
+  "?__null")
+
 (defn- regex-escape
   "Escape regex metacharacters so `s` matches literally inside a SPARQL REPLACE pattern."
   [s]
@@ -491,7 +498,7 @@
     (number? arg)  (str arg)
     (string? arg)  (uri/string-literal arg)
     (boolean? arg) (if arg "true" "false")
-    (nil? arg)     "\"\""
+    (nil? arg)     null-term
     (and (vector? arg) (= :value (first arg)))      (expr-arg (second arg) resolve-token)
     (and (vector? arg) (#{:field :expression} (first arg)))
     (if-let [v (resolve-token arg)]
@@ -511,7 +518,7 @@
         b       #(compile-expression % resolve-token)]
     (reduce (fn [else [pred val]]
               (format "IF(%s, %s, %s)" (b pred) (a val) else))
-            (if (some? default) (a default) "\"\"")
+            (if (some? default) (a default) null-term)
             (reverse clauses))))
 
 (defn- compile-expression
@@ -559,11 +566,15 @@
                              (uri/string-literal (regex-escape find-str))
                              (uri/string-literal (str/replace (str repl-str) #"[\\$]" "\\\\$0"))))
           :regex-match-first
+          ;; REPLACE returns its input unchanged when nothing matches, so a
+          ;; non-matching row gets null from the REGEX guard instead. "s" lets
+          ;; `.` cross newlines.
           (let [[txt pat] args
                 pat-str (if (string? pat) pat (second pat))]
-            (format "REPLACE(%s, %s, \"$1\")"
-                    (s txt)
-                    (uri/string-literal (str "^.*?(" pat-str ").*$"))))
+            (format "IF(REGEX(%s, %s, \"s\"), REPLACE(%s, %s, \"$1\", \"s\"), %s)"
+                    (s txt) (uri/string-literal pat-str)
+                    (s txt) (uri/string-literal (str "^.*?(" pat-str ").*$"))
+                    null-term))
           :float   (cast xsd-double (first args))
           :integer (cast xsd-integer (first args))
           :text    (format "STR(%s)" (a (first args)))
