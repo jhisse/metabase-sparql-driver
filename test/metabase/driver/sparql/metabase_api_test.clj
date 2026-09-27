@@ -107,6 +107,9 @@
         label  (get-in person [:fields tu/rdfs-label :id])]
     (testing "the default table view keeps one row per Person"
       (is (= 2 (count (:rows (run-mbql :shacl {:source-table (:id person)}))))))
+    (testing "filtering the default view by the label a self-referencing FK also displays"
+      (is (= 1 (count (:rows (run-mbql :shacl {:source-table (:id person)
+                                               :filter       [:= [:field label nil] "Alice"]}))))))
     (testing "grouping by the label behind a missing FK"
       (is (= #{[nil 25] ["Bob" 30]}
              (set (:rows (run-mbql :shacl {:source-table (:id person)

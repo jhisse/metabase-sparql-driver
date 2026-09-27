@@ -113,18 +113,21 @@
     uri))
 
 (defn- collect-field-ids
-  "Collect referenced field IDs from fields/order-by/filter/expressions."
+  "Collect the IDs of fields read off the row itself from
+   fields/order-by/filter/expressions. A `:join-alias` token is left out: it
+   reads the joined entity, through `pair->target-var`."
   [{:keys [fields order-by expressions] filter-clause :filter}]
-  (let [ids-from-fields (set (keep field-token->id fields))
-        ids-from-order  (set (keep (fn [[_dir fld & _]] (field-token->id fld)) order-by))
+  (let [direct-ids      #(set (keep field-token->id (remove field-token->join-alias %)))
+        ids-from-fields (direct-ids fields)
+        ids-from-order  (direct-ids (map second order-by))
         ids-from-filter (letfn [(collect-field-tokens [x]
                                   (cond
                                     (and (vector? x) (= :field (first x))) [x]
                                     (sequential? x) (mapcat collect-field-tokens x)
                                     (map? x) (mapcat collect-field-tokens (vals x))
                                     :else []))]
-                          (set (keep field-token->id (collect-field-tokens filter-clause))))
-        ids-from-expr   (set (keep field-token->id (collect-expression-tokens expressions)))
+                          (direct-ids (collect-field-tokens filter-clause)))
+        ids-from-expr   (direct-ids (collect-expression-tokens expressions))
         all-ids         (vec (set/union ids-from-fields ids-from-order ids-from-filter ids-from-expr))]
     (log/debugf "[mbql] Collected field IDs: fields=%d order=%d filter=%d total=%d"
                 (count ids-from-fields) (count ids-from-order) (count ids-from-filter) (count all-ids))
@@ -953,7 +956,6 @@
                                   table-id agg? (count output-tokens) (count breakout) (count order-by) (count joins))
         ;; Joined-field references: `[field-id alias]` pairs that appear anywhere in the stage.
         joined-pairs   (collect-joined-pairs triple-inner)
-        joined-fids    (set (map first joined-pairs))
         ;; Per-join intermediate var: ?<alias>_subject — binds the joined entity URI.
         alias->intermediate-var (into {}
                                       (for [j joins]
@@ -1038,13 +1040,12 @@
                                     (joined-var-name alias
                                                      (or (:name (field-id->metadata fid))
                                                          (str "f_" fid))))]))
-        ;; All field-ids referenced anywhere in the stage; we only build direct triples for
-        ;; those that aren't reached via a join. Field tokens whose parent `:table-id`
-        ;; isn't the base table are also excluded: they belong to a joined entity and
-        ;; would otherwise emit a bogus `?subject <foreign-prop> ?var` triple. The
+        ;; Field-ids read off the row itself (a field can also be reached through a
+        ;; join, e.g. a self-referencing FK's display value). Field tokens whose parent
+        ;; `:table-id` isn't the base table are excluded: they belong to a joined entity
+        ;; and would otherwise emit a bogus `?subject <foreign-prop> ?var` triple. The
         ;; tolerated nil case keeps the test fixtures (no `:table-id`) working.
         field-ids     (->> (collect-field-ids triple-inner)
-                           (remove joined-fids)
                            (remove (fn [fid]
                                      (when-let [tid (some-> fid field-id->metadata :table-id)]
                                        (not= tid table-id)))))
@@ -1079,7 +1080,6 @@
                                  (keep field-token->id)
                                  set
                                  (remove (set (keep field-token->id (remove field-token->join-alias output-tokens))))
-                                 (remove joined-fids)
                                  (remove id-field?)))
         triples-for-extras (for [fid extra-direct-fids
                                  :let [prop (get field-id->prop fid)

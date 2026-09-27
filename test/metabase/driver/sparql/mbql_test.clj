@@ -539,6 +539,20 @@
         (is (str/includes? sparql
                            (str "OPTIONAL { ?subject <" base "geboorteplaats> ?Plaats_subject . ?Plaats_subject <" base "label> ?Plaats__label . }")))))))
 
+(deftest compile-base-stage-field-also-joined-test
+  (testing "a field that is also the display value of a self-referencing FK keeps its own variable"
+    (with-fixture
+      (let [{:keys [sparql vars]}
+            (compile-stage* {:source-table 100
+                             :fields [[:field 1 nil]
+                                      [:field 10 nil]
+                                      [:field 10 {:source-field 4 :join-alias "Kent"}]]
+                             :joins  [{:alias "Kent" :fk-field-id 4}]
+                             :filter [:= [:field 10 nil] "Jan"]})]
+        (is (= ["subject" "label" "Kent__label"] vars))
+        (is (str/includes? sparql (str "OPTIONAL { ?subject <" base "label> ?label . }")))
+        (is (str/includes? sparql "FILTER (?label = \"Jan\")"))))))
+
 (deftest compile-base-stage-implicit-join-projection-test
   (testing "Lib's result-metadata strips :lib/join-alias from implicit-joinable
             columns (only `:fk-field-id` remains). The compiler must still project
