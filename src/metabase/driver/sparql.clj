@@ -49,6 +49,8 @@
                               :inner-join false
                               :full-join false
                               :regex true ;; regexextract -> SPARQL REPLACE
+                              ;; Defaults to :regex; it gates host/domain/subdomain/path, which the compiler lacks
+                              :regex/lookaheads-and-lookbehinds false
                               :advanced-math-expressions false
                               :percentile-aggregations false
                               :convert-timezone false

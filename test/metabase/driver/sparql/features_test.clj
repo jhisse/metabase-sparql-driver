@@ -21,7 +21,6 @@
     :native-parameters
     :metadata/key-constraints
     :regex
-    :regex/lookaheads-and-lookbehinds
     :test/cannot-destroy-db
     ;; not in the driver's table: inherited from Metabase's default
     :test/create-table-without-data})
