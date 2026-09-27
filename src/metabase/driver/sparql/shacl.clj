@@ -20,7 +20,9 @@
             [metabase.driver.sparql.uri :as uri]
             [metabase.util.log :as log])
   (:import (java.io ByteArrayOutputStream InputStream StringReader)
+           (java.net Inet4Address InetAddress URL UnknownHostException)
            (org.apache.http.client.methods HttpUriRequest)
+           (org.apache.http.conn DnsResolver)
            (org.eclipse.rdf4j.model BNode IRI Literal Resource Statement Value)
            (org.eclipse.rdf4j.rio RDFFormat Rio)))
 
@@ -114,6 +116,85 @@
   (some-> ^HttpUriRequest (get-in resp [:request :http-req]) .abort)
   (some-> ^InputStream (:body resp) .close))
 
+(def ^:private max-redirects
+  "How many redirects the SHACL fetch follows."
+  5)
+
+(defn- internal-address?
+  "True when `a` is a loopback, private (site-local, carrier-grade NAT
+   100.64.0.0/10 or IPv6 unique-local), link-local or unspecified (0.0.0.0/8)
+   address."
+  [^InetAddress a]
+  (let [b  (.getAddress a)
+        b0 (bit-and 0xff (aget b 0))]
+    (or (.isLoopbackAddress a) (.isSiteLocalAddress a)
+        (.isLinkLocalAddress a) (.isAnyLocalAddress a)
+        (if (instance? Inet4Address a)
+          (or (zero? b0)
+              (and (= 100 b0) (= 64 (bit-and 0xc0 (aget b 1)))))
+          (= 0xfc (bit-and 0xfe b0))))))
+
+(defn- guarded-resolver
+  "Return a DNS resolver for the requests of one SHACL fetch. The first host
+   it resolves is the SHACL URL's own. When that one is public, a later host
+   that resolves to an internal address is refused, so a public document
+   cannot send the fetch to the services next to Metabase; an internal SHACL
+   URL, chosen by the admin, may go anywhere. The check runs when the
+   connection is opened, so a DNS answer that changes in between is caught
+   too."
+  []
+  (let [internal-source? (atom nil)]
+    (reify DnsResolver
+      (resolve [_ host]
+        (let [addresses (InetAddress/getAllByName host)
+              internal? (boolean (some internal-address? addresses))]
+          (when (nil? @internal-source?)
+            (reset! internal-source? internal?))
+          (when (and internal? (not @internal-source?))
+            (throw (UnknownHostException.
+                    (str host " resolves to an internal address, which a public SHACL URL may not redirect to"))))
+          addresses)))))
+
+(defn- resolve-location
+  "Resolve the redirect `location` against `target` as a URL. Parsed as
+   leniently as clj-http parses URLs. A query-only location keeps the path of
+   `target` (RFC 3986), which `java.net.URL` gets wrong."
+  ^URL [target location]
+  (if (str/starts-with? location "?")
+    (URL. (str (first (str/split target #"[?#]" 2)) location))
+    (URL. (URL. target) location)))
+
+(defn- get-following-redirects
+  "GET `url` with the clj-http `opts`, following up to [[max-redirects]]
+   redirects by hand, and return the final response.
+
+   Each hop is a fresh request to the target, so credentials in `url` never
+   reach another host. Only http(s) targets are followed, and every
+   connection goes through one [[guarded-resolver]]."
+  [url opts]
+  (let [opts (assoc opts :redirect-strategy :none :dns-resolver (guarded-resolver))]
+    (loop [target url
+           hops   0]
+      (let [resp   (http/get target opts)
+            status (:status resp)]
+        (if-not (and (int? status) (<= 300 status 399))
+          resp
+          (let [location (get-in resp [:headers "location"])
+                refuse   (fn [reason]
+                           (throw (ex-info (format "SHACL document at %s redirected (%s): %s"
+                                                   (uri/redact-userinfo target) status reason)
+                                           {:url (uri/redact-userinfo target) :status status})))
+                _        (release! resp)
+                next-url (when location
+                           (try (resolve-location target (str location)) (catch Exception _ nil)))]
+            (cond
+              (nil? location)         (refuse "no Location")
+              (nil? next-url)         (refuse "the Location is not a URL")
+              (>= hops max-redirects) (refuse (str "more than " max-redirects " redirects"))
+              (not (#{"http" "https"} (str/lower-case (.getProtocol ^URL next-url))))
+              (refuse (str "only http and https targets are followed, not " (.getProtocol ^URL next-url))))
+            (recur (str next-url) (inc hops))))))))
+
 (defn fetch-shacl
   "Return the body of the SHACL document at `url` as a string, requested as
    `text/turtle`.
@@ -125,8 +206,8 @@
    The size cap is checked against `Content-Length` and while reading. A
    body that is not read to the end is aborted, not drained.
 
-   Redirects are followed, unless `url` carries credentials: the HTTP client
-   would re-send them to the new host.
+   Redirects are followed as [[get-following-redirects]] describes, each hop
+   with its own connect and read timeouts.
 
    Throws an `ex-info` on any non-200 response or when the body exceeds the
    size cap; connection errors and timeouts propagate from clj-http."
@@ -137,14 +218,13 @@
          max-bytes  (or max-bytes default-max-bytes)
          shown-url  (uri/redact-userinfo url)]
      (log/infof "[shacl] Fetching SHACL document from %s" shown-url)
-     (let [resp (http/get url (cond-> {:headers            {"Accept" "text/turtle"}
-                                       :throw-exceptions   false
-                                       :connection-timeout connect-ms
-                                       :socket-timeout     socket-ms
-                                       :as                 :stream
-                                       ;; Keeps :http-req in the response, for release!
-                                       :save-request       true}
-                                (not= url shown-url) (assoc :redirect-strategy :none)))]
+     (let [resp (get-following-redirects url {:headers            {"Accept" "text/turtle"}
+                                              :throw-exceptions   false
+                                              :connection-timeout connect-ms
+                                              :socket-timeout     socket-ms
+                                              :as                 :stream
+                                              ;; Keeps :http-req in the response, for release!
+                                              :save-request       true})]
        (try
          (if (= 200 (:status resp))
            (do
