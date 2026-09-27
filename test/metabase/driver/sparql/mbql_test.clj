@@ -1006,7 +1006,8 @@
   (testing "rdf:langString columns get a LANG filter when a default language is set"
     (with-redefs-fn
       {#'mbql/field-id->metadata        (fn [id] (get {1 {:name "subject"}
-                                                       2 {:name "naam" :database-type "langString"}}
+                                                       2 {:name "naam" :database-type "langString"}
+                                                       4 {:name "plaats"}}
                                                       id))
        #'mbql/table-id->class-uri       (constantly (str base "Persoon"))
        #'mbql/database-naming-context   (constantly {:default-graph base :prefixes []})
@@ -1014,7 +1015,12 @@
       (fn []
         (let [{:keys [sparql]}
               (compile-stage* {:source-table 100
-                               :fields [[:field 1 nil] [:field 2 nil]]})]
+                               :fields [[:field 1 nil] [:field 2 nil] [:field 2 {:join-alias "P"}]]
+                               :joins  [{:alias "P" :fk-field-id 4}]})]
           (is (str/includes?
                sparql
-               "FILTER(!BOUND(?naam) || LANG(?naam) = \"nl\" || LANG(?naam) = \"\")")))))))
+               "FILTER(!BOUND(?naam) || LANG(?naam) = \"nl\" || LANG(?naam) = \"\")"))
+          (testing "also on a joined column"
+            (is (str/includes?
+                 sparql
+                 "FILTER(!BOUND(?P__naam) || LANG(?P__naam) = \"nl\" || LANG(?P__naam) = \"\")"))))))))

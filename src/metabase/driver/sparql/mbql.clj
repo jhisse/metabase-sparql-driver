@@ -1142,7 +1142,7 @@
                                         (keep #(get field-id->var %)))
                   joined-lang-vars (->> joined-pairs
                                         (filter (fn [[fid _]] (lang-string-field? fid)))
-                                        (keep (fn [pair] (get pair->target-var pair))))]
+                                        (keep (fn [[fid alias]] (get pair->target-var [fid alias]))))]
               (mapv #(lang-filter-line % lang)
                     (distinct (concat direct-lang-vars joined-lang-vars))))))
         _ (log/debugf "[mbql] LANG filter lines: %d" (count (or lang-filter-lines [])))
