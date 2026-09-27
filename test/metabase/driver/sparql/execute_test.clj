@@ -5,6 +5,7 @@
             [clojure.string :as str]
             [clojure.test :refer :all]
             [metabase.driver-api.core :as driver-api]
+            [metabase.driver.settings :as driver.settings]
             [metabase.driver.sparql.execute :as execute])
   (:import [clojure.lang ExceptionInfo]))
 
@@ -134,6 +135,7 @@
       (is (false? (:throw-exceptions opts)) "non-200s must reach process-response, not throw")
       (is (= :none (:redirect-strategy opts))
           "a followed redirect re-sends the credentials to the new host")
+      (is (= 10000 (:connection-timeout opts)))
       (is (str/starts-with? (get-in opts [:headers "User-Agent"]) "metabase-sparql-driver ")
           "Wikidata rejects the HTTP client's default User-Agent")
       (is (= [true {:boolean true}] result))))
@@ -141,6 +143,13 @@
     (let [{:keys [opts]} (post-with {})]
       (is (empty? (select-keys opts [:query-params :insecure? :basic-auth])))
       (is (= ["User-Agent"] (keys (:headers opts))))))
+  (testing "the read timeout is Metabase's query timeout at call time, unless given"
+    (binding [driver.settings/*query-timeout-ms* 1234]
+      (is (= 1234 (:socket-timeout (:opts (post-with {})))))
+      (is (= 5 (:socket-timeout (:opts (post-with {:read-timeout-ms 5})))))))
+  (testing "a query timeout beyond what the HTTP client takes is capped, not an error on every request"
+    (binding [driver.settings/*query-timeout-ms* (* 525600 60 1000)]
+      (is (= Integer/MAX_VALUE (:socket-timeout (:opts (post-with {})))))))
   (testing "default graph travels as the default-graph-uri protocol parameter"
     (is (= {:default-graph-uri "https://example.org/"}
            (:query-params (:opts (post-with {:default-graph "https://example.org/"}))))))

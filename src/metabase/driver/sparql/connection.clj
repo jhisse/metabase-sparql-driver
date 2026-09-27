@@ -12,10 +12,13 @@
    \"Connection failed: …\" with the endpoint's error.
 
    `options` takes `:default-graph`, `:insecure?` and `:auth` (from
-   `[[auth/http-options]]`)."
+   `[[auth/http-options]]`). The request uses the probe timeout of
+   [[execute/probe-options]]."
   [endpoint options]
   (log/info "Trying to connect to SPARQL endpoint:" (uri/redact-userinfo endpoint))
-  (let [[success result] (execute/execute-sparql-query endpoint (templates/connection-test-query) options)]
+  (let [[success result] (execute/execute-sparql-query endpoint
+                                                       (templates/connection-test-query)
+                                                       (execute/probe-options options))]
     (if success
       true
       (throw (Exception. (str "Connection failed: " result))))))
@@ -30,9 +33,9 @@
   [_driver database]
   (let [details          (:details database)
         endpoint         (:endpoint details)
-        options          {:default-graph (:default-graph details)
-                          :insecure?     (:use-insecure details)
-                          :auth          (auth/http-options details)}
+        options          (execute/probe-options {:default-graph (:default-graph details)
+                                                 :insecure?     (:use-insecure details)
+                                                 :auth          (auth/http-options details)})
         [ok-bind res-bind]     (execute/execute-sparql-query endpoint (templates/sparql-1-1-bind-version-query) options)
         [ok-values res-values] (execute/execute-sparql-query endpoint (templates/sparql-1-1-values-version-query) options)
         result  (cond

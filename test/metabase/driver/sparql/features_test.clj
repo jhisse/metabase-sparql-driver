@@ -43,4 +43,9 @@
     (testing "unsupported on an empty result"
       (is (false? (probe [true {:results {:bindings []}}]))))
     (testing "unsupported when the probe query fails"
-      (is (false? (probe [false "SPARQL endpoint returned status: 400" :query]))))))
+      (is (false? (probe [false "SPARQL endpoint returned status: 400" :query]))))
+    (testing "the probe uses the short probe timeout"
+      (let [opts (atom nil)]
+        (with-redefs [execute/execute-sparql-query (fn [_ _ o] (reset! opts o) [false "timeout" :transport])]
+          (driver/database-supports? :sparql :now db))
+        (is (= 30000 (:read-timeout-ms @opts)))))))

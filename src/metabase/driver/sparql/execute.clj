@@ -5,6 +5,7 @@
             [clj-http.client :as http]
             [metabase.util.json :as json]
             [metabase.driver-api.core :as driver-api]
+            [metabase.driver.settings :as driver.settings]
             [metabase.driver.sparql.auth :as auth]
             [metabase.driver.sparql.uri :as uri]
             [metabase.driver.sparql.query-processor :as query-processor])
@@ -15,20 +16,46 @@
    to the HTTP client's default User-Agent."
   "metabase-sparql-driver (https://github.com/jhisse/metabase-sparql-driver)")
 
+(def ^:private connect-timeout-ms
+  "How long to wait for the endpoint to accept the connection."
+  10000)
+
+(def ^:private probe-timeout-ms
+  "Read timeout for the connection test and the feature probes: small queries
+   that Metabase runs while the admin or a user waits."
+  30000)
+
+(defn probe-options
+  "Return the request `options` with the read timeout of a probe
+   ([[probe-timeout-ms]]) instead of Metabase's query timeout."
+  [options]
+  (assoc options :read-timeout-ms probe-timeout-ms))
+
+(defn- ^:private query-timeout-ms
+  "Metabase's query timeout (`MB_DB_QUERY_TIMEOUT_MINUTES`), capped to what
+   the HTTP client takes: it throws on a timeout above `Integer/MAX_VALUE`."
+  []
+  (min driver.settings/*query-timeout-ms* Integer/MAX_VALUE))
+
 (defn- ^:private create-http-options
   "Build the clj-http options that POST `query` as a form parameter.
 
    `options` takes `:insecure?` (skip TLS certificate checks),
-   `:default-graph` (sent as `default-graph-uri`) and `:auth` (from
-   `[[auth/http-options]]`, merged in).
+   `:default-graph` (sent as `default-graph-uri`), `:auth` (from
+   `[[auth/http-options]]`, merged in) and `:read-timeout-ms` (defaults to
+   Metabase's query timeout). The read timeout applies to each read, not to
+   the whole response, and cancelling the query in Metabase does not abort
+   the request.
 
    Redirects are not followed: the HTTP client would re-send the credentials
    to the new host, and would turn the POST into a GET without the query."
-  [query {:keys [insecure? default-graph auth]}]
+  [query {:keys [insecure? default-graph auth read-timeout-ms]}]
   (cond-> {:accept :json
            :cookie-policy :none
            :throw-exceptions false
            :redirect-strategy :none
+           :connection-timeout connect-timeout-ms
+           :socket-timeout (or read-timeout-ms (query-timeout-ms))
            :form-params {:query query}
            :headers {"User-Agent" user-agent}}
     insecure? (assoc :insecure? true)
@@ -116,7 +143,8 @@
    or `[false message kind]`.
 
    `kind` is `:query` or `:db` as in `[[process-response]]`, or `:transport`
-   when the request never got an answer (connection refused, DNS, TLS).
+   when no answer came back (connection refused, DNS, TLS, or a timeout, after
+   which the endpoint may still be running the query).
    `options` is passed to `[[create-http-options]]`. POST keeps queries of any
    length out of the URL."
   [endpoint query options]
