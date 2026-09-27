@@ -96,16 +96,20 @@ for key, db_id in ids.items():
     else:
         raise SystemExit(f"FAILED: database {key} ({db_id}) never finished its initial sync")
 
-# The SHACL display-value remap is written by a post-sync hook (dimensions.clj),
-# after initial_sync_status is already complete: wait for it too.
-meta = api("GET", f"/api/database/{ids['shacl']}/metadata", session=session)
-fks = [f["id"] for t in meta["tables"] for f in t["fields"] if f.get("fk_target_field_id")]
+# The post-sync hook (dimensions.clj) runs after initial_sync_status is already
+# complete: wait until it has written the FK remap and, after it, the rdfs:label
+# display name.
+LABEL = "http://www.w3.org/2000/01/rdf-schema#label"
 for _ in range(60):
-    if any(api("GET", f"/api/field/{fk}", session=session)["dimensions"] for fk in fks):
+    fields = [f for t in api("GET", f"/api/database/{ids['shacl']}/metadata", session=session)["tables"]
+              for f in t["fields"]]
+    remapped = any(api("GET", f"/api/field/{f['id']}", session=session)["dimensions"]
+                   for f in fields if f.get("fk_target_field_id"))
+    if remapped and all(f["display_name"] == "Label" for f in fields if f["name"] == LABEL):
         break
     time.sleep(1)
 else:
-    raise SystemExit("FAILED: the SHACL FK display-value remap was never written")
+    raise SystemExit("FAILED: the post-sync hook never wrote the FK remap and display names")
 
 with open(os.environ["ENV_FILE"], "w") as f:
     json.dump({"url": url, "email": email, "password": password, "databases": ids}, f, indent=2)
