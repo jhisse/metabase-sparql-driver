@@ -97,8 +97,8 @@ for key, db_id in ids.items():
         raise SystemExit(f"FAILED: database {key} ({db_id}) never finished its initial sync")
 
 # The post-sync hook (dimensions.clj) runs after initial_sync_status is already
-# complete: wait until it has written the FK remap and, after it, the rdfs:label
-# display name.
+# complete: wait until it has written the rdfs:label display name and the FK
+# remap.
 LABEL = "http://www.w3.org/2000/01/rdf-schema#label"
 for _ in range(60):
     fields = [f for t in api("GET", f"/api/database/{ids['shacl']}/metadata", session=session)["tables"]
