@@ -558,9 +558,11 @@
     (let [fields {1  {:name "subject" :table-id 100}
                   4  {:name "werkgever" :table-id 100}
                   10 {:name "label" :table-id 200}
-                  21 {:name "stad" :table-id 200}
-                  22 {:name "zetel" :table-id 200}
-                  30 {:name "label" :table-id 300}}]
+                  21 {:name "stad" :table-id 200 :semantic-type :type/FK}
+                  22 {:name "zetel" :table-id 200 :semantic-type :type/FK}
+                  23 {:name "notitie" :table-id 200}
+                  30 {:name "label" :table-id 300}
+                  31 {:name "subject" :table-id 300}}]
       (with-redefs-fn
         {#'mbql/field-id->metadata        (fn [id] (get fields id))
          #'mbql/table-id->class-uri       (constantly (str base "Persoon"))
@@ -572,13 +574,18 @@
                                       :fields [[:field 1 nil]
                                                [:field 10 {:join-alias "C"}]
                                                [:field 30 {:join-alias "C" :source-field 21}]
-                                               [:field 30 {:join-alias "C" :source-field 22}]]
+                                               [:field 30 {:join-alias "C" :source-field 22}]
+                                               [:field 31 {:join-alias "C" :source-field 21}]]
                                       :joins  [{:alias     "C"
                                                 :condition [:= [:field 4 nil] [:field 1 {:join-alias "C"}]]}]}
                                      [{:id 1} {:id 10 :lib/join-alias "C"}
-                                      {:id 30 :lib/join-alias "C"} {:id 30 :lib/join-alias "C"}])]
+                                      {:id 30 :lib/join-alias "C"} {:id 30 :lib/join-alias "C"}
+                                      {:id 31 :lib/join-alias "C"}])]
             (testing "two FKs to the same field keep one variable each"
-              (is (= ["subject" "C__label" "C__stad__label" "C__zetel__label"] vars)))
+              (is (= ["subject" "C__label" "C__stad__label" "C__zetel__label" "C__stad_subject"] vars)))
+            (testing "the hopped entity's subject is the hop variable"
+              (is (str/includes? sparql (str "OPTIONAL { ?subject <" base "werkgever> ?C_subject . "
+                                             "?C_subject <" base "stad> ?C__stad_subject . }"))))
             (is (str/includes? sparql (str "?C_subject <" base "stad> ?C__stad_subject . "
                                            "?C__stad_subject <" base "label> ?C__stad__label ."))))
           (testing "a column reached through a field that is not a FK fails clearly"
@@ -589,7 +596,7 @@
 (deftest compile-base-stage-explicit-self-join-test
   (testing "a self-join on a FK: the joined label and that FK's display value inside the join stay apart"
     (let [fields {1  {:name "subject" :table-id 100}
-                  4  {:name "kent" :table-id 100}
+                  4  {:name "kent" :table-id 100 :semantic-type :type/FK}
                   10 {:name "label" :table-id 100}}]
       (with-redefs-fn
         {#'mbql/field-id->metadata        (fn [id] (get fields id))

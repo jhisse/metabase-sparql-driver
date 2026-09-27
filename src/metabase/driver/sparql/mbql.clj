@@ -1063,7 +1063,7 @@
                                      :let [k (pair-key pair)]]
                                  [k
                                   (if (id-field? fid)
-                                    (get alias->intermediate-var alias)
+                                    (or (:var (pair->hop k)) (get alias->intermediate-var alias))
                                     (joined-var-name alias
                                                      (str (some-> (pair->hop k) :name (str "__"))
                                                           (or (:name (field-id->metadata fid))
@@ -1121,21 +1121,22 @@
                               :let [path (join-path (:alias j))]
                               :when path]
                           (emit-optional-group path))
-        ;; One triple per joined column. The joined entity's own subject column needs
-        ;; no triple — it IS the intermediate var, already bound by the FK triple.
+        ;; One triple per joined column. A subject column needs no triple: it IS the
+        ;; intermediate (or hop) var, already bound by the FK triple.
         join-target-triples (for [[fid alias :as k] (distinct (map pair-key joined-pairs))
-                                  :when (not (id-field? fid))
+                                  :let [hop (pair->hop k)
+                                        id? (id-field? fid)]
+                                  :when (or hop (not id?))
                                   :let [nm (:name (field-id->metadata fid))
                                         prop (uri/absolute-uri nm naming)
                                         target-var (get pair->target-var k)
                                         inter-var (get alias->intermediate-var alias)
-                                        hop (pair->hop k)
                                         path (join-path alias)]
                                   :when (and prop target-var path)]
                               (emit-optional-group
                                (concat path
                                        (when hop [(triple-pattern inter-var (:prop hop) (:var hop))])
-                                       [(triple-pattern (:var hop inter-var) prop target-var)])))
+                                       (when-not id? [(triple-pattern (:var hop inter-var) prop target-var)]))))
         _ (log/debugf "[mbql] Triples: fields=%d extras=%d join-fk=%d join-targets=%d"
                       (count triples-for-fields) (count triples-for-extras)
                       (count join-fk-triples) (count join-target-triples))
