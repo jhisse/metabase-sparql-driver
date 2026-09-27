@@ -862,7 +862,17 @@
                              :fields (mapv #(vector :expression %) names)
                              :expressions exprs})
             bind-order (map second (re-seq #"BIND\(.* AS \?(\w+)\)" sparql))]
-        (is (= (reverse names) bind-order))))))
+        (is (= (reverse names) bind-order))))
+    (testing "a custom column whose variable another column already uses fails clearly"
+      (is (thrown-with-msg? clojure.lang.ExceptionInfo #"Rename the custom column \"geboorte datum\""
+                            (@#'mbql/compile-stage {:source-table 100
+                                                    :fields [[:field 11 nil] [:expression "geboorte datum"]]
+                                                    :expressions {"geboorte datum" [:upper [:field 11 nil]]}})))
+      (is (thrown-with-msg? clojure.lang.ExceptionInfo #"its SPARQL variable \?x_y is already used"
+                            (@#'mbql/compile-stage {:source-table 100
+                                                    :fields [[:expression "x-y"] [:expression "x y"]]
+                                                    :expressions {"x-y" [:upper [:field 2 nil]]
+                                                                  "x y" [:lower [:field 2 nil]]}}))))))
 
 ;; ---------------------------------------------------------------------------
 ;; Lib-driven projection (the column-count-mismatch fix)

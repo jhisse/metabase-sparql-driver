@@ -602,8 +602,17 @@
   "Compile a stage's `:expressions` map to SPARQL `BIND(… AS ?name)` lines.
    Field/expression tokens resolve through [[var-for-token]]. Returns a vector of lines (one BIND per expression). An expression that
    references another comes after it: the legacy `:expressions` map loses
-   Lib's order past 8 entries, and a BIND cannot read a variable bound later."
-  [expressions field-id->var pair->target-var]
+   Lib's order past 8 entries, and a BIND cannot read a variable bound later.
+
+   Throws when a custom column's variable is already `taken` by another column
+   (names that differ only in characters [[sanitize-var-name]] replaces, e.g.
+   `my-col` and `my col`): a BIND onto a bound variable is a SPARQL error."
+  [expressions field-id->var pair->target-var taken]
+  (doseq [[v names] (group-by sanitize-var-name (keys expressions))
+          :when (or (taken v) (next names))]
+    (throw (ex-info (format "Rename the custom column %s: its SPARQL variable ?%s is already used by another column."
+                            (pr-str (first names)) v)
+                    {:type driver-api/qp.error-type.unsupported-feature})))
   (loop [todo (into (sorted-map) expressions) done #{} lines []]
     (if (empty? todo)
       lines
@@ -1100,7 +1109,11 @@
         ;; Custom-column BINDs. Emitted after the triples that bind the variables
         ;; they reference (direct fields, extras, joined targets) so the values are
         ;; available; placed before filters/GROUP BY/ORDER BY which may use them.
-        expr-bind-lines (compile-expressions expressions field-id->var pair->target-var)
+        expr-bind-lines (compile-expressions expressions field-id->var pair->target-var
+                                             (set (concat ["subject"]
+                                                          (vals field-id->var)
+                                                          (vals pair->target-var)
+                                                          (vals alias->intermediate-var))))
         _ (log/debugf "[mbql] Expression BINDs: %d" (count expr-bind-lines))
         filters (when filter-clause
                   (or (compile-basic-filter filter-clause field-id->var pair->target-var)
@@ -1331,7 +1344,8 @@
         ;; Custom columns defined on the derived stage, resolved against the inner
         ;; sub-SELECT's columns (by sanitized name) and any remap vars.
         expressions   (:expressions stage)
-        expr-bind-lines (compile-expressions expressions outer-field-id->var pair->target-var)
+        expr-bind-lines (compile-expressions expressions outer-field-id->var pair->target-var
+                                             (set passthrough-vars))
         result-vars   (cond
                         agg?           (vec (concat breakout-vars (keep :var agg-projections)))
                         reconciled     (vec (:vars reconciled))

@@ -463,6 +463,8 @@ The driver compiles a useful subset of Metabase **custom expressions** ("Custom 
 
 > **Note:** Enabling expressions exposes the *entire* expression palette in the UI. Anything outside the subset above (most date/time math, advanced math, window functions) raises a clear **"Unsupported expression function"** error instead of silently producing a wrong query. If you hit one you need, open an issue.
 
+Each custom column becomes a SPARQL variable named after it, with every character outside `A-Za-z0-9_` replaced by `_`. Two columns that end up with the same variable (for example a `my-col` property and a `my col` custom column) fail with a "Rename the custom column" error.
+
 Example — extract a number from a string and treat it numerically:
 
 ```text
