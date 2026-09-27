@@ -389,7 +389,10 @@
              (f [:case [[[:contains [:field "a" nil] "x" {:case-sensitive false}] 1]] {:default 0}]))))
     (testing "an unsupported function throws a clear error"
       (is (thrown-with-msg? clojure.lang.ExceptionInfo #"Unsupported expression function"
-                            (f [:totally-bogus [:field "a" nil]]))))))
+                            (f [:totally-bogus [:field "a" nil]])))
+      (is (= driver-api/qp.error-type.unsupported-feature
+             (try (f [:datetime-diff [:field "a" nil] [:field "b" nil] :year])
+                  (catch clojure.lang.ExceptionInfo e (:type (ex-data e)))))))))
 
 (deftest inner-var-for-ref-test
   (let [f @#'mbql/inner-var-for-ref]

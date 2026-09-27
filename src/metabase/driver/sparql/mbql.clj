@@ -592,7 +592,8 @@
           :text    (format "STR(%s)" (a (first args)))
           :case    (compile-case args field-id->var pair->target-var)
           (throw (ex-info (str "Unsupported expression function: " op)
-                          {:op op :clause clause})))))))
+                          {:type driver-api/qp.error-type.unsupported-feature
+                           :op op :clause clause})))))))
 
 (defn- collect-expression-tokens
   "Collect every `[:field …]`/`[:expression …]` token appearing inside the values
