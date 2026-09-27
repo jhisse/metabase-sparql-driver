@@ -492,43 +492,46 @@
 (defn- expr-arg
   "Compile one argument of an expression to a SPARQL expression string: a literal,
    a `[:value v]` wrapper, a `[:field …]`/`[:expression …]` token (→ `?var`), or a
-   nested operation. `resolve-token` maps a field/expression token to its var name."
-  [arg resolve-token]
+   nested operation. Tokens resolve through [[var-for-token]]."
+  [arg field-id->var pair->target-var]
   (cond
     (number? arg)  (str arg)
     (string? arg)  (uri/string-literal arg)
     (boolean? arg) (if arg "true" "false")
     (nil? arg)     null-term
-    (and (vector? arg) (= :value (first arg)))      (expr-arg (second arg) resolve-token)
+    (and (vector? arg) (= :value (first arg)))      (expr-arg (second arg) field-id->var pair->target-var)
     (and (vector? arg) (#{:field :expression} (first arg)))
-    (if-let [v (resolve-token arg)]
+    (if-let [v (var-for-token arg field-id->var pair->target-var)]
       (str "?" v)
       (throw (ex-info "Cannot resolve field/expression reference in expression"
                       {:token arg})))
-    (sequential? arg) (compile-expression arg resolve-token)
+    (sequential? arg) (compile-expression arg field-id->var pair->target-var)
     :else (throw (ex-info "Unsupported expression argument" {:arg arg}))))
 
 (defn- compile-case
-  "Compile a `[:case [[pred val]…] {:default d}]` clause to nested SPARQL `IF()`."
-  [args resolve-token]
+  "Compile a `[:case [[pred val]…] {:default d}]` clause to nested SPARQL `IF()`.
+   A predicate is a filter clause and compiles like one; a bare boolean column
+   ref is used as is."
+  [args field-id->var pair->target-var]
   (let [clauses (first args)
         opts    (second args)
         default (when (map? opts) (:default opts))
-        a       #(expr-arg % resolve-token)
-        b       #(compile-expression % resolve-token)]
-    (reduce (fn [else [pred val]]
-              (format "IF(%s, %s, %s)" (b pred) (a val) else))
+        a       #(expr-arg % field-id->var pair->target-var)
+        pred    #(if (and (vector? %) (#{:field :expression} (first %)))
+                   (a %)
+                   (compile-filter-expr % field-id->var pair->target-var))]
+    (reduce (fn [else [p val]]
+              (format "IF(%s, %s, %s)" (pred p) (a val) else))
             (if (some? default) (a default) null-term)
             (reverse clauses))))
 
 (defn- compile-expression
   "Compile a Metabase expression clause to a SPARQL expression string. Supports the
-   v1 function subset (arithmetic, string, regex, conditional, casts) plus the
-   comparison/logical operators used inside `:case` predicates. Throws `ex-info`
-   on an unsupported function so the query fails with a clear message rather than
-   silently dropping the column."
-  [clause resolve-token]
-  (let [a #(expr-arg % resolve-token)
+   v1 function subset (arithmetic, string, regex, conditional, casts). Throws
+   `ex-info` on an unsupported function so the query fails with a clear message
+   rather than silently dropping the column."
+  [clause field-id->var pair->target-var]
+  (let [a #(expr-arg % field-id->var pair->target-var)
         s #(format "STR(%s)" (a %))
         cast (fn [iri x] (format "%s(%s)" iri (a x)))]
     (if-not (sequential? clause)
@@ -578,17 +581,7 @@
           :float   (cast xsd-double (first args))
           :integer (cast xsd-integer (first args))
           :text    (format "STR(%s)" (a (first args)))
-          ;; comparison / logical operators (used inside :case predicates)
-          :=  (format "(%s = %s)"  (a (first args)) (a (second args)))
-          :!= (format "(%s != %s)" (a (first args)) (a (second args)))
-          :>  (format "(%s > %s)"  (a (first args)) (a (second args)))
-          :>= (format "(%s >= %s)" (a (first args)) (a (second args)))
-          :<  (format "(%s < %s)"  (a (first args)) (a (second args)))
-          :<= (format "(%s <= %s)" (a (first args)) (a (second args)))
-          :and (str "(" (str/join " && " (map a args)) ")")
-          :or  (str "(" (str/join " || " (map a args)) ")")
-          :not (str "(!" (a (first args)) ")")
-          :case (compile-case args resolve-token)
+          :case    (compile-case args field-id->var pair->target-var)
           (throw (ex-info (str "Unsupported expression function: " op)
                           {:op op :clause clause})))))))
 
@@ -607,11 +600,10 @@
 
 (defn- compile-expressions
   "Compile a stage's `:expressions` map to SPARQL `BIND(… AS ?name)` lines.
-   `token->var` resolves field/expression tokens to their SPARQL variable.
-   Returns a vector of lines (one BIND per expression). An expression that
+   Field/expression tokens resolve through [[var-for-token]]. Returns a vector of lines (one BIND per expression). An expression that
    references another comes after it: the legacy `:expressions` map loses
    Lib's order past 8 entries, and a BIND cannot read a variable bound later."
-  [expressions token->var]
+  [expressions field-id->var pair->target-var]
   (loop [todo (into (sorted-map) expressions) done #{} lines []]
     (if (empty? todo)
       lines
@@ -622,7 +614,7 @@
                                                {:expressions (keys todo)})))]
         (recur (dissoc todo ename)
                (conj done ename)
-               (conj lines (str "  BIND(" (compile-expression clause token->var)
+               (conj lines (str "  BIND(" (compile-expression clause field-id->var pair->target-var)
                                 " AS ?" (sanitize-var-name ename) ")")))))))
 
 (defn- compile-order-by
@@ -1108,7 +1100,7 @@
         ;; Custom-column BINDs. Emitted after the triples that bind the variables
         ;; they reference (direct fields, extras, joined targets) so the values are
         ;; available; placed before filters/GROUP BY/ORDER BY which may use them.
-        expr-bind-lines (compile-expressions expressions token->var)
+        expr-bind-lines (compile-expressions expressions field-id->var pair->target-var)
         _ (log/debugf "[mbql] Expression BINDs: %d" (count expr-bind-lines))
         filters (when filter-clause
                   (or (compile-basic-filter filter-clause field-id->var pair->target-var)
@@ -1339,8 +1331,7 @@
         ;; Custom columns defined on the derived stage, resolved against the inner
         ;; sub-SELECT's columns (by sanitized name) and any remap vars.
         expressions   (:expressions stage)
-        expr-token->var (fn [tok] (var-for-token tok outer-field-id->var pair->target-var))
-        expr-bind-lines (compile-expressions expressions expr-token->var)
+        expr-bind-lines (compile-expressions expressions outer-field-id->var pair->target-var)
         result-vars   (cond
                         agg?           (vec (concat breakout-vars (keep :var agg-projections)))
                         reconciled     (vec (:vars reconciled))

@@ -338,49 +338,49 @@
       (is (= "my_col" (f [:expression "my-col"] {} {}))))))
 
 (deftest compile-expression-test
-  (let [resolve-token (fn [tok]
-                        (if (= :expression (first tok))
-                          (@#'mbql/sanitize-var-name (second tok))
-                          (get {1 "a" 2 "b"} (second tok) (str (second tok)))))
-        f (fn [clause]
-            (let [expr (@#'mbql/compile-expression clause resolve-token)
+  (let [f (fn [clause]
+            (let [expr (@#'mbql/compile-expression clause {"a" "a" "b" "b"} {})
                   q    (str "SELECT * WHERE { BIND(" expr " AS ?x) }")]
               (is (nil? (tu/sparql-syntax-error q)) q)
               expr))]
     (testing "arithmetic"
-      (is (= "(?a + 1)" (f [:+ [:field 1 nil] 1])))
-      (is (= "(?a - ?b)" (f [:- [:field 1 nil] [:field 2 nil]])))
-      (is (= "(?a * 2)" (f [:* [:field 1 nil] 2]))))
+      (is (= "(?a + 1)" (f [:+ [:field "a" nil] 1])))
+      (is (= "(?a - ?b)" (f [:- [:field "a" nil] [:field "b" nil]])))
+      (is (= "(?a * 2)" (f [:* [:field "a" nil] 2]))))
     (testing "string functions coerce args with STR()"
-      (is (= "LCASE(STR(?a))" (f [:lower [:field 1 nil]])))
-      (is (= "STRLEN(STR(?a))" (f [:length [:field 1 nil]])))
-      (is (= "CONCAT(STR(?a), STR(?b))" (f [:concat [:field 1 nil] [:field 2 nil]]))))
+      (is (= "LCASE(STR(?a))" (f [:lower [:field "a" nil]])))
+      (is (= "STRLEN(STR(?a))" (f [:length [:field "a" nil]])))
+      (is (= "CONCAT(STR(?a), STR(?b))" (f [:concat [:field "a" nil] [:field "b" nil]]))))
     (testing "trim compiles to a REPLACE"
-      (is (= "REPLACE(STR(?a), \"^\\\\s+|\\\\s+$\", \"\")" (f [:trim [:field 1 nil]]))))
+      (is (= "REPLACE(STR(?a), \"^\\\\s+|\\\\s+$\", \"\")" (f [:trim [:field "a" nil]]))))
     (testing "regexextract compiles to a first-match REPLACE"
       (is (= (str "IF(REGEX(STR(?a), \"[-0-9.]+\", \"s\"), "
                   "REPLACE(STR(?a), \"^.*?([-0-9.]+).*$\", \"$1\", \"s\"), ?__null)")
-             (f [:regex-match-first [:field 1 nil] "[-0-9.]+"]))))
+             (f [:regex-match-first [:field "a" nil] "[-0-9.]+"]))))
     (testing "a missing value and a case without default are null, not \"\""
-      (is (= "COALESCE(?a, ?__null)" (f [:coalesce [:field 1 nil] nil])))
+      (is (= "COALESCE(?a, ?__null)" (f [:coalesce [:field "a" nil] nil])))
       (is (= "IF((?a > 5), \"big\", ?__null)"
-             (f [:case [[[:> [:field 1 nil] 5] "big"]]]))))
+             (f [:case [[[:> [:field "a" nil] 5] "big"]]]))))
     (testing "substring is 1-based SUBSTR"
-      (is (= "SUBSTR(STR(?a), 2, 3)" (f [:substring [:field 1 nil] 2 3])))
-      (is (= "SUBSTR(STR(?a), 2)" (f [:substring [:field 1 nil] 2]))))
+      (is (= "SUBSTR(STR(?a), 2, 3)" (f [:substring [:field "a" nil] 2 3])))
+      (is (= "SUBSTR(STR(?a), 2)" (f [:substring [:field "a" nil] 2]))))
     (testing "replace escapes quotes, newlines and regex metacharacters in find, and \\ and $ in the replacement"
       (is (= "REPLACE(STR(?a), \"a\\\"\\\\.b\\n\", \"\\\\$1\\\\\\\\\")"
-             (f [:replace [:field 1 nil] "a\".b\n" "$1\\"]))))
+             (f [:replace [:field "a" nil] "a\".b\n" "$1\\"]))))
     (testing "casts use the full xsd IRI constructor"
-      (is (= "<http://www.w3.org/2001/XMLSchema#double>(?a)" (f [:float [:field 1 nil]])))
-      (is (= "<http://www.w3.org/2001/XMLSchema#integer>(?a)" (f [:integer [:field 1 nil]]))))
+      (is (= "<http://www.w3.org/2001/XMLSchema#double>(?a)" (f [:float [:field "a" nil]])))
+      (is (= "<http://www.w3.org/2001/XMLSchema#integer>(?a)" (f [:integer [:field "a" nil]]))))
     (testing "coalesce / case"
-      (is (= "COALESCE(?a, \"x\")" (f [:coalesce [:field 1 nil] "x"])))
+      (is (= "COALESCE(?a, \"x\")" (f [:coalesce [:field "a" nil] "x"])))
       (is (= "IF((?a > 5), \"big\", \"small\")"
-             (f [:case [[[:> [:field 1 nil] 5] "big"]] {:default "small"}]))))
+             (f [:case [[[:> [:field "a" nil] 5] "big"]] {:default "small"}]))))
+    (testing "case predicates compile like filters, and a bare boolean column is used as is"
+      (is (= "IF(?a, 1, 0)" (f [:case [[[:field "a" nil] 1]] {:default 0}])))
+      (is (= "IF((CONTAINS(LCASE(STR(?a)), LCASE(\"x\"))), 1, 0)"
+             (f [:case [[[:contains [:field "a" nil] "x" {:case-sensitive false}] 1]] {:default 0}]))))
     (testing "an unsupported function throws a clear error"
       (is (thrown-with-msg? clojure.lang.ExceptionInfo #"Unsupported expression function"
-                            (f [:totally-bogus [:field 1 nil]]))))))
+                            (f [:totally-bogus [:field "a" nil]]))))))
 
 (deftest inner-var-for-ref-test
   (let [f @#'mbql/inner-var-for-ref]
