@@ -1115,15 +1115,6 @@
               (mapv #(lang-filter-line % lang)
                     (distinct (concat direct-lang-vars joined-lang-vars))))))
         _ (log/debugf "[mbql] LANG filter lines: %d" (count (or lang-filter-lines [])))
-        ;; Custom-column BINDs. Emitted after the triples that bind the variables
-        ;; they reference (direct fields, extras, joined targets) so the values are
-        ;; available; placed before filters/GROUP BY/ORDER BY which may use them.
-        expr-bind-lines (compile-expressions expressions field-id->var pair->target-var
-                                             (set (concat ["subject"]
-                                                          (vals field-id->var)
-                                                          (vals pair->target-var)
-                                                          (vals alias->intermediate-var))))
-        _ (log/debugf "[mbql] Expression BINDs: %d" (count expr-bind-lines))
         filters (when filter-clause
                   (or (compile-basic-filter filter-clause field-id->var pair->target-var)
                       []))
@@ -1134,6 +1125,17 @@
                                         aggregations))
         bucketed        (bucket-breakout breakout token->var)
         breakout-vars   (when agg? (:vars bucketed))
+        ;; Custom-column BINDs. Emitted after the triples that bind the variables
+        ;; they reference (direct fields, extras, joined targets) so the values are
+        ;; available; placed before filters/GROUP BY/ORDER BY which may use them.
+        expr-bind-lines (compile-expressions expressions field-id->var pair->target-var
+                                             (set (concat ["subject"]
+                                                          (vals field-id->var)
+                                                          (vals pair->target-var)
+                                                          (vals alias->intermediate-var)
+                                                          (vals (:aliases bucketed))
+                                                          (map :var agg-projections))))
+        _ (log/debugf "[mbql] Expression BINDs: %d" (count expr-bind-lines))
         ;; Non-aggregation SELECT var list: ?subject + direct fields + joined target vars.
         direct-select-vars (when-not agg?
                              (->> fields
@@ -1354,7 +1356,9 @@
         ;; sub-SELECT's columns (by sanitized name) and any remap vars.
         expressions   (:expressions stage)
         expr-bind-lines (compile-expressions expressions outer-field-id->var pair->target-var
-                                             (set passthrough-vars))
+                                             (set (concat passthrough-vars
+                                                          (vals (:aliases bucketed))
+                                                          (map :var agg-projections))))
         result-vars   (cond
                         agg?           (vec (concat breakout-vars (keep :var agg-projections)))
                         reconciled     (vec (:vars reconciled))

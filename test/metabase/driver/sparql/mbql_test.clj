@@ -877,7 +877,16 @@
                             (@#'mbql/compile-stage {:source-table 100
                                                     :fields [[:expression "x-y"] [:expression "x y"]]
                                                     :expressions {"x-y" [:upper [:field 2 nil]]
-                                                                  "x y" [:lower [:field 2 nil]]}}))))))
+                                                                  "x y" [:lower [:field 2 nil]]}})))
+      (testing "including the variables of date buckets and aggregations"
+        (is (thrown-with-msg? clojure.lang.ExceptionInfo #"Rename the custom column \"geboorte_datum_month\""
+                              (@#'mbql/compile-stage {:source-table 100
+                                                      :breakout [[:field 11 {:temporal-unit :month}]]
+                                                      :expressions {"geboorte_datum_month" [:upper [:field 2 nil]]}})))
+        (is (thrown-with-msg? clojure.lang.ExceptionInfo #"Rename the custom column \"ag_0\""
+                              (@#'mbql/compile-stage {:source-table 100
+                                                      :aggregation [[:count]]
+                                                      :expressions {"ag_0" [:upper [:field 2 nil]]}})))))))
 
 ;; ---------------------------------------------------------------------------
 ;; Lib-driven projection (the column-count-mismatch fix)
