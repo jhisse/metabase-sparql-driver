@@ -1,0 +1,8 @@
+# Nobel laureates (people and organisations), all six prizes
+SELECT (COUNT(DISTINCT ?laureate) AS ?laureates) WHERE {
+  VALUES (?prize ?category) {
+    (wd:Q38104 "Physics") (wd:Q44585 "Chemistry") (wd:Q80061 "Medicine")
+    (wd:Q37922 "Literature") (wd:Q35637 "Peace") (wd:Q47170 "Economics")
+  }
+  ?laureate wdt:P166 ?prize .
+}

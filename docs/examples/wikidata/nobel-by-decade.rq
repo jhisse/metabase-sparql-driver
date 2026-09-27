@@ -1,0 +1,12 @@
+# Nobel Prizes awarded per decade, by category (one row per laureate and award)
+SELECT ?decade ?category (COUNT(*) AS ?laureates) WHERE {
+  VALUES (?prize ?category) {
+    (wd:Q38104 "Physics") (wd:Q44585 "Chemistry") (wd:Q80061 "Medicine")
+    (wd:Q37922 "Literature") (wd:Q35637 "Peace") (wd:Q47170 "Economics")
+  }
+  ?laureate p:P166 ?award .
+  ?award ps:P166 ?prize ; pq:P585 ?date .
+  BIND (CONCAT(STR(xsd:integer(FLOOR(YEAR(?date) / 10) * 10)), "s") AS ?decade)
+}
+GROUP BY ?decade ?category
+ORDER BY ?decade

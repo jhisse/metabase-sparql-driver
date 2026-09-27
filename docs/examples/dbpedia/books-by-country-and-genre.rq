@@ -1,0 +1,17 @@
+# Books described in DBpedia, by country and literary genre (pairs with 30+ books)
+PREFIX dbo: <http://dbpedia.org/ontology/>
+PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
+
+SELECT (MIN(?countryLabel) AS ?country) (MIN(?genreLabel) AS ?genre) ?books WHERE {
+  {
+    SELECT ?c ?g (COUNT(DISTINCT ?book) AS ?books) WHERE {
+      ?book a dbo:Book ; dbo:country ?c ; dbo:literaryGenre ?g .
+    }
+    GROUP BY ?c ?g
+    HAVING (COUNT(DISTINCT ?book) >= 30)
+  }
+  ?c rdfs:label ?countryLabel . FILTER (LANG(?countryLabel) = "en")
+  ?g rdfs:label ?genreLabel . FILTER (LANG(?genreLabel) = "en")  # some genres carry two English labels
+}
+GROUP BY ?c ?g ?books
+ORDER BY DESC(?books)
