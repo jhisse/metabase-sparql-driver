@@ -304,6 +304,9 @@
         (with-redefs [shacl/metadata (fn [& _] (reset! fetched? true) shapes)]
           (is (nil? (database/shacl-shapes (shacl-db :metadata-sync-strategy "auto"))))
           (is (false? @fetched?)))))
+    (testing "the sync strategy ignores case and surrounding whitespace"
+      (with-redefs [shacl/metadata (fn [& _] shapes)]
+        (is (= shapes (database/shacl-shapes (shacl-db :metadata-sync-strategy " SHACL "))))))
     (testing "shacl-shapes: a blank SHACL URL counts as unset"
       (let [fetched? (atom false)]
         (with-redefs [shacl/metadata (fn [& _] (reset! fetched? true) shapes)]

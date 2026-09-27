@@ -13,7 +13,8 @@
    The public entry point is [[metadata]] which returns a fully-resolved
    intermediate description that [[metabase.driver.sparql.database]] turns
    into the maps Metabase's sync interface expects. Results are cached per
-   URL and language for 30 seconds so a single sync run only fetches once."
+   URL, language and fetch options for 30 seconds so a single sync run only
+   fetches once."
   (:require [clj-http.client :as http]
             [clojure.string :as str]
             [metabase.util.log :as log])

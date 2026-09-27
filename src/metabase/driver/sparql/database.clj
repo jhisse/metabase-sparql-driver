@@ -25,9 +25,11 @@
 
 (defn- sync-strategy
   "Return the metadata sync strategy of connection `details` as a keyword,
-   `:auto` when unset."
+   `:auto` when unset or blank. Case and surrounding whitespace are ignored,
+   since the setting is free text."
   [details]
-  (keyword (get details :metadata-sync-strategy "auto")))
+  (keyword (or (not-empty (str/lower-case (str/trim (str (:metadata-sync-strategy details)))))
+               "auto")))
 
 (defn- parse-schema-config
   "Parse the schema configuration JSON into `{:tables [...]}`, or return nil
@@ -326,21 +328,21 @@
    that does not list the class falls back to auto."
   [_ database table]
   (let [details        (:details database)
-        sync-strategy  (sync-strategy details)
+        strategy       (sync-strategy details)
         naming         (uri/naming-context details)
         hide-foreign?  (boolean (:hide-foreign-uris details))
         schema-config  (some-> details :schema-config parse-schema-config)
         full-name      (uri/absolute-uri (:name table) naming)
-        explicit-table (when (= sync-strategy :explicit)
+        explicit-table (when (= strategy :explicit)
                          (some #(when (= (:name %) full-name) %) (:tables schema-config)))]
     (cond
-      (= sync-strategy :none)
+      (= strategy :none)
       (describe-table-none table)
 
-      (= sync-strategy :shacl)
+      (= strategy :shacl)
       (describe-table-shacl database table)
 
-      (and (= sync-strategy :explicit) explicit-table)
+      (and (= strategy :explicit) explicit-table)
       (describe-table-explicit naming hide-foreign? table explicit-table)
 
       :else
@@ -412,18 +414,18 @@
    auto."
   [_ database]
   (let [details       (:details database)
-        sync-strategy (sync-strategy details)
+        strategy      (sync-strategy details)
         naming        (uri/naming-context details)
         hide-foreign? (boolean (:hide-foreign-uris details))
         schema-config (some-> details :schema-config parse-schema-config)]
     (cond
-      (= sync-strategy :none)
+      (= strategy :none)
       (describe-database-none)
 
-      (= sync-strategy :shacl)
+      (= strategy :shacl)
       (describe-database-shacl database)
 
-      (and (= sync-strategy :explicit) schema-config)
+      (and (= strategy :explicit) schema-config)
       (describe-database-explicit naming hide-foreign? database schema-config)
 
       :else

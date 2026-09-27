@@ -308,7 +308,7 @@ To enable it:
 2. Fill in **SHACL URL** with the URL of a Turtle document the Metabase container can reach (HTTPS recommended; plain HTTP is allowed for local testing).
 3. (Optional) Set **Default Language** so multilingual `sh:name` / `sh:description` labels resolve to the right language.
 
-The driver re-fetches the SHACL on every sync. The parsed result is cached for 30 seconds (per URL and Default Language), so the many lookups within one sync reuse a single fetch.
+The driver re-fetches the SHACL on every sync. The parsed result is cached for 30 seconds (per URL, Default Language and SHACL fetch limits), so the many lookups within one sync reuse a single fetch.
 
 ### SHACL → Metabase mapping
 
