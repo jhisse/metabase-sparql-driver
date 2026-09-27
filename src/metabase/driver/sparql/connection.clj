@@ -1,25 +1,17 @@
 (ns metabase.driver.sparql.connection
-  "SPARQL Connection for Metabase SPARQL Driver
-
-   This namespace manages connections to SPARQL endpoints.
-   Provides functions to test connectivity and manage connection details."
+  "Test that a SPARQL endpoint is reachable and detect the SPARQL version it
+   supports."
   (:require [metabase.util.log :as log]
             [metabase.driver.sparql.auth :as auth]
             [metabase.driver.sparql.execute :as execute]
             [metabase.driver.sparql.templates :as templates]))
 
 (defn can-connect?
-  "Checks if a connection to a SPARQL endpoint can be established.
-   
-   Parameters:
-     endpoint - SPARQL endpoint URL
-     options - Map of additional options:
-       :default-graph - URI of the default graph (optional)
-       :insecure? - Flag to ignore SSL certificate validation (optional, derived from :use-insecure)
-       :auth - clj-http auth fragment from `auth/http-options` (optional)
-   
-   Returns:
-     true if the connection is successful; throws an Exception (\"Connection failed: ...\") otherwise."
+  "Return true when `endpoint` answers the connection test query, or throw
+   \"Connection failed: …\" with the endpoint's error.
+
+   `options` takes `:default-graph`, `:insecure?` and `:auth` (from
+   `[[auth/http-options]]`)."
   [endpoint options]
   (log/info "Trying to connect to SPARQL endpoint:" endpoint)
   (let [[success result] (execute/execute-sparql-query endpoint (templates/connection-test-query) options)]
@@ -28,15 +20,12 @@
       (throw (Exception. (str "Connection failed: " result))))))
 
 (defn dbms-version
-  "Checks and returns the version of the SPARQL endpoint.
+  "Return the SPARQL version the endpoint of `database` supports, as
+   `{:version \"SPARQL 1.1\"}`.
 
-   Parameters:
-     _driver   - Driver instance (not used)
-     database  - Metabase Database instance
-
-   Returns:
-     A map with the key :version and the detected version as value, e.g. {:version \"SPARQL 1.1\"}.
-     If the version cannot be determined, returns {:version \"SPARQL 1.0\"}."
+   Both a BIND probe and a VALUES probe are run (both are SPARQL 1.1); when
+   neither succeeds, the errors are logged and the result is
+   `{:version \"SPARQL 1.0\"}`."
   [_driver database]
   (let [details          (:details database)
         endpoint         (:endpoint details)

@@ -1,10 +1,6 @@
 (ns metabase.driver.sparql.auth
-  "Authentication helpers for HTTP requests to the SPARQL endpoint.
-
-   Reads the auth-related connection-properties off a database `details` map
-   and returns a clj-http option fragment the caller can merge into its
-   request. Returns `{}` for the `none` mode (or when required fields are
-   blank), so callers can apply the result unconditionally."
+  "Build the clj-http authentication options (basic or bearer) for requests to
+   the SPARQL endpoint from a database's connection details."
   (:require [clojure.string :as str]))
 
 (defn- normalize-type
@@ -12,19 +8,14 @@
   (some-> auth-type str str/trim str/lower-case))
 
 (defn http-options
-  "Build a clj-http option fragment from the auth-related fields on a database
-   `details` map.
+  "Return the clj-http options that authenticate a request, from the auth
+   fields of a database `details` map.
 
-   Recognised keys on `details`:
-     :auth-type          – \"none\" (default), \"basic\", or \"bearer\".
-     :auth-username      – username for basic auth.
-     :auth-password      – password for basic auth.
-     :auth-bearer-token  – token sent as `Authorization: Bearer <token>`.
-
-   Returns:
-     {:basic-auth [user pass]}                   for basic
-     {:headers {\"Authorization\" \"Bearer …\"}} for bearer
-     {}                                          otherwise"
+   `:auth-type` (case- and whitespace-insensitive) \"basic\" gives
+   `{:basic-auth [user pass]}` and \"bearer\" gives an
+   `Authorization: Bearer <token>` header. \"none\", an unknown type, or a
+   blank required field gives `{}`, so callers can merge the result
+   unconditionally."
   [{:keys [auth-type auth-username auth-password auth-bearer-token]}]
   (case (normalize-type auth-type)
     "basic"

@@ -1,12 +1,10 @@
 (ns metabase.driver.sparql.conversion
-  "SPARQL Type Conversion for Metabase SPARQL Driver
-
-   This namespace handles conversion of SPARQL data types to Metabase types.
-   Provides functions to map SPARQL types to Metabase base types and convert values."
+  "Map SPARQL result terms to Metabase base types and parse their values into
+   Clojure numbers and booleans, per column and per cell."
   (:require [metabase.util.log :as log]))
 
 (def ^:private xsd
-  "Base URI of the XSD datatype namespace (same convention as shacl.clj)."
+  "Base URI of the XSD datatype namespace."
   "http://www.w3.org/2001/XMLSchema#")
 
 ;; Single source of truth for the XSD datatype families. The integer, float and
@@ -54,18 +52,10 @@
   (str xsd "boolean"))
 
 (defn sparql-type->base-type
-  "Converts a SPARQL type to a Metabase base type.
+  "Return the Metabase base type for a SPARQL term type (`\"uri\"`, `\"literal\"`,
+   `\"bnode\"`, …) and its optional `datatype` IRI.
 
-   A pure lookup, intentionally free of logging: determine-column-types calls
-   it once per distinct (type, datatype) pair per column, but callers are free
-   to call it per cell.
-
-   Parameters:
-     sparql-type - SPARQL type ('uri', 'literal', 'bnode', etc.)
-     datatype - Datatype URI (optional)
-
-   Returns:
-     Metabase base type (:type/URL, :type/Text, :type/Integer, etc.)"
+   A pure lookup with no logging, so it is safe to call once per cell."
   [sparql-type datatype]
   (cond
     ;; URIs are typed as :type/URL (a Text subtype)
@@ -91,13 +81,12 @@
     :else :type/Text))
 
 (defn convert-value
-  "Converts a SPARQL value to the appropriate Metabase type.
-   
-   Parameters:
-     binding - SPARQL binding containing :value, :type, and possibly :datatype
-   
-   Returns:
-     Value converted to the appropriate type."
+  "Return the value of a SPARQL result `binding` parsed by its datatype:
+   integers to Long, decimals and floats to Double, booleans to Boolean
+   (only `\"true\"` in any case is true).
+
+   Any other value, or a number that fails to parse (logged), stays the
+   original string."
   [binding]
   (let [value (:value binding)
         type-key (:type binding)
@@ -128,35 +117,25 @@
       :else value)))
 
 (def ^:private mixed-type-resolution
-  "When a column's observed base types differ, the most specific type that can
-   represent all of them. Keyed by the EXACT set of observed types: only the
-   two-type mixes listed here promote; any other combination — including every
-   3+-type mix, e.g. #{:type/Integer :type/Float :type/Text} — deliberately
-   degrades to Text,
-   the conservative type every cell value renders safely under."
+  "The type a column takes when its observed base types differ, keyed by the
+   exact set of observed types. Only the two-type mixes listed here promote;
+   any other combination (every 3+-type mix included) degrades to Text, the
+   type every cell value renders safely under."
   {#{:type/Integer :type/Float} :type/Float
    #{:type/Date :type/DateTime} :type/DateTime})
 
 (defn determine-column-types
-  "Determines column types from the result rows.
-   Scans every row instead of a fixed-size sample — a column whose first rows
-   are all null or all integers no longer misses a later type flip. The rows
-   are already fully materialized in memory; a single pass collects the distinct
-   (type, datatype) pairs per column (typically one or two), which are then
-   classified — so the cost is one traversal of the present cells, not a
-   datatype classification per cell.
+  "Return a map from each variable name in `vars` to the Metabase base type of
+   its values in `bindings`, `:type/Text` when it has none.
 
-   Trade-off of the full scan: the column type is now sensitive to every row,
-   so a saved question's result_metadata can flip between runs when the
-   underlying RDF data gains a divergent value — the price of correctness
-   over sampling stability.
+   Every row is scanned, not a sample, so a column whose first rows are null
+   or integers still catches a later type flip. One pass collects the distinct
+   (type, datatype) pairs per column, usually one or two, and only those are
+   classified.
 
-   Parameters:
-     vars - List of variable names (columns) in the result
-     bindings - List of bindings (rows) in the result
-
-   Returns:
-     Map associating variable names to Metabase base types"
+   The trade-off: the type depends on every row, so a saved question's
+   result_metadata can change between runs when the data gains a divergent
+   value."
   [vars bindings]
   (let [;; One pass over the rows, collecting per column key the distinct raw
         ;; (type, datatype) pairs — touching only the cells actually present,

@@ -1,17 +1,16 @@
 (ns metabase.driver.sparql.error
-  "Error handling for Metabase SPARQL Driver."
+  "Translate connection failures into the messages Metabase shows on the
+   database connection form."
   (:require [clojure.string :as str]
             [metabase.util.log :as log]))
 
 (defn humanize-connection-error-message
-  "Humanizes the connection error message.
+  "Turn the exception chain's `messages` (from `metabase.util/all-ex-messages`)
+   into a readable message or one of Metabase's known error keywords.
 
-   Parameters:
-     messages - Sequence of error message strings from the exception chain
-                (as produced by `metabase.util/all-ex-messages`).
-
-   Returns:
-     A user-friendly error message string or a known error keyword."
+   Matches HTTP statuses 401, 403, 404, 500, 502 and 503, refused connections
+   and unknown hosts anywhere in the chain; anything else returns the first
+   message unchanged."
   [messages]
   (log/debugf "[humanize-connection-error-message] - Received messages: %s" messages)
   (let [joined (str/join " -> " messages)]

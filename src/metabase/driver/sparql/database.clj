@@ -1,8 +1,7 @@
 (ns metabase.driver.sparql.database
-  "SPARQL Database for Metabase SPARQL Driver
-
-   This namespace handles the discovery and description of \"tables\" (RDF classes)
-   in SPARQL endpoints for Metabase."
+  "Metadata sync for SPARQL endpoints: describe the tables (RDF classes), their
+   fields (properties) and SHACL foreign keys, using the connection's sync
+   strategy (auto, explicit, SHACL or none)."
   (:require [metabase.util.log :as log]
             [clojure.string :as str]
             [metabase.util.json :as json]
@@ -12,22 +11,21 @@
             [metabase.driver.sparql.templates :as templates]
             [metabase.driver.sparql.uri :as uri]))
 
+;; This coercion only exists because Metabase's manifest spec
+;; (`build-drivers.lint-manifest-file/property-types`) rejects `integer`/`select`.
+;; If a future Metabase core accepts those types again, the limit/timeout fields
+;; can go back to `type: integer` and this helper can be removed.
 (defn- ->long
-  "Coerce a manifest connection-property value to a Long (manifest props are
-   type: string; legacy configs may hold a number). nil if blank/unparseable
-   so callers can fall back to defaults.
-
-   NOTE: this coercion only exists because Metabase's manifest spec
-   (`build-drivers.lint-manifest-file/property-types`) rejects `integer`/`select`.
-   If a future Metabase core accepts those types again, the limit/timeout fields
-   can go back to `type: integer` and this helper can be removed."
+  "Return the connection-property value `v` as a Long, or nil when it is nil,
+   blank or not an integer, so callers can fall back to defaults. Manifest
+   props are `type: string`; legacy configs may hold a number."
   [v]
   (when (some? v)
     (parse-long (str/trim (str v)))))
 
 (defn- parse-schema-config
-  "Parses the schema configuration JSON string.
-   Returns a map with a :tables key containing a list of table definitions, or nil if parsing fails or config is empty."
+  "Parse the schema configuration JSON into `{:tables [...]}`, or return nil
+   when it is blank or not valid JSON (the parse error is logged)."
   [config-str]
   (when-not (str/blank? config-str)
     (try
@@ -37,7 +35,7 @@
         nil))))
 
 (defn- build-pk-field
-  "Creates the synthetic primary-key field that represents the RDF subject of each
+  "Build the synthetic primary-key field for the RDF subject of each
    instance. Named `subject` to mirror the `?subject` variable used in the emitted
    SPARQL and to avoid collisions with shortened property URIs whose local name is
    `id` (a very common case once Default Graph stripping is in effect)."
@@ -49,17 +47,17 @@
    :database-position 0})
 
 (defn- build-field-from-uri
-  "Creates a field definition from a property URI.
+  "Build the field for the property `field-uri` at position `idx` + 1
+   (position 0 is the subject).
 
    `naming` (a [[uri/naming-context]]) shortens the URI when it matches the
    Default Graph or a configured namespace prefix, so the column name in
    Metabase is the short name (e.g. `naam`, `foaf__name`) instead of the
    full URI. The full URI is reconstructed at query-compile time.
 
-   `iri?` marks a property whose values are IRI nodes (discovered via the
-   `?isIri` projection of `class-properties-query`): it syncs as
-   `:database-type \"uri\"` — the same marker as the subject column — so
-   equality filters compile to `<iri>` terms (see `mbql/value->term`)."
+   `iri?` (default false) marks a property whose values are IRI nodes: it
+   syncs as `:database-type \"uri\"`, the same marker as the subject column,
+   so equality filters compile to `<iri>` terms."
   ([naming idx field-uri]
    (build-field-from-uri naming idx field-uri false))
   ([naming idx field-uri iri?]
@@ -70,7 +68,8 @@
     :database-position (inc idx)}))
 
 (defn- build-fields-from-explicit-config
-  "Builds field set from explicit schema configuration."
+  "Build the field set of an explicit-schema table: the `subject` key plus one
+  field per configured property, without foreign URIs when `hide-foreign?`."
   [naming hide-foreign? explicit-table]
   (let [pk-field     (build-pk-field)
         candidates   (cond->> (:fields explicit-table)
@@ -86,7 +85,9 @@
   (contains? #{"1" "true"} (get-in binding [:isIri :value])))
 
 (defn- build-fields-from-sparql-query
-  "Builds field set from SPARQL query results."
+  "Build the field set of a discovered class from the property query's
+  `bindings`: the `subject` key plus one field per property, without foreign
+  URIs when `hide-foreign?`."
   [naming hide-foreign? bindings]
   (let [pk-field   (build-pk-field)
         candidates (cond->> bindings
@@ -100,7 +101,7 @@
     (set (cons pk-field other-fields))))
 
 (defn- describe-table-none
-  "Handles describe-table when sync strategy is 'none'."
+  "Return `table` with no fields: the none strategy skips sync."
   [table]
   (log/info "Skipping table metadata sync for SPARQL database - sync strategy is 'none'")
   {:name (:name table)
@@ -108,7 +109,7 @@
    :fields #{}})
 
 (defn- describe-table-explicit
-  "Handles describe-table when sync strategy is 'explicit'."
+  "Return the fields listed for `table` in the explicit schema configuration."
   [naming hide-foreign? table explicit-table]
   (log/info "Using explicit schema configuration for table:" (:name table))
   {:name (:name table)
@@ -116,15 +117,16 @@
    :fields (build-fields-from-explicit-config naming hide-foreign? explicit-table)})
 
 (defn- fetch-class-properties
-  "Run the property-discovery query, retrying without the `?isIri` projection
-   when the endpoint *rejects the query itself* (kind `:query`).
+  "Run the property-discovery query for `class-uri` and return the
+   `[success result kind]` of [[execute/execute-sparql-query]], retrying
+   without the `?isIri` projection when the endpoint *rejects the query
+   itself* (kind `:query`).
 
-   The projection is SPARQL 1.1 and works on the engines we test against, but an
-   endpoint that refuses it would otherwise sync the table with zero fields —
-   the discovery query is all-or-nothing. Falling back to the pre-`?isIri` shape
-   keeps such an endpoint working exactly as it did before, minus the IRI
-   marker. Endpoint/transport failures are not retried: a second round-trip
-   would not fare better."
+   The projection is SPARQL 1.1 and works on the engines we test against, but
+   an endpoint that refuses it would otherwise sync the table with zero fields,
+   since the discovery query is all-or-nothing. The retry keeps such an
+   endpoint working, minus the IRI marker. Endpoint/transport failures are not
+   retried: a second round-trip would not fare better."
   [endpoint class-uri property-limit sample-limit options]
   (let [run (fn [detect-iri?]
               (execute/execute-sparql-query
@@ -141,7 +143,9 @@
           (run false)))))
 
 (defn- describe-table-auto
-  "Handles describe-table when sync strategy is 'auto' (or fallback)."
+  "Discover the properties of `table` by sampling its instances, capped by the
+  database's property limit (default 20) and sample limit (default 10000). A
+  failed query logs and returns `{:fields #{}}`."
   [database table]
   (let [details        (:details database)
         naming         (uri/naming-context details)
@@ -165,7 +169,9 @@
 ;; ---- SHACL-driven sync ------------------------------------------------------
 
 (defn- shacl-prop->field
-  "Convert one SHACL property descriptor into a Metabase TableMetadataField."
+  "Convert the SHACL property descriptor `prop` into a Metabase
+   TableMetadataField at position `idx` + 1, or return nil for a foreign
+   property when `hide-foreign?`."
   [naming hide-foreign? idx prop]
   (let [uri      (:property-uri prop)
         foreign? (uri/foreign-uri? uri naming)]
@@ -196,9 +202,9 @@
 (defn- shacl-shape->describe-table
   "Convert one SHACL shape into the map returned by `driver/describe-table`.
 
-   Properties are emitted in `sh:order` ascending, with `:property-uri` as a
-   tie-breaker so the output is deterministic; properties without `sh:order`
-   sort to the end."
+   Field positions follow `sh:order` ascending, with `:property-uri` as a
+   tie-breaker so they are deterministic; properties without `sh:order` come
+   last."
   [naming hide-foreign? {:keys [class-uri properties]}]
   (let [pk-field   (build-pk-field)
         candidates (cond->> properties
@@ -213,7 +219,7 @@
      :fields (set (cons pk-field fields))}))
 
 (defn- shape-for-table
-  "Find the SHACL shape whose class matches `table` (after URI reconstruction)."
+  "Return the SHACL shape whose class is the full URI of `table`, or nil."
   [shapes naming table]
   (let [full (uri/absolute-uri (:name table) naming)]
     (some #(when (= (:class-uri %) full) %) shapes)))
@@ -228,12 +234,10 @@
    :max-bytes          (some-> (:shacl-max-size-mb details) ->long (* 1024 1024))})
 
 (defn- shacl-shapes
-  "Fetch and cache SHACL shapes for `database`. Returns `nil` if no URL is
-   configured or the fetch fails; callers log a warning and degrade to an
-   empty result.
-   Language preference (for `sh:name`/`sh:description`) and the HTTP
-   timeout/size-cap settings are read from the connection details and
-   forwarded to the SHACL extractor."
+  "Return the SHACL shapes of `database` (cached by [[shacl/metadata]]), or
+   nil when no SHACL URL is configured or the document cannot be fetched or
+   parsed (the error is logged). The language for `sh:name`/`sh:description`
+   and the HTTP timeouts and size cap come from the connection details."
   [database]
   (when-let [url (-> database :details :shacl-url)]
     (let [details (:details database)
@@ -246,8 +250,12 @@
           nil)))))
 
 (defn fks
-  "Return the FK rows for `describe-fks` derived from the SHACL document
-   configured on `database`. Returns an empty seq for non-SHACL sync strategies."
+  "Return the foreign keys declared by `sh:class` in the SHACL document of
+   `database`, one `{:fk-table-name … :fk-column-name … :pk-table-name …
+   :pk-column-name \"subject\"}` map (schemas nil) per property. Empty for
+   non-SHACL sync strategies or when the shapes cannot be loaded. With
+   `:hide-foreign-uris`, an FK is dropped when its class, property or target
+   class is foreign."
   [database]
   (if-not (= :shacl (keyword (get-in database [:details :metadata-sync-strategy] "auto")))
     []
@@ -299,15 +307,11 @@
         {:name (:name table) :schema nil :fields #{(build-pk-field)}}))))
 
 (defn describe-table
-  "Describes the fields (properties) of an RDF class (SPARQL table).
+  "Return the fields of `table`, an RDF class whose `:name` may be a shortened
+   URI, as `{:name … :schema nil :fields #{…}}`.
 
-   Parameters:
-     _ - driver (not used)
-     database - Metabase Database instance
-     table - Table definition with :name containing the (possibly shortened) RDF class URI
-
-   Returns:
-     Map with :name, :schema, and :fields keys describing the table structure"
+   Uses the same sync strategy as [[describe-database]]; an explicit strategy
+   that does not list the class falls back to auto."
   [_ database table]
   (let [details        (:details database)
         sync-strategy  (keyword (get details :metadata-sync-strategy "auto"))
@@ -331,7 +335,7 @@
       (describe-table-auto database table))))
 
 (defn- build-table-from-config
-  "Builds a table definition from schema configuration."
+  "Build the table for a class listed in the explicit schema configuration."
   [naming table]
   (let [uri        (:name table)
         short-name (uri/shorten-uri uri naming)]
@@ -342,7 +346,8 @@
                       (str "RDF Class: " uri " (Explicit)"))}))
 
 (defn- build-table-from-sparql-result
-  "Builds a table definition from SPARQL query results."
+  "Build the table for a class found by the discovery query, with its instance
+  count in the description."
   [naming {:keys [uri count]}]
   {:name (uri/shorten-uri uri naming)
    :schema nil
@@ -350,13 +355,13 @@
    :description (str "RDF Class: " uri " (Instances: " count ")")})
 
 (defn- describe-database-none
-  "Handles describe-database when sync strategy is 'none'."
+  "Return no tables: the none strategy skips sync."
   []
   (log/info "Skipping metadata sync for SPARQL database - sync strategy is 'none'")
   {:tables #{}})
 
 (defn- describe-database-explicit
-  "Handles describe-database when sync strategy is 'explicit'."
+  "Return the tables listed in the explicit schema configuration."
   [naming hide-foreign? database schema-config]
   (log/info "Using explicit schema configuration for database:" (:name database))
   (let [tables (cond->> (:tables schema-config)
@@ -364,7 +369,8 @@
     {:tables (set (map #(build-table-from-config naming %) tables))}))
 
 (defn- describe-database-auto
-  "Handles describe-database when sync strategy is 'auto' (or fallback)."
+  "Discover the classes with the discovery query, capped by the database's
+  class limit (default 100). A failed query logs and returns no tables."
   [database]
   (let [details       (:details database)
         naming        (uri/naming-context details)
@@ -387,14 +393,11 @@
         {:tables #{}}))))
 
 (defn describe-database
-  "Discovers the available 'tables' (RDF classes) in the SPARQL endpoint.
+  "Return `{:tables #{…}}` with the RDF classes of `database`, one table per
+   class, found by its metadata sync strategy (auto, explicit, SHACL or none).
 
-   Parameters:
-     _ - driver (not used)
-     database - Metabase Database instance
-
-   Returns:
-     Map with the :tables key containing a set of table definitions."
+   An explicit strategy without a valid schema configuration falls back to
+   auto."
   [_ database]
   (let [details       (:details database)
         sync-strategy (keyword (get details :metadata-sync-strategy "auto"))

@@ -5,14 +5,15 @@
    - fetches and parses the document,
    - extracts shapes (one per RDF class / Metabase table),
    - extracts property shapes (one per Metabase column),
+   - flattens `sh:node` inheritance,
    - resolves foreign-key relationships declared via `sh:class`,
    - honors a small `metabase:` vocabulary for sync-time overrides
      (`hide`, `semanticType`, `displayValueProperty`).
 
    The public entry point is [[metadata]] which returns a fully-resolved
    intermediate description that [[metabase.driver.sparql.database]] turns
-   into the maps Metabase's sync interface expects. Results are cached
-   per-URL with a short TTL so a single sync run only fetches once."
+   into the maps Metabase's sync interface expects. Results are cached per
+   URL and language for 30 seconds so a single sync run only fetches once."
   (:require [clj-http.client :as http]
             [clojure.string :as str]
             [metabase.util.log :as log])
@@ -55,7 +56,10 @@
    "time"               :type/Time})
 
 (defn- term
-  "Tag an RDF4J `Value` as a small Clojure map keyed by `:type`."
+  "Convert the RDF4J value `v` into a map tagged by `:type`:
+   `{:type :iri :value …}`, `{:type :bnode :id …}`,
+   `{:type :literal :value … :datatype … :lang …}` (`:lang` nil when untagged)
+   or `{:type :unknown :value …}`."
   [^Value v]
   (cond
     (instance? IRI v)     {:type :iri :value (.stringValue v)}
@@ -73,14 +77,14 @@
 (def ^:private default-max-bytes (* 10 1024 1024))
 
 (defn fetch-shacl
-  "GET the SHACL document at `url`. Returns the response body as a string.
+  "Return the body of the SHACL document at `url` as a string, requested as
+   `text/turtle`.
 
    `opts` may supply `:connect-timeout-ms`, `:socket-timeout-ms` and
-   `:max-bytes`; each falls back to a built-in default. `http` URLs are
-   accepted alongside `https` so a local endpoint can be used while testing.
+   `:max-bytes`; each falls back to a built-in default (10 s, 30 s, 10 MB).
 
    Throws an `ex-info` on any non-200 response or when the body exceeds the
-   configured size cap."
+   size cap; connection errors and timeouts propagate from clj-http."
   ([url] (fetch-shacl url nil))
   ([url {:keys [connect-timeout-ms socket-timeout-ms max-bytes]}]
    (let [connect-ms (or connect-timeout-ms default-connect-timeout-ms)
@@ -111,7 +115,8 @@
 
 (defn parse-turtle
   "Parse Turtle `text` into a vector of `[s p o]` triples, where each term is a
-   small map (see [[term]])."
+   small map (see [[term]]). Relative IRIs resolve against `base-iri` (nil
+   means none). Throws the RDF4J parse exception on malformed Turtle."
   [text base-iri]
   (let [model (Rio/parse (StringReader. text) ^String (or base-iri "") RDFFormat/TURTLE
                          ^"[Lorg.eclipse.rdf4j.model.Resource;" no-contexts)]
@@ -142,7 +147,7 @@
   (first (get-in spo [subject pred-iri])))
 
 (defn- objects
-  "All objects for `subject`/`pred-iri`, or `nil` if none."
+  "Return all objects for `subject`/`pred-iri`, or nil if none."
   [spo subject pred-iri]
   (get-in spo [subject pred-iri]))
 
@@ -162,9 +167,10 @@
     :type/URL))
 
 (defn- coerce-semantic-type
-  "Accept either a literal like \"type/URL\" or `:type/URL` and return the
-   keyword (any other non-blank literal/IRI value is keywordized as-is), or
-   `nil` for blank input."
+  "Return the semantic-type keyword named by the literal or IRI `t`:
+   `\"type/URL\"` and `\":type/URL\"` both give `:type/URL`, and any other
+   non-blank value is keywordized as-is. nil when `t` is nil, blank or a
+   blank node."
   [t]
   (when t
     (let [s (when (or (literal? t) (iri? t)) (:value t))]
@@ -179,12 +185,9 @@
     (try (Long/parseLong (:value t)) (catch Exception _ nil))))
 
 (defn- pick-localized
-  "From a sequence of object terms (some literals, some IRIs), pick the best
-   string value for the configured `lang`. Preference order:
-     1. literal with `:lang` matching `lang`,
-     2. literal with no language tag,
-     3. first remaining literal.
-   Returns the string `:value`, or `nil` when no literal is available."
+  "Return the string value of the literal in `terms` that best fits `lang`:
+   one tagged `lang`, else an untagged one, else the first literal. nil when
+   `terms` holds no literal."
   [terms lang]
   (let [lits          (filter literal? terms)
         match-lang    (when-not (str/blank? lang)
@@ -194,9 +197,11 @@
     (some-> (or match-lang untagged any) :value)))
 
 (defn- property-shape
-  "Extract one property descriptor from the property-shape node `prop-node`.
-   `lang` is the configured default language tag (may be nil/blank) used to
-   pick the best `sh:name` / `sh:description` literal."
+  "Return the property descriptor (see [[shacl->metadata]]) of the
+   property-shape node `prop-node`, or nil when its `sh:path` is not a single
+   IRI (complex paths are not synced). `lang` (may be nil/blank) picks the
+   `sh:name` / `sh:description` literals, which are joined into
+   `:description`."
   [spo prop-node lang]
   (let [path        (single spo prop-node (str sh "path"))
         datatype    (single spo prop-node (str sh "datatype"))
@@ -242,8 +247,8 @@
        :hidden?           (literal-truthy? mb-hide)})))
 
 (defn- shape
-  "Extract one shape descriptor from the shape node `shape-node`. Returns nil
-   for shapes without an `sh:targetClass` (we only sync class-targeted shapes).
+  "Return the shape descriptor of `shape-node`, or nil for a shape without an
+   IRI `sh:targetClass` (only class-targeted shapes are synced).
 
    `:parent-shape-iris` carries the IRIs referenced via `sh:node` so that
    [[resolve-inheritance]] can flatten parent properties into the child."
@@ -265,12 +270,12 @@
        :properties        (vec (keep #(property-shape spo % lang) prop-nodes))})))
 
 (defn- resolve-inheritance
-  "For each shape that references parents via `sh:node`, recursively merge in
-   the parents' properties. Child wins for any property that shares a path
-   with a parent. Parent shapes that aren't themselves visible class-targeted
-   shapes (no `sh:targetClass`, flagged `metabase:hide`, or when `sh:node`
-   points at the target class IRI) are silently ignored. Cycles are
-   broken with a visited set."
+  "Return `shapes` with each shape's properties merged recursively with those
+   of the parents it references via `sh:node`. Child wins for any property
+   that shares a path with a parent. A parent that is not itself one of
+   `shapes` (no `sh:targetClass`, flagged `metabase:hide`, or an `sh:node`
+   pointing at a class IRI instead of a shape) is silently ignored. Cycles
+   are broken with a visited set."
   [shapes]
   (let [by-iri (into {} (for [s shapes :when (:node-iri s)] [(:node-iri s) s]))]
     (letfn [(collect-shape [visited s]
@@ -291,9 +296,9 @@
             shapes))))
 
 (defn- merge-shapes-by-class
-  "When multiple NodeShapes target the same class, merge their property lists
-   (on a property-URI conflict an arbitrary one wins — input order comes from
-   a hash set)."
+  "Merge the shapes that target the same class into one, with the union of
+   their properties (on a property-URI conflict an arbitrary one wins, since
+   input order comes from a hash set)."
   [shapes]
   (->> shapes
        (group-by :class-uri)
@@ -328,7 +333,9 @@
                      ...)}
 
    Shapes flagged `metabase:hide true` are pruned. Properties flagged
-   `metabase:hide true` are pruned from their parent shape. `lang` (a BCP-47
+   `metabase:hide true` are pruned from their parent shape. Properties
+   inherited via `sh:node` are flattened in, and shapes targeting the same
+   class are merged into one. `lang` (a BCP-47
    tag, may be blank) drives the language-preferred selection of
    `sh:name`/`sh:description` literals."
   [triples lang]
@@ -371,11 +378,11 @@
   value)
 
 (defn metadata
-  "Return the cached SHACL metadata for `url` resolved under language `lang`.
-   Fetches and parses if needed. `opts` is forwarded to [[fetch-shacl]] (HTTP
-   timeouts and size cap); it does not affect the parsed result, so the cache
-   key stays `[url lang]`. Because labels are resolved per language, a new
-   `lang` is a cache miss and refetches the document."
+  "Return the [[shacl->metadata]] shapes of the SHACL document at `url` under
+   language `lang`, fetching and parsing it unless `[url lang]` was cached in
+   the last 30 seconds. `opts` is forwarded to [[fetch-shacl]] (HTTP timeouts
+   and size cap) and is not part of the cache key. Fetch and parse errors
+   throw and are not cached."
   ([url lang] (metadata url lang nil))
   ([url lang opts]
    (let [k [url lang]]

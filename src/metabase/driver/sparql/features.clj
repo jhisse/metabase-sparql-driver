@@ -1,8 +1,6 @@
 (ns metabase.driver.sparql.features
-  "SPARQL Features Detection for Metabase SPARQL Driver
-
-   This namespace provides functions to detect supported features in SPARQL endpoints.
-   It implements tests for specific SPARQL features by executing test queries and analyzing results."
+  "Decide the driver features that depend on the endpoint. `:now` is probed
+   with a live query; the others answer without contacting the endpoint."
   (:require [metabase.util.log :as log]
             [metabase.driver.sparql.auth :as auth]
             [metabase.driver.sparql.execute :as execute]
@@ -10,9 +8,8 @@
 
 ;; Define multimethod database-supports? that uses the feature as dispatch value
 (defmulti database-supports?
-  "Checks if a specific feature is supported by the SPARQL endpoint.
-   
-   Dispatches on the feature keyword to determine the appropriate implementation."
+  "True when the SPARQL endpoint of `database` supports `feature`. Dispatches
+   on the feature keyword; features without a method are unsupported."
   (fn [_driver feature _database] feature))
 
 ;; Default implementation for unsupported features

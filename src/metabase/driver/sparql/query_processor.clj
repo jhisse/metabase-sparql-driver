@@ -1,13 +1,11 @@
 (ns metabase.driver.sparql.query-processor
-  "SPARQL Query Processor for Metabase SPARQL Driver
-
-   This namespace handles SPARQL query processing and result transformation.
-   Provides functions to extract metadata and convert results to the format expected by Metabase."
+  "Turn a decoded SPARQL JSON result (SELECT or ASK) into the column metadata
+   and rows Metabase's `respond` callback expects."
   (:require [metabase.driver-api.core :as driver-api]
             [metabase.driver.sparql.conversion :as conversion]))
 
 (defn- handle-ask
-  "Processes the result of an ASK SPARQL query and calls respond with metadata and rows."
+  "Pass an ASK `result` to `respond` as one row with one boolean column."
   [result respond]
   (let [metadata {:cols [{:name "boolean"
                           :display_name "boolean"
@@ -16,7 +14,8 @@
     (respond metadata rows)))
 
 (defn- handle-select
-  "Processes the result of a SELECT SPARQL query and calls respond with metadata and rows."
+  "Pass a SELECT `result` to `respond`, one column per variable, with each
+  column's type inferred from its values."
   [result respond]
   (let [vars (get-in result [:head :vars])
         bindings (get-in result [:results :bindings])
@@ -37,15 +36,10 @@
     (respond metadata rows)))
 
 (defn process-query-results
-  "Processes the results of a SPARQL query (SELECT or ASK); any other result
-   (a CONSTRUCT or DESCRIBE graph) throws.
-   
-   Parameters:
-     result - SPARQL query result in JSON format
-     respond - Function to call with metadata and rows
-   
-   Returns:
-     Result of the call to the respond function. For ASK queries, returns a single boolean column. For SELECT queries, returns columns and rows as usual."
+  "Pass a SELECT or ASK `result` to `respond` as Metabase columns and rows, and
+   return what `respond` returns.
+
+   Any other result (a CONSTRUCT or DESCRIBE graph) throws `invalid-query`."
   [result respond]
   (cond
     (and (map? result) (contains? result :boolean)) (handle-ask result respond)

@@ -1,5 +1,7 @@
 (ns metabase.driver.sparql.uri
-  "Shared URI helpers for the SPARQL driver."
+  "Shorten IRIs to Metabase table and field names and expand them back (via
+   the Default Graph and the `namespace-prefixes` setting), and render values
+   as escaped SPARQL string literals and IRIREFs."
   (:require [clojure.string :as str]
             [metabase.util.log :as log]))
 
@@ -20,11 +22,9 @@
   #"^[A-Za-z][A-Za-z0-9+.-]*:")
 
 (defn has-scheme?
-  "True when `s` is a string that already carries a URI scheme (`http:`,
-   `did:`, `URN:`, …) — any RFC-3986 scheme shape, case-insensitive via
-   [[scheme-pattern]]'s char class. Broader than [[iri-shaped?]], which answers
-   a different question (\"does this *value* look like an IRI absent any other
-   signal\")."
+  "True when `s` is a string that starts with a URI scheme in RFC 3986 shape
+   (`http:`, `did:`, `URN:`, …). Broader than [[iri-shaped?]], which decides
+   whether a value with no other signal should render as an IRI."
   [s]
   (boolean (and (string? s)
                 (re-find scheme-pattern s))))
@@ -34,7 +34,7 @@
   #"^[A-Za-z][A-Za-z0-9_-]*__")
 
 (defn- prefix-head
-  "The `prefix__` head a shortened name starts with."
+  "Return the `prefix__` head a shortened name starts with."
   [prefix]
   (str prefix prefix-separator))
 
@@ -72,9 +72,10 @@
       (log/warn msg))))
 
 (defn- parse-prefix-line
-  "Parse one non-blank `prefix=uri` line into a `[prefix uri]` pair, or nil
-   with a logged warning — a silently dropped line makes prefixed fields
-   vanish from sync with no diagnostic."
+  "Parse one non-blank `prefix=uri` line into a `[prefix uri]` pair. Returns
+   nil with a logged warning when the line is malformed, the prefix contains
+   `__`, or the URI has no scheme: a silently dropped line makes prefixed
+   fields vanish from sync with no diagnostic."
   [line]
   (if-let [[_ prefix uri] (re-matches #"([A-Za-z][A-Za-z0-9_-]*)\s*=\s*(\S+)" line)]
     (cond
@@ -91,13 +92,10 @@
         nil)))
 
 (defn- names-collide?
-  "True when two prefix names map to overlapping `prefix__` heads — i.e. one
-   name is the other followed by a single `_`. Because a prefix name cannot
-   itself contain `__`, this is the ONLY way one head can be a prefix of
-   another, and it makes the shortened `prefix__local` form ambiguous: the
-   extra `_` could belong to either the prefix or the local name (e.g. `a___x`
-   reads as both `a` + `_x` and `a_` + `x`). Rejecting such a pair keeps the
-   shortened name space unambiguous, so every name expands to exactly one URI."
+  "True when two prefix names map to overlapping `prefix__` heads, i.e. one
+   name is the other followed by a single `_`. Since a prefix name cannot
+   contain `__`, this is the only way one head can start another, and it makes
+   `prefix__local` ambiguous: `a___x` reads as both `a` + `_x` and `a_` + `x`."
   [a b]
   (or (= a (str b "_"))
       (= b (str a "_"))))
@@ -136,23 +134,24 @@
        vec))
 
 (defn naming-context
-  "Build the URI-naming context consumed by [[shorten-uri]] / [[absolute-uri]] /
-   [[foreign-uri?]] from connection details: the Default Graph base plus the
-   parsed namespace-prefix pairs."
+  "Build the naming context [[shorten-uri]], [[absolute-uri]] and
+   [[foreign-uri?]] take from connection `details`: `{:default-graph …
+   :prefixes …}`, the prefixes as the `[prefix uri]` pairs from
+   [[parse-prefixes]]."
   [details]
   {:default-graph (:default-graph details)
    :prefixes      (parse-prefixes (:namespace-prefixes details))})
 
 (defn- ->naming
-  "Normalize the `base` argument the naming fns accept: a [[naming-context]]
-   map, or — legacy form kept for tests/back-compat, no production caller —
-   a bare Default-Graph string (or nil)."
+  "Return `base` as a naming context: a [[naming-context]] map passes through,
+   and a bare Default-Graph string (or nil) is wrapped as `{:default-graph
+   base}`. Only tests pass the string form."
   [base]
   (if (map? base) base {:default-graph base}))
 
 (defn absolute-uri
-  "Reconstruct a full URI from a (possibly shortened) name. `base` is a
-   [[naming-context]] map (legacy: a bare Default-Graph string).
+  "Return the full URI for the (possibly shortened) name `nm`. `base` is a
+   [[naming-context]] map or a bare Default-Graph string.
 
    If `nm` already has a URI scheme it's returned unchanged. A `prefix__local`
    name whose prefix is registered expands to `<prefix-uri>local`; otherwise
@@ -187,12 +186,13 @@
               (str default-graph nm)))))))
 
 (defn shorten-uri
-  "Shorten `uri` for use as a Metabase table/field name. `base` is a
-   [[naming-context]] map (legacy: a bare Default-Graph string).
+  "Return `uri` shortened for use as a Metabase table or field name. `base` is
+   a [[naming-context]] map or a bare Default-Graph string; a non-string `uri`
+   is returned unchanged.
 
-   The Default Graph wins first: when `uri` starts with it, the prefix is
-   stripped (unchanged legacy behavior). Otherwise the registered namespace
-   prefixes are tried longest-URI-first, producing `prefix__local`.
+   The Default Graph wins first: when `uri` starts with it, that part is
+   stripped. Otherwise the registered namespace prefixes are tried
+   longest-URI-first, producing `prefix__local`.
 
    Falls back to the full `uri` whenever the short name could not round-trip
    through [[absolute-uri]]: a blank remainder, a Default-Graph tail that
@@ -226,7 +226,7 @@
             uri)))))
 
 (defn local-name
-  "The local name of `iri`: the part after its last `/` or `#`
+  "Return the local name of `iri`: the part after its last `/` or `#`
    (`https://example.org/Persoon` → `Persoon`), or the URI itself when that
    part is blank."
   [iri]
@@ -237,8 +237,8 @@
 
 (defn foreign-uri?
   "True when at least one known namespace is configured (the Default Graph or
-   a namespace prefix) and `uri` belongs to none of them. `base` is a
-   [[naming-context]] map (legacy: a bare Default-Graph string)."
+   a namespace prefix) and `uri` starts with none of them. `base` is a
+   [[naming-context]] map or a bare Default-Graph string."
   [uri base]
   (let [{:keys [default-graph prefixes]} (->naming base)
         known (cond-> (mapv second prefixes)
@@ -249,10 +249,10 @@
           (not-any? #(str/starts-with? uri %) known)))))
 
 (defn escape-string
-  "Escape characters that would break a SPARQL double-quoted string literal.
-   Returns the escaped body only; callers wrap it in `\"...\"` (or use
-   [[string-literal]]). Backslash is escaped first so the other escapes'
-   backslashes are not doubled again."
+  "Return `s` with the characters that would break a SPARQL double-quoted
+   string literal escaped (`\\`, `\"`, newline, carriage return, tab). Only the
+   body is returned; [[string-literal]] adds the quotes. Backslash is escaped
+   first so the other escapes' backslashes are not doubled again."
   [s]
   (-> (str s)
       (str/replace "\\" "\\\\")
@@ -262,18 +262,17 @@
       (str/replace "\t" "\\t")))
 
 (defn string-literal
-  "Render `v` as a complete SPARQL double-quoted string literal, escaping the
-   body via [[escape-string]] and wrapping it in quotes. The literal counterpart
-   to [[iri-ref]]."
+  "Render `v` as a complete SPARQL double-quoted string literal, escaped with
+   [[escape-string]]. The literal counterpart to [[iri-ref]]."
   [v]
   (str "\"" (escape-string v) "\""))
 
 (defn iri-shaped?
-  "Heuristic: a string that looks like an absolute IRI we should render as
-   `<...>` (via [[iri-ref]]) rather than a quoted literal. Accepts `http(s)://`
-   and `urn:` shapes; anything else stays a literal. Deliberately narrower than
-   [[absolute-uri]]'s scheme check — that one answers \"already has a scheme,
-   don't prepend the base\", which is a different question."
+  "True when `s` looks like an absolute IRI to render as `<...>` (via
+   [[iri-ref]]) rather than a quoted literal. Accepts `http(s)://` and `urn:`
+   shapes; anything else stays a literal. Deliberately narrower than
+   [[has-scheme?]]: a string such as `note:1` is more likely text than an
+   IRI."
   [s]
   (boolean
    (when (string? s)
@@ -281,11 +280,10 @@
 
 (defn iri-ref
   "Render `v` as a SPARQL IRIREF `<...>`. Percent-encodes every character the
-   IRIREF grammar forbids inside the brackets (the char class below is the
-   single source of truth) so a value cannot close the `<...>` early or
-   otherwise break/inject the query. IRIREF has no backslash escaping, so
-   percent-encoding is the only safe transform. A well-formed IRI passes
-   through unchanged."
+   IRIREF grammar forbids inside the brackets, so a value cannot close the
+   `<...>` early or otherwise break or inject into the query. IRIREF has no
+   backslash escaping, so percent-encoding is the only safe transform. A
+   well-formed IRI passes through unchanged."
   [v]
   (let [encoded (str/replace (str v)
                              #"[\x00-\x20<>\"{}|^`\\]"
