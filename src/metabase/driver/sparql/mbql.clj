@@ -1,7 +1,7 @@
 (ns metabase.driver.sparql.mbql
-  "Simple MBQL → SPARQL transpilation. Supports projection, filters, ordering,
-   implicit and explicit left joins, aggregations, and multi-stage (sub-SELECT)
-   queries."
+  "MBQL → SPARQL compilation: projection, filters, custom expressions, ordering,
+   implicit and explicit left joins, aggregations with temporal breakouts, and
+   multi-stage (sub-SELECT) queries."
   (:require
    [clojure.string :as str]
    [clojure.set :as set]
@@ -15,7 +15,8 @@
    (java.time.format DateTimeFormatter)))
 
 (defn- sanitize-var-name
-  "Return a SPARQL-safe variable name."
+  "Return `s` as a SPARQL variable name: characters outside `[A-Za-z0-9_]`
+   become `_`, a leading digit gets a `_` prefix, and a blank result is `v`."
   [s]
   (let [base (-> (str s)
                  (str/replace #"[^A-Za-z0-9_]" "_")
@@ -23,21 +24,23 @@
     (if (str/blank? base) "v" base)))
 
 (defn- field-token->id
-  "Extract Field ID from a [:field id opts] token."
+  "Return the id of a `[:field id opts]` token (an integer, or a column-name
+   string in a derived stage), or nil for any other value."
   [field-token]
   (when (and (vector? field-token)
              (= :field (first field-token)))
     (second field-token)))
 
 (defn- field-token->opts
-  "Extract the options map from a [:field id opts] token, if any."
+  "Return the options map of a `[:field id opts]` token, or nil."
   [field-token]
   (when (and (vector? field-token) (= :field (first field-token)))
     (let [opts (nth field-token 2 nil)]
       (when (map? opts) opts))))
 
 (defn- field-token->join-alias
-  "Return the `:join-alias` on a field token (the marker that the field is reached via an implicit join)."
+  "Return the `:join-alias` of a field token, or nil. A field with one is read
+   off the entity of a join (implicit or explicit), not off the row itself."
   [field-token]
   (:join-alias (field-token->opts field-token)))
 
@@ -49,7 +52,8 @@
   (and (vector? token) (= :expression (first token))))
 
 (defn- expression-token->name
-  "Return the expression name referenced by an `[:expression \"name\"]` token."
+  "Return the expression name referenced by an `[:expression \"name\"]` token,
+   or nil for any other token."
   [token]
   (when (expression-token? token) (second token)))
 
@@ -62,7 +66,7 @@
     (driver-api/field (driver-api/metadata-provider) field-id)))
 
 (defn- id-field?
-  "Return true if the field-id represents the synthetic subject column.
+  "True when `field-id` is the synthetic subject column.
 
    The only reliable signal is the reserved name `subject` that
    `build-pk-field` hardcodes. We must NOT use `:semantic-type :type/PK`:
@@ -82,7 +86,8 @@
                               :details)))
 
 (defn- database-default-language
-  "Read the Default Language (BCP-47 tag) from connection details. May be blank."
+  "Return the Default Language (BCP-47 tag) from the connection details; nil or
+   blank when unset."
   []
   (some-> (driver-api/database (driver-api/metadata-provider))
           :details
@@ -104,7 +109,8 @@
           var-name var-name (uri/escape-string lang) var-name))
 
 (defn- table-id->class-uri
-  "Resolve RDF class URI (table name) from :source-table."
+  "Return the RDF class URI of table `table-id`: its name, expanded to a full
+   URI through [[database-naming-context]]."
   [table-id]
   (let [nm  (some-> (driver-api/table (driver-api/metadata-provider) table-id)
                     :name)
@@ -113,9 +119,9 @@
     uri))
 
 (defn- collect-field-ids
-  "Collect the IDs of fields read off the row itself from
-   fields/order-by/filter/expressions. A `:join-alias` token is left out: it
-   reads the joined entity, through `pair->target-var`."
+  "Return a vector of the distinct ids of fields read off the row itself in the
+   stage's `:fields`, `:order-by`, `:filter` and `:expressions`. A `:join-alias`
+   token is left out: it reads the joined entity, through `pair->target-var`."
   [{:keys [fields order-by expressions] filter-clause :filter}]
   (let [direct-ids      #(set (keep field-token->id (remove field-token->join-alias %)))
         ids-from-fields (direct-ids fields)
@@ -134,8 +140,10 @@
     all-ids))
 
 (defn- var-for-token
-  "Resolve the SPARQL variable name for a `[:field id opts]` token.
+  "Return the SPARQL variable name (without `?`) for a `[:field id opts]` or
+   `[:expression \"name\"]` token, or nil when it cannot be resolved.
 
+   - An expression token maps to its sanitized name (the custom column's BIND).
    - If the token carries `:join-alias`, look up the joined target var via
      `pair->target-var` keyed by `[field-id alias source-field]` (a FK column's
      display value inside an explicit join), else by `[field-id alias]`.
@@ -156,7 +164,7 @@
                 (get field-id->var (sanitize-var-name fid)))))))
 
 (defn- condition->fk-ref
-  "Extract the FK-source field token from a join `:condition`. The condition is
+  "Return the FK-source field token of a join `:condition`, or nil. The condition is
    a legacy-MBQL filter clause, normally `[:= <fk> <target>]` (or wrapped in
    `[:and …]`, in which case we unwrap to the first `:=`).
 
@@ -206,7 +214,8 @@
                  (walk filter-clause)))))
 
 (defn- literal->sparql
-  "Convert a value to a SPARQL literal."
+  "Render `v` as a SPARQL literal: numbers and booleans bare, anything else as
+   a string literal via [[uri/string-literal]]. nil renders as an empty string."
   [v]
   (cond
     (string? v) (uri/string-literal v)
@@ -216,25 +225,24 @@
     :else (uri/string-literal v)))
 
 (defn- value->term
-  "Render a filter RHS value as a SPARQL term for an equality comparison.
+  "Render `v`, the right-hand value of an `:=`/`:!=` filter on `field-id`, as a
+   SPARQL term.
 
    An IRI-valued field — a foreign key (`:semantic-type :type/FK`) or a
    column whose values are IRI nodes (`:database-type \"uri\"`: the synthetic
    subject, auto-sync-discovered IRI properties, SHACL `sh:nodeKind sh:IRI`) —
    is bound to IRI *nodes*, so a scheme-carrying value must be emitted as
    `<iri>` (via [[uri/iri-ref]], which escapes it) or the comparison can never
-   match. The shape check is [[uri/has-scheme?]] — any scheme, case-insensitive
-   (`did:`, `HTTPS://`, …) — which is safe here because the field metadata
-   already says the values are IRIs. Everything else falls back to
-   [[literal->sparql]]; notably `:type/URL` columns stay literals, because
-   they hold `xsd:anyURI`-typed literal values, not IRI nodes.
+   match. Any scheme counts ([[uri/has-scheme?]]: `did:`, `HTTPS://`, …),
+   which is safe because the field metadata already says the values are IRIs.
+   Everything else falls back to [[literal->sparql]]; notably `:type/URL`
+   columns stay literals, because they hold `xsd:anyURI`-typed literal values,
+   not IRI nodes.
 
-   Only `:=`/`:!=` route through here: range ops (`:</:>/:between`) stay
-   literals by design — ordering comparisons on IRI terms are a SPARQL type
-   error, and a range filter over IRIs is not meaningful.
-
-   Known limitation: in a derived stage field refs are column-name strings,
-   so `field-id->metadata` returns nil and the value stays a literal."
+   Range filters keep literals: ordering comparisons on IRI terms are a SPARQL
+   type error."
+  ;; In a derived stage field refs are column-name strings, so
+  ;; `field-id->metadata` returns nil and the value stays a literal.
   [field-id v]
   (if (and (uri/has-scheme? v)
            (let [meta (field-id->metadata field-id)]
@@ -280,7 +288,8 @@
 (defn- temporal-clause->value
   "Resolve `[:absolute-datetime t unit]` / `[:relative-datetime n unit]` to a
    java.time value. A relative datetime is the start of `unit`, `n` units from
-   now (the same semantics as the SQL and Mongo drivers)."
+   now (the same semantics as the SQL and Mongo drivers); `:current` or a
+   missing unit gives the current time itself, untruncated."
   [[tag a b]]
   (case tag
     :absolute-datetime (if (string? a) (u.date/parse a) a)
@@ -333,9 +342,10 @@
     (format "?%s %s %s" var op term)))
 
 (defn- compile-filter-expr
-  "Compile a filter clause to a SPARQL boolean expression string. Throws
-   (via [[unsupported-filter!]]) for operators or custom-expression functions
-   it cannot translate."
+  "Compile a filter clause to a SPARQL boolean expression string, or nil for a
+   non-clause or an empty `:and`/`:or`. Throws (via [[unsupported-filter!]])
+   for operators, functions, date groupings or column references it cannot
+   translate."
   [filter-clause field-id->var pair->target-var]
   (when (sequential? filter-clause)
     (let [[op lhs rhs maybe-opts] filter-clause]
@@ -417,7 +427,8 @@
               (unsupported-filter! (str "the " (name op) " operator") filter-clause))))))))
 
 (defn- build-var-aliases
-  "Map field-id to sanitized var name from the original column name."
+  "Return a map from each of `field-ids` to its SPARQL variable: the sanitized
+   field name, or `f_<id>` when the field has no metadata."
   [field-ids]
   (let [aliases (into {}
                       (for [fid field-ids
@@ -439,7 +450,7 @@
 
 (defn- emit-optional-triple
   "Render a SPARQL `OPTIONAL { ?source <property> ?target . }` line.
-   Single-arity defaults the source var to the synthetic subject (`?subject`)."
+   The two-argument form reads off the synthetic subject (`?subject`)."
   ([property-uri target-var]
    (emit-optional-triple "subject" property-uri target-var))
   ([source-var property-uri target-var]
@@ -466,7 +477,8 @@
   (sanitize-var-name (str alias "__" (or field-name "f"))))
 
 (defn- ensure-triple-for-field
-  "Build OPTIONAL triple pattern for property and var."
+  "Return the OPTIONAL line that binds `?var-alias` to `property-uri` of
+   `?subject`."
   [property-uri var-alias]
   (let [triple (emit-optional-triple property-uri var-alias)]
     (log/debugf "[mbql] OPTIONAL triple: property=%s var=?%s" property-uri var-alias)
@@ -483,10 +495,10 @@
 ;; ---------------------------------------------------------------------------
 
 (def ^:private null-term
-  "SPARQL has no null literal. Integer division by zero is an evaluation
-   error, which leaves a BIND unbound, makes IF unbound and is skipped by
-   COALESCE: the same result a SQL NULL gives. Unlike a spare variable, no
-   column can bind it."
+  "SPARQL expression that stands in for null, which SPARQL has no literal for.
+   Integer division by zero is an evaluation error, which leaves a BIND
+   unbound, makes IF unbound and is skipped by COALESCE: the same result a SQL
+   NULL gives. Unlike a spare variable, no column can bind it."
   "(1/0)")
 
 (defn- regex-escape
@@ -499,7 +511,8 @@
 (defn- expr-arg
   "Compile one argument of an expression to a SPARQL expression string: a literal,
    a `[:value v]` wrapper, a `[:field …]`/`[:expression …]` token (→ `?var`), or a
-   nested operation. Tokens resolve through [[var-for-token]]."
+   nested operation. nil compiles to [[null-term]]. Tokens resolve through
+   [[var-for-token]]; throws when one does not resolve."
   [arg field-id->var pair->target-var]
   (cond
     (number? arg)  (str arg)
@@ -518,7 +531,7 @@
 (defn- compile-case
   "Compile a `[:case [[pred val]…] {:default d}]` clause to nested SPARQL `IF()`.
    A predicate is a filter clause and compiles like one; a bare boolean column
-   ref is used as is."
+   ref is used as is. Without a `:default`, unmatched rows get [[null-term]]."
   [args field-id->var pair->target-var]
   (let [clauses (first args)
         opts    (second args)
@@ -533,10 +546,11 @@
             (reverse clauses))))
 
 (defn- compile-expression
-  "Compile a Metabase expression clause to a SPARQL expression string. Supports the
-   v1 function subset (arithmetic, string, regex, conditional, casts). Throws
-   `ex-info` on an unsupported function so the query fails with a clear message
-   rather than silently dropping the column."
+  "Compile a Metabase expression clause to a SPARQL expression string. Covers
+   arithmetic, rounding, string functions, `regexextract` with a literal
+   pattern, `case`, `coalesce` and casts. Throws `ex-info` on an unsupported
+   function so the query fails with a clear message rather than silently
+   dropping the column."
   [clause field-id->var pair->target-var]
   (let [a #(expr-arg % field-id->var pair->target-var)
         s #(format "STR(%s)" (a %))
@@ -615,14 +629,15 @@
     (mapcat walk (vals (or expressions {})))))
 
 (defn- compile-expressions
-  "Compile a stage's `:expressions` map to SPARQL `BIND(… AS ?name)` lines.
-   Field/expression tokens resolve through [[var-for-token]]. Returns a vector of lines (one BIND per expression). An expression that
-   references another comes after it: the legacy `:expressions` map loses
-   Lib's order past 8 entries, and a BIND cannot read a variable bound later.
+  "Compile a stage's `:expressions` map to a vector of `BIND(… AS ?name)` lines,
+   one per expression. An expression that references another comes after it:
+   the legacy `:expressions` map loses Lib's order past 8 entries, and a BIND
+   cannot read a variable bound later. Throws on a reference cycle.
 
-   Throws when a custom column's variable is already `taken` by another column
-   (names that differ only in characters [[sanitize-var-name]] replaces, e.g.
-   `my-col` and `my col`): a BIND onto a bound variable is a SPARQL error."
+   Also throws when a custom column's variable is already `taken` by another
+   column, or shared by two custom columns whose names differ only in
+   characters [[sanitize-var-name]] replaces (`my-col` and `my col`): a BIND
+   onto a bound variable is a SPARQL error."
   [expressions field-id->var pair->target-var taken]
   (doseq [[v names] (group-by sanitize-var-name (keys expressions))
           :when (or (taken v) (next names))]
@@ -643,7 +658,8 @@
                                 " AS ?" (sanitize-var-name ename) ")")))))))
 
 (defn- compile-order-by
-  "Compile :order-by to ORDER BY."
+  "Compile a non-aggregation `order-by` to an `ORDER BY` clause string, or nil.
+   Terms whose token does not resolve to a variable are skipped."
   [order-by field-id->var pair->target-var]
   (when (seq order-by)
     (let [parts (for [[dir fld & _] order-by
@@ -801,9 +817,10 @@
      :aliases    (into {} (for [{:keys [tok var bind]} buckets :when bind] [(token->var tok) var]))}))
 
 (defn- compile-agg-order-by
-  "Compile `:order-by` for an aggregation query. Order terms may reference a
-   breakout field (`[:field …]`, resolved by `token->var`) or an aggregation by
-   index (`[:aggregation N]`)."
+  "Compile `order-by` for an aggregation query to an `ORDER BY` clause string,
+   or nil. Order terms may reference a breakout column (`[:field …]` or
+   `[:expression …]`, resolved by `token->var`) or an aggregation by index
+   (`[:aggregation N]`)."
   [order-by token->var]
   (when (seq order-by)
     (let [parts (for [[dir tok & _] order-by
@@ -853,6 +870,8 @@
    `annotate` middleware uses. Columns the stage compiler already covers reuse their
    variable; columns it missed (e.g. an FK-remap layered on another FK-remap target)
    are synthesized here so the driver's column count can never drift from Lib's.
+   A column it cannot resolve at all gets an unbound `?undefined_N` placeholder,
+   so its values come back nil.
 
    Returns `{:vars [...] :triples [...]}`."
   [expected-cols {:keys [field-id->var pair->target-var alias->intermediate-var
@@ -931,8 +950,8 @@
    the hops.
 
    Aggregation and breakout-only queries project only breakout columns and
-   aggregate expressions, with a `GROUP BY` over the breakouts. `[:count]`
-   compiles to `COUNT(DISTINCT ?subject)`.
+   aggregate expressions, with a `GROUP BY` over the breakouts. Throws when a
+   `:source-field` the stage would follow is not a foreign key.
 
    When `expected-cols` (Lib's authoritative column list) is supplied for a
    non-aggregation stage, the SELECT projection is reconciled against it so the
@@ -1284,10 +1303,11 @@
    (such as drilling on an aggregation value).
 
    The inner stage is compiled as a SPARQL sub-`SELECT`; the derived stage's
-   remap joins are emitted as OPTIONALs around it. The outer stage's own
-   `:aggregation`, `:breakout`, `:filter`, `:order-by`, and explicit `:fields`
-   projection are honored, resolved against the variables the sub-`SELECT`
-   already projects (no triple patterns are needed at this level).
+   remap joins are emitted as OPTIONALs after it. The outer stage's own
+   `:aggregation`, `:breakout`, `:expressions`, `:filter`, `:order-by`, and
+   explicit `:fields` projection are honored, resolved against the variables
+   the sub-`SELECT` already projects (no triple patterns are needed at this
+   level).
 
    When `expected-cols` (Lib's authoritative column list) is supplied for a
    non-aggregation stage, the SELECT projection is reconciled against it so the

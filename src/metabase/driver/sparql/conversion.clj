@@ -1,12 +1,10 @@
 (ns metabase.driver.sparql.conversion
-  "SPARQL Type Conversion for Metabase SPARQL Driver
-
-   This namespace handles conversion of SPARQL data types to Metabase types.
-   Provides functions to map SPARQL types to Metabase base types and convert values."
+  "Map SPARQL result terms to Metabase base types and parse their values into
+   Clojure numbers and booleans, per column and per cell."
   (:require [metabase.util.log :as log]))
 
 (def ^:private xsd
-  "Base URI of the XSD datatype namespace (same convention as shacl.clj)."
+  "Base URI of the XSD datatype namespace."
   "http://www.w3.org/2001/XMLSchema#")
 
 ;; Single source of truth for the XSD datatype families. The integer, float and
@@ -83,8 +81,9 @@
     :else :type/Text))
 
 (defn convert-value
-  "Convert a SPARQL result `binding` to a Clojure value by its datatype:
-   integers to Long, decimals and floats to Double, booleans to Boolean.
+  "Return the value of a SPARQL result `binding` parsed by its datatype:
+   integers to Long, decimals and floats to Double, booleans to Boolean
+   (only `\"true\"` in any case is true).
 
    Any other value, or a number that fails to parse (logged), stays the
    original string."
@@ -118,18 +117,16 @@
       :else value)))
 
 (def ^:private mixed-type-resolution
-  "When a column's observed base types differ, the most specific type that can
-   represent all of them. Keyed by the EXACT set of observed types: only the
-   two-type mixes listed here promote; any other combination — including every
-   3+-type mix, e.g. #{:type/Integer :type/Float :type/Text} — deliberately
-   degrades to Text,
-   the conservative type every cell value renders safely under."
+  "The type a column takes when its observed base types differ, keyed by the
+   exact set of observed types. Only the two-type mixes listed here promote;
+   any other combination (every 3+-type mix included) degrades to Text, the
+   type every cell value renders safely under."
   {#{:type/Integer :type/Float} :type/Float
    #{:type/Date :type/DateTime} :type/DateTime})
 
 (defn determine-column-types
-  "Return a map from each variable in `vars` to the Metabase base type of its
-   values in `bindings`.
+  "Return a map from each variable name in `vars` to the Metabase base type of
+   its values in `bindings`, `:type/Text` when it has none.
 
    Every row is scanned, not a sample, so a column whose first rows are null
    or integers still catches a later type flip. One pass collects the distinct

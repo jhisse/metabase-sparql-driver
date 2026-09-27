@@ -1,7 +1,6 @@
 (ns metabase.driver.sparql.execute
-  "SPARQL Query Execution for Metabase SPARQL Driver
-
-   This namespace provides functions to execute SPARQL queries via HTTP, handle responses, and process errors."
+  "POST SPARQL queries to the endpoint, decode the JSON response, and classify
+   failures so Metabase reports them as query or database errors."
   (:require [metabase.util.log :as log]
             [clj-http.client :as http]
             [metabase.util.json :as json]
@@ -70,10 +69,10 @@
   "Turn an HTTP `response` into `[true body]` with the decoded JSON, or into
    `[false message kind]`.
 
-   `kind` is `:query` when the endpoint rejected the query (a 400 parse
-   error) and `:db` for an endpoint problem: auth failure, 5xx, or a 200 whose
-   body is not JSON. The error body is truncated to
-   `[[max-error-body-chars]]`."
+   `kind` is `:db` for an endpoint problem (auth failure, 5xx, or a 200 whose
+   body is not JSON) and `:query` for any other status, taken as the endpoint
+   rejecting the query (e.g. a 400 parse error). The error body is truncated
+   to [[max-error-body-chars]]."
   [response]
   (if (= 200 (:status response))
     (if-let [body (parse-json-response response)]

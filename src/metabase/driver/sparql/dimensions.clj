@@ -16,8 +16,7 @@
 
    Coupling: this ns reaches into Metabase internals (`metabase.events.core`,
    the `:model/Dimension` / `:model/Field` / `:model/Database` toucan models,
-   and the raw `metabase_field` / `metabase_table` tables). If the driver API
-   ever gains a post-sync hook, this should migrate there."
+   and the raw `metabase_field` / `metabase_table` tables)."
   (:require
    [metabase.driver.sparql.shacl :as shacl]
    [metabase.driver.sparql.uri :as uri]
@@ -28,7 +27,8 @@
    [toucan2.core :as t2]))
 
 (defn- shacl-shapes
-  "Fetch SHACL shapes for `database`. Returns `nil` when no URL configured."
+  "Return the SHACL shapes of `database`, or nil when no SHACL URL is
+   configured or the document cannot be loaded (logged as a warning)."
   [database]
   (when-let [url (-> database :details :shacl-url)]
     (try
@@ -40,7 +40,8 @@
         nil))))
 
 (defn- field-for
-  "Look up a Field row by (database-id, short table name, short column name)."
+  "Return the active Field `{:id :name :table_id}` named `field-name` in the
+   table `table-name` of database `db-id` (both short names), or nil."
   [db-id table-name field-name]
   (t2/select-one [:model/Field :id :name :table_id]
                  {:select    [:f.id :f.name :f.table_id]
@@ -53,7 +54,9 @@
                               [:= :f.active true]]}))
 
 (defn- upsert-dimension!
-  "Idempotently set or update the external-remapping `Dimension` row for `field-id`."
+  "Create or update the external-remapping `Dimension` of `field-id` so it
+   shows `human-readable-field-id` under `display-name`. Writes nothing when
+   the row already matches."
   [field-id display-name human-readable-field-id]
   (if-let [existing (t2/select-one :model/Dimension :field_id field-id)]
     (when (or (not= :external (:type existing))
@@ -75,11 +78,11 @@
                  field-id human-readable-field-id))))
 
 (defn sync-display-dimensions!
-  "Walk SHACL shapes for `database` and upsert a `Dimension` row for every
-   property that declares `metabase:displayValueProperty` and points at an
-   `sh:class` target. No-op when no SHACL URL is configured. Tolerant of
-   target tables / fields that haven't been synced yet (those are skipped at
-   debug level — the next sync resolves them)."
+  "Upsert a `Dimension` row for every SHACL property of `database` that
+   declares `metabase:displayValueProperty` and points at an `sh:class`
+   target. No-op when no SHACL URL is configured or the document cannot be
+   loaded. Fields not synced yet are skipped at debug level (the next sync
+   resolves them); a failed upsert is logged and skipped."
   [database]
   (let [db-id  (:id database)
         naming (uri/naming-context (:details database))
@@ -138,6 +141,7 @@
           :when display-name]
     (t2/update! :model/Field (:id field) {:display_name display-name})))
 
+;; If the driver API ever gains a post-sync hook, this should migrate there.
 (derive ::sparql-sync-end :metabase/event)
 (derive :event/sync-metadata-end ::sparql-sync-end)
 

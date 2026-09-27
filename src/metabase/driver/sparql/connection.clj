@@ -1,8 +1,6 @@
 (ns metabase.driver.sparql.connection
-  "SPARQL Connection for Metabase SPARQL Driver
-
-   This namespace manages connections to SPARQL endpoints.
-   Provides functions to test connectivity and manage connection details."
+  "Test that a SPARQL endpoint is reachable and detect the SPARQL version it
+   supports."
   (:require [metabase.util.log :as log]
             [metabase.driver.sparql.auth :as auth]
             [metabase.driver.sparql.execute :as execute]
@@ -22,10 +20,12 @@
       (throw (Exception. (str "Connection failed: " result))))))
 
 (defn dbms-version
-  "Return the SPARQL version the endpoint supports, as `{:version \"SPARQL 1.1\"}`.
+  "Return the SPARQL version the endpoint of `database` supports, as
+   `{:version \"SPARQL 1.1\"}`.
 
-   1.1 is detected by running a BIND query and a VALUES query; when neither
-   answers, the version falls back to `{:version \"SPARQL 1.0\"}`."
+   Both a BIND probe and a VALUES probe are run (both are SPARQL 1.1); when
+   neither succeeds, the errors are logged and the result is
+   `{:version \"SPARQL 1.0\"}`."
   [_driver database]
   (let [details          (:details database)
         endpoint         (:endpoint details)

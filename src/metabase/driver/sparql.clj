@@ -1,10 +1,10 @@
 (ns metabase.driver.sparql
-  "SPARQL Driver for Metabase
+  "Register the `:sparql` driver, declare its feature flags, and implement
+   Metabase's driver multimethods by delegating to the
+   `metabase.driver.sparql.*` namespaces.
 
-   This driver allows Metabase to connect to SPARQL endpoints to query RDF data.
-   It implements a custom approach (not SQL/JDBC based) using HTTP requests
-   to communicate with SPARQL endpoints. The driver supports secure and insecure
-   connections with optional default graph specification."
+   The driver has no SQL/JDBC parent: every query is sent over HTTP to the
+   configured SPARQL endpoint."
   (:require [metabase.driver :as driver]
             [metabase.driver.sparql.auth :as auth]
             [metabase.driver.sparql.connection :as connection]

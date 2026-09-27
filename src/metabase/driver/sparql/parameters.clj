@@ -7,7 +7,9 @@
      - strings → `\"escaped\"`
      - IRIs (`http(s)://` or `urn:` values) → `<value>`
      - numbers / booleans → bare literal
-     - dates → `\"2024-01-15\"^^xsd:date` (`xsd:dateTime` when a time is given)
+     - dates → `\"2024-01-15\"^^<…XMLSchema#date>` (`#dateTime` when a time
+       is given)
+     - date ranges → the string literal `\"start/end\"`
      - sequential collections → comma-separated SPARQL terms (only valid inside
        `IN(...)` / `VALUES`; template authors must wrap accordingly)
      - `[[ … ]]` clauses → dropped when one of their parameters has no value;
@@ -23,11 +25,9 @@
    [metabase.util.log :as log]))
 
 (defn- unsupported-kind
-  "Return the name of a parameter value record we cannot meaningfully render in SPARQL,
-   or nil: Field Filters (SQL-shaped BETWEEN/IN clauses), referenced cards,
-   snippets, and referenced tables. Predicate fns live in
-   `metabase.driver.common.parameters` itself precisely so callers don't need
-   to import each record class."
+  "Return the user-facing name of a parameter value record we cannot render in
+   SPARQL, or nil: Field Filters (SQL-shaped BETWEEN/IN clauses), referenced
+   cards, snippets, and referenced tables."
   [v]
   (cond
     (params/FieldFilter? v)            "Field Filter"
@@ -36,8 +36,10 @@
     (params/ReferencedTableQuery? v)   "table"))
 
 (defn- record-value
-  "Pull the underlying scalar(s) out of a Metabase parameter value record.
-   Returns the value unchanged when `v` isn't a record we recognize."
+  "Return the underlying scalar(s) of a Metabase parameter value record, a
+   date range as the string `\"start/end\"`, or `v` unchanged when it isn't a
+   record we recognize. Throws `unsupported-feature` for the kinds
+   [[unsupported-kind]] names."
   [v]
   (cond
     (unsupported-kind v)
@@ -66,8 +68,9 @@
 (declare ->sparql-term)
 
 (defn- ->sparql-term
-  "Render a single parameter value as a SPARQL term. Returns nil when the value
-   is `no-value` / nil, which callers treat as a missing value."
+  "Render a single parameter value as a SPARQL term, or a sequential value as
+   comma-separated terms. Returns nil when the value is `no-value`, nil, or an
+   empty collection, which callers treat as a missing value."
   [v]
   (let [v (record-value v)]
     (cond
@@ -104,9 +107,10 @@
    tokens))
 
 (defn substitute-native-parameters
-  "Substitute `{{tag}}` placeholders in `inner-query`'s `:query` string using
-   the parameters / template-tags in `inner-query`, and drop `[[ … ]]` clauses
-   whose parameters have no value. Returns the updated inner-query map."
+  "Return `inner-query` with the `{{tag}}` placeholders in its `:query`
+   replaced by their parameter values, and `[[ … ]]` clauses dropped when one
+   of their parameters has no value. Any other tag without a value stays as
+   written, with a logged warning."
   [_driver inner-query]
   #_{:clj-kondo/ignore [:unresolved-var]}
   (let [param->value      (params.values/query->params-map inner-query)

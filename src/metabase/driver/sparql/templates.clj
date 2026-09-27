@@ -1,9 +1,7 @@
 (ns metabase.driver.sparql.templates
-  "SPARQL Queries for Metabase SPARQL Driver
-
-   This namespace contains predefined SPARQL queries used by the driver
-   for various operations such as connection testing and table discovery.
-   Each query is optimized for specific use cases."
+  "Fixed SPARQL queries the driver sends outside user queries: the connection
+   test, the version and `now()` probes, and class and property discovery for
+   sync."
   (:require [metabase.driver.sparql.uri :as uri]))
 
 (defn connection-test-query
