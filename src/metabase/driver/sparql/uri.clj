@@ -230,10 +230,7 @@
    (`https://example.org/Persoon` → `Persoon`), or the URI itself when that
    part is blank."
   [iri]
-  (let [last-part (last (or (re-seq #"[^/#]+$" iri)
-                            (re-seq #"[^/]+$" iri)
-                            (re-seq #"[^#]+$" iri)
-                            [iri]))]
+  (let [last-part (re-find #"[^/#]*$" iri)]
     (if (str/blank? last-part)
       iri
       last-part)))
