@@ -23,10 +23,12 @@
 
 (deftest process-response-classifies-errors-test
   (let [process #(@#'execute/process-response % "http://sparql.invalid/query")]
-    (testing "a 400 (query rejection) is kind :query"
-      (is (= :query (nth (process {:status 400 :body "parse error"}) 2))))
-    (testing "auth failures are kind :db"
-      (doseq [status [401 403 407]]
+    (testing "a 4xx query rejection is kind :query"
+      (doseq [status [400 413 414 422]]
+        (is (= :query (nth (process {:status status :body "parse error"}) 2))
+            (str "status " status))))
+    (testing "credential, endpoint URL, protocol and throttling errors are kind :db"
+      (doseq [status [401 403 404 405 406 407 408 410 415 426 429]]
         (is (= :db (nth (process {:status status :body "denied"}) 2))
             (str "status " status))))
     (testing "server-side 5xx is kind :db"

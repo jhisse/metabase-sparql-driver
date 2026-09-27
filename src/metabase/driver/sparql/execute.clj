@@ -89,14 +89,16 @@
       s)))
 
 (defn- ^:private status->error-kind
-  "Classify a non-200 HTTP status: auth failures and server-side errors are
-   endpoint/availability problems (`:db`), anything else is the endpoint
-   rejecting the query itself (`:query`, e.g. a 400 SPARQL parse error)."
+  "Classify a non-200 HTTP status: a 4xx is the endpoint rejecting the query
+   itself (`:query`, e.g. a 400 SPARQL parse error), unless it is about the
+   credentials, the endpoint URL, the protocol or the load. Those and every
+   other status are endpoint problems (`:db`)."
   [status]
-  (if (or (contains? #{401 403 407} status)
-          (and (int? status) (>= status 500)))
-    :db
-    :query))
+  (if (and (int? status)
+           (<= 400 status 499)
+           (not (contains? #{401 403 404 405 406 407 408 410 415 426 429} status)))
+    :query
+    :db))
 
 (defn- ^:private redirect-target
   "Return the `location` of a redirect resolved against `endpoint`, without
