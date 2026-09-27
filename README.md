@@ -167,7 +167,8 @@ Native SPARQL questions can use Metabase's `{{tag}}` template parameters. The dr
 | Date — `2024-01-15`                       | `"2024-01-15"^^xsd:date` (`xsd:dateTime` when a time is given) |
 | Date range                                | `"2024-01-01/2024-01-31"` (quoted string) |
 | Multi-value — `[A B C]`                   | `"A", "B", "C"` (each value rendered as above) — wrap with `IN(...)` / `VALUES` |
-| Missing optional                          | `{{tag}}` left in place + warning logged |
+| No value, inside `[[ … ]]`                | the whole `[[ … ]]` clause is dropped |
+| No value, anywhere else                   | the query fails: "missing required parameters" |
 
 Whitespace inside `{{ tag }}` is tolerated. Embedded `"`, `\`, newlines, tabs, and `$` in values are escaped safely; characters that cannot appear inside `<...>` are percent-encoded in IRIs. **Field Filters**, **Referenced Card Queries**, **Referenced Query Snippets**, and **Referenced Tables** are SQL-shaped template tag types and are not rendered to SPARQL — using them logs a warning and leaves the placeholder untouched so the endpoint surfaces a clear parse error.
 

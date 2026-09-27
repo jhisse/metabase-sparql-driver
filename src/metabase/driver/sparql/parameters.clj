@@ -10,15 +10,16 @@
      - dates → `\"2024-01-15\"^^xsd:date` (`xsd:dateTime` when a time is given)
      - sequential collections → comma-separated SPARQL terms (only valid inside
        `IN(...)` / `VALUES`; template authors must wrap accordingly)
-     - missing/optional values → placeholder is left untouched and a warning logged"
+     - `[[ … ]]` clauses → dropped when one of their parameters has no value;
+       a parameter without a value anywhere else fails the query"
   (:require
    [clojure.string :as str]
+   [metabase.driver-api.core :as driver-api]
    [metabase.driver.common.parameters :as params]
+   ^{:clj-kondo/ignore [:deprecated-namespace]} [metabase.driver.common.parameters.parse :as params.parse]
    [metabase.driver.common.parameters.values :as params.values]
    [metabase.driver.sparql.uri :as uri]
-   [metabase.util.log :as log])
-  (:import
-   (java.util.regex Matcher Pattern)))
+   [metabase.util.log :as log]))
 
 (defn- unsupported-record?
   "True for parameter value records we cannot meaningfully render in SPARQL:
@@ -60,14 +61,13 @@
 
 (defn- ->sparql-term
   "Render a single parameter value as a SPARQL term. Returns nil when the value
-   is `no-value` / nil / unsupported — callers should treat nil as 'leave the
-   placeholder in place'."
+   is `no-value` / nil / unsupported, which callers treat as a missing value."
   [v]
   (let [v (record-value v)]
     (cond
       (instance? metabase.driver.common.parameters.Date v) (date-literal (:s v))
       (or (nil? v) (= params/no-value v)) nil
-      (= :unsupported v)    (do (log/warnf "[sparql.params] Unsupported parameter type; placeholder left untouched")
+      (= :unsupported v)    (do (log/warnf "[sparql.params] Unsupported parameter type")
                                 nil)
       (sequential? v)       (let [terms (keep ->sparql-term v)]
                               (when (seq terms)
@@ -79,39 +79,41 @@
                                            (class v))
                                 (uri/string-literal v)))))
 
-(defn- substitute-one
-  "Replace every `{{tag}}` placeholder for `tag-name` in `query` with `term`.
-   Allows arbitrary whitespace inside the braces. Defends against regex
-   meta-chars in `tag-name` and against `$` / `\\` in `term`."
-  [query tag-name term]
-  (let [pat (re-pattern (str "\\{\\{\\s*" (Pattern/quote tag-name) "\\s*\\}\\}"))]
-    (str/replace query pat (Matcher/quoteReplacement term))))
+(defn- substitute
+  "Render parsed query tokens (strings, `Param`s, `Optional`s) as
+   `[fragments missing]`: the query fragments, and the names of parameters
+   without a value. An `[[ … ]]` clause is dropped whole when any of its
+   parameters is missing."
+  [param->value tokens]
+  (reduce
+   (fn [[acc missing] token]
+     (cond
+       (string? token)         [(conj acc token) missing]
+       (params/Param? token)   (if-let [term (->sparql-term (get param->value (:k token)))]
+                                 [(conj acc term) missing]
+                                 [acc (conj missing (:k token))])
+       (params/Optional? token) (let [[opt opt-missing] (substitute param->value (:args token))]
+                                  [(cond-> acc (empty? opt-missing) (into opt)) missing])
+       :else                   (throw (ex-info (str "The SPARQL driver cannot substitute " (pr-str token))
+                                               {:type driver-api/qp.error-type.unsupported-feature}))))
+   [[] []]
+   tokens))
 
 (defn substitute-native-parameters
   "Substitute `{{tag}}` placeholders in `inner-query`'s `:query` string using
-   the parameters / template-tags in `inner-query`. Returns the updated
-   inner-query map.
+   the parameters / template-tags in `inner-query`, and drop `[[ … ]]` clauses
+   whose parameters have no value. Returns the updated inner-query map.
 
-   Tags whose value is missing (`no-value` / nil) leave their placeholder
-   untouched and emit a warning; the SPARQL endpoint will then surface a clear
-   parse error rather than silently dropping the constraint."
+   A parameter without a value outside `[[ … ]]` fails the query, as in
+   Metabase's SQL drivers."
   [_driver inner-query]
   #_{:clj-kondo/ignore [:unresolved-var]}
-  (let [query        (:query inner-query)
-        param->value (params.values/query->params-map inner-query)
-        substituted
-        (reduce
-         (fn [q [k v]]
-           (let [tag-name (name k)]
-             (if-let [term (->sparql-term v)]
-               (substitute-one q tag-name term)
-               (do (log/warnf "[sparql.params] Parameter %s has no value; leaving {{%s}} in query"
-                              tag-name tag-name)
-                   q))))
-         query
-         param->value)]
-    (when-let [remaining (re-seq #"\{\{\s*([^{}\s][^{}]*?)\s*\}\}" substituted)]
-      (log/warnf "[sparql.params] Unresolved placeholders remain after substitution: %s"
-                 (vec (distinct (map second remaining)))))
-    (log/debugf "[sparql.params] Substituted query: %s" substituted)
-    (assoc inner-query :query substituted)))
+  (let [param->value      (params.values/query->params-map inner-query)
+        ;; false: SPARQL has no `--` comments to skip.
+        [parts missing]   (substitute param->value (params.parse/parse (:query inner-query) false))]
+    (when (seq missing)
+      (throw (ex-info (str "Cannot run query: missing required parameters: " (str/join ", " (distinct missing)))
+                      {:type driver-api/qp.error-type.missing-required-parameter})))
+    (let [substituted (str/join parts)]
+      (log/debugf "[sparql.params] Substituted query: %s" substituted)
+      (assoc inner-query :query substituted))))

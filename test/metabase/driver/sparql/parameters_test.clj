@@ -65,12 +65,23 @@
                                     :target [:variable [:template-tag "name"]]
                                     :value "Alice"}]})))))
 
-(deftest missing-optional-leaves-placeholder
-  (testing "An optional tag with no value leaves the `{{x}}` literal in place"
-    (is (= "SELECT * WHERE { ?s rdfs:label {{name}} }"
-           (subst {:query         "SELECT * WHERE { ?s rdfs:label {{name}} }"
-                   :template-tags {"name" {:name "name" :display-name "Name" :type :text}}
-                   :parameters    []})))))
+(deftest missing-value-fails-the-query
+  (testing "A tag with no value outside `[[ ]]` is a clear error, not a broken query"
+    (is (thrown-with-msg? clojure.lang.ExceptionInfo #"missing required parameters: name"
+                          (subst {:query         "SELECT * WHERE { ?s rdfs:label {{name}} }"
+                                  :template-tags {"name" {:name "name" :display-name "Name" :type :text}}
+                                  :parameters    []})))))
+
+(deftest optional-clause
+  (let [q    "SELECT * WHERE { ?s rdfs:label ?l [[FILTER(?l = {{name}})]] }"
+        tags {"name" {:name "name" :display-name "Name" :type :text}}]
+    (testing "dropped when its parameter has no value"
+      (is (= "SELECT * WHERE { ?s rdfs:label ?l  }"
+             (subst {:query q :template-tags tags :parameters []}))))
+    (testing "kept, brackets removed, when it has a value"
+      (is (= "SELECT * WHERE { ?s rdfs:label ?l FILTER(?l = \"Alice\") }"
+             (subst {:query q :template-tags tags
+                     :parameters [{:type "category" :target [:variable [:template-tag "name"]] :value "Alice"}]}))))))
 
 (deftest multi-value-renders-as-comma-list
   (testing "A vector of values renders as a comma-separated SPARQL term list"
