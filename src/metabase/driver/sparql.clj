@@ -112,6 +112,7 @@
 (defmethod driver/can-connect? :sparql
   [_driver details]
   (log/debugf "[can-connect?] - Testing connection for endpoint: %s" (uri/redact-userinfo (:endpoint details)))
+  (database/check-sync-settings! details)
   (connection/can-connect? (:endpoint details)
                            {:default-graph (:default-graph details)
                             :insecure?     (:use-insecure details)

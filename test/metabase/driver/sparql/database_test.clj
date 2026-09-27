@@ -84,7 +84,9 @@
                     (fn [_ query _]
                       (swap! queries conj query)
                       [false "Connection refused" :transport])]
-        (database/describe-table :sparql {:details details} {:name "Persoon"})
+        (is (thrown-with-msg? clojure.lang.ExceptionInfo #"Connection refused"
+                              (database/describe-table :sparql {:details details} {:name "Persoon"}))
+            "a failure throws, so Metabase keeps the table's fields instead of retiring them")
         (is (= 1 (count @queries)))))))
 
 (deftest shacl-prop->field-test
@@ -234,8 +236,14 @@
         (is (= #{"Persoon"}
                (set (map :name (:tables (database/describe-database
                                          :sparql {:details (assoc details :hide-foreign-uris true)}))))))))
-    (testing "an endpoint failure degrades to no tables instead of failing the sync"
-      (with-redefs [execute/execute-sparql-query (fn [_ _ _] [false "boom" :db])]
+    (testing "an endpoint failure throws, so Metabase keeps the synced tables instead of retiring them"
+      (with-redefs [execute/execute-sparql-query      (fn [_ _ _] [false "boom" :db])
+                    database/has-synced-tables?        (constantly true)]
+        (is (thrown-with-msg? clojure.lang.ExceptionInfo #"boom"
+                              (database/describe-database :sparql {:details details})))))
+    (testing "before the first successful sync it returns no tables, so that sync can finish"
+      (with-redefs [execute/execute-sparql-query      (fn [_ _ _] [false "boom" :db])
+                    database/has-synced-tables?        (constantly false)]
         (is (= {:tables #{}} (database/describe-database :sparql {:details details})))))))
 
 ;; ---------------------------------------------------------------------------
@@ -322,9 +330,27 @@
                                                            :shacl-socket-timeout socket
                                                            :shacl-max-size-mb size)))))
           (is (= (repeat 3 {:connect-timeout-ms nil :socket-timeout-ms nil :max-bytes nil}) @calls)))))
-    (testing "a failed SHACL fetch degrades to an empty schema instead of failing the sync"
-      (with-redefs [shacl/metadata (fn [& _] (throw (ex-info "Failed to fetch" {:status 500})))]
-        (is (= {:tables #{}} (database/describe-database :sparql (shacl-db))))
-        (is (empty? (database/fks (shacl-db))))
-        (is (= #{"subject"}
-               (set (map :name (:fields (database/describe-table :sparql (shacl-db) {:name "Persoon"}))))))))))
+    (testing "a failed SHACL fetch throws, so Metabase keeps the synced tables and fields"
+      (with-redefs [shacl/metadata              (fn [& _] (throw (ex-info "Failed to fetch" {:status 500})))
+                    database/has-synced-tables? (constantly true)]
+        (is (thrown-with-msg? clojure.lang.ExceptionInfo #"Failed to load SHACL document at https://example.org/shapes.ttl: Failed to fetch"
+                              (database/describe-database :sparql (shacl-db))))
+        (is (thrown? clojure.lang.ExceptionInfo
+                     (database/describe-table :sparql (shacl-db) {:name "Persoon"})))
+        (is (empty? (database/fks (shacl-db))) "FK sync only adds FKs, so an empty answer loses nothing")))
+    (testing "a document without shapes (an empty body parses as one) throws too"
+      (with-redefs [shacl/metadata              (fn [& _] [])
+                    database/has-synced-tables? (constantly true)]
+        (is (thrown-with-msg? clojure.lang.ExceptionInfo #"no shapes"
+                              (database/describe-database :sparql (shacl-db))))
+        (is (thrown-with-msg? clojure.lang.ExceptionInfo #"no shapes"
+                              (database/describe-table :sparql (shacl-db) {:name "Persoon"})))))
+    (testing "the shacl strategy without a SHACL URL throws instead of retiring every table"
+      (with-redefs [database/has-synced-tables? (constantly true)]
+        (is (thrown-with-msg? clojure.lang.ExceptionInfo #"needs a SHACL URL"
+                              (database/describe-database :sparql (shacl-db :shacl-url " "))))))
+    (testing "the connection test rejects the shacl strategy without a SHACL URL"
+      (is (thrown-with-msg? clojure.lang.ExceptionInfo #"needs a SHACL URL"
+                            (database/check-sync-settings! (:details (shacl-db :shacl-url "")))))
+      (is (nil? (database/check-sync-settings! (:details (shacl-db)))))
+      (is (nil? (database/check-sync-settings! {:metadata-sync-strategy "auto"}))))))
