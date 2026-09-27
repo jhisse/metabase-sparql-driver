@@ -314,6 +314,15 @@
   (when (literal? t)
     (try (Long/parseLong (:value t)) (catch Exception _ nil))))
 
+(defn- parse-decimal-literal
+  "Return the literal `t` as a BigDecimal, or nil when it is not a number.
+   `sh:order` is an `xsd:decimal`, so `2.5` and `1.0` are valid, and a double
+   would make close large values equal."
+  [t]
+  (when (literal? t)
+    (try (bigdec (str/trim (:value t)))
+         (catch NumberFormatException _ nil))))
+
 (defn- pick-localized
   "Return the string value of the literal in `terms` that best fits `lang`:
    one tagged `lang`, else an untagged one, else the first literal. nil when
@@ -361,7 +370,7 @@
        :base-type         base-type
        :semantic-type     sem-type
        :description       (when-not (str/blank? descr) descr)
-       :order             (parse-long-literal order-lit)
+       :order             (parse-decimal-literal order-lit)
        ;; Values are IRI nodes: an explicit sh:nodeKind sh:IRI, or an sh:class
        ;; target (FK). Synced as :database-type "uri" (see shacl-prop->field).
        :iri-kind?         (boolean (or (iri? target-cls)
@@ -452,7 +461,7 @@
                       :description \"…\" or nil
                       :fk-target-class \"…\" or nil
                       :display-value-property \"…\" or nil
-                      :order long or nil
+                      :order number or nil
                       :iri-kind? true|false
                       :database-required true|false
                       :lang-string? true|false

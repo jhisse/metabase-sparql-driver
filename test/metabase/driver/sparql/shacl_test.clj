@@ -77,6 +77,23 @@
       (is (= 2 (count props)))
       (is (every? (comp false? :database-required) props)))))
 
+(deftest decimal-order-test
+  (testing "sh:order is an xsd:decimal: 2.5 and 1.0 are read, not dropped"
+    (let [ttl   (str "@prefix sh: <http://www.w3.org/ns/shacl#> .\n"
+                     "@prefix ex: <https://example.org/> .\n"
+                     "ex:S a sh:NodeShape ; sh:targetClass ex:C ; sh:property ex:p1 , ex:p2 , ex:p3 , ex:p4 .\n"
+                     "ex:p1 a sh:PropertyShape ; sh:path ex:a ; sh:order 2.5 .\n"
+                     "ex:p2 a sh:PropertyShape ; sh:path ex:b ; sh:order \"1.0\" .\n"
+                     "ex:p3 a sh:PropertyShape ; sh:path ex:c ; sh:order \"first\" .\n"
+                     "ex:p4 a sh:PropertyShape ; sh:path ex:d ; sh:order 9007199254740993 .\n")
+          order (->> (shacl->metadata (shacl/parse-turtle ttl base) "")
+                     first :properties
+                     (into {} (map (juxt :property-uri :order))))]
+      (is (= {"https://example.org/a" 2.5M "https://example.org/b" 1.0M "https://example.org/c" nil
+              "https://example.org/d" 9007199254740993M}
+             order)
+          "exact: a double would turn 9007199254740993 into 9007199254740992"))))
+
 (deftest shacl->metadata-test
   (let [shapes  (shacl->metadata (shacl/parse-turtle turtle base) "nl")
         by-cls  (into {} (map (juxt :class-uri identity)) shapes)

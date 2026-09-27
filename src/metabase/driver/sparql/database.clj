@@ -219,7 +219,7 @@
   (let [pk-field   (build-pk-field)
         candidates (cond->> properties
                      hide-foreign? (remove #(uri/foreign-uri? (:property-uri %) naming))
-                     :always       (sort-by (juxt #(or (:order %) Long/MAX_VALUE)
+                     :always       (sort-by (juxt #(or (:order %) ##Inf)
                                                   :property-uri)))
         fields     (->> candidates
                         (map-indexed (fn [idx p] (shacl-prop->field naming hide-foreign? idx p)))

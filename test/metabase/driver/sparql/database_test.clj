@@ -132,16 +132,19 @@
            graph false
            {:class-uri (str graph "Persoon")
             :properties [{:property-uri (str graph "leeftijd") :base-type :type/Integer :order 2}
-                         {:property-uri (str graph "naam") :base-type :type/Text :order 1}]})
+                         {:property-uri (str graph "naam") :base-type :type/Text :order 1}
+                         {:property-uri (str graph "stad") :base-type :type/Text :order 1.5}
+                         {:property-uri (str graph "zonder") :base-type :type/Text}]})
           by-name (into {} (map (juxt :name identity)) fields)]
       (is (= "Persoon" name))
       (is (contains? by-name "subject"))
       (is (contains? by-name "naam"))
       (is (contains? by-name "leeftijd"))
       (is (true? (:pk? (by-name "subject"))))
-      ;; sh:order 1 (naam) sorts before sh:order 2 (leeftijd); positions skip the PK.
-      (is (< (:database-position (by-name "naam"))
-             (:database-position (by-name "leeftijd")))))))
+      ;; sh:order 1 (naam) < 1.5 (stad) < 2 (leeftijd), then no order (zonder);
+      ;; positions skip the PK.
+      (is (= ["naam" "stad" "leeftijd" "zonder"]
+             (->> fields (remove :pk?) (sort-by :database-position) (map :name)))))))
 
 (deftest describe-database-none-test
   (testing "the 'none' sync strategy discovers no tables"
