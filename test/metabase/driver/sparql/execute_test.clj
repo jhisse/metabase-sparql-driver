@@ -115,10 +115,13 @@
       (is (= {:query "ASK {}"} (:form-params opts)))
       (is (= :json (:accept opts)))
       (is (false? (:throw-exceptions opts)) "non-200s must reach process-response, not throw")
+      (is (str/starts-with? (get-in opts [:headers "User-Agent"]) "metabase-sparql-driver ")
+          "Wikidata rejects the HTTP client's default User-Agent")
       (is (= [true {:boolean true}] result))))
   (testing "no options: no default graph, TLS verification on, no credentials"
     (let [{:keys [opts]} (post-with {})]
-      (is (empty? (select-keys opts [:query-params :insecure? :basic-auth :headers])))))
+      (is (empty? (select-keys opts [:query-params :insecure? :basic-auth])))
+      (is (= ["User-Agent"] (keys (:headers opts))))))
   (testing "default graph travels as the default-graph-uri protocol parameter"
     (is (= {:default-graph-uri "https://example.org/"}
            (:query-params (:opts (post-with {:default-graph "https://example.org/"}))))))
@@ -127,8 +130,9 @@
   (testing "auth fragments from auth/http-options are merged into the request"
     (is (= ["alice" "secret"]
            (:basic-auth (:opts (post-with {:auth {:basic-auth ["alice" "secret"]}})))))
-    (is (= {"Authorization" "Bearer t0k"}
-           (:headers (:opts (post-with {:auth {:headers {"Authorization" "Bearer t0k"}}})))))))
+    (let [headers (:headers (:opts (post-with {:auth {:headers {"Authorization" "Bearer t0k"}}})))]
+      (is (= "Bearer t0k" (headers "Authorization")))
+      (is (contains? headers "User-Agent") "a bearer token does not replace the User-Agent"))))
 
 (deftest execute-sparql-query-transport-failure-test
   (testing "an exception from the HTTP client becomes [false message :transport]"

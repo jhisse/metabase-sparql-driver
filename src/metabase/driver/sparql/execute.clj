@@ -9,6 +9,11 @@
             [metabase.driver.sparql.auth :as auth]
             [metabase.driver.sparql.query-processor :as query-processor]))
 
+(def ^:private user-agent
+  "Sent with every query. Wikimedia endpoints (query.wikidata.org) answer 403
+   to the HTTP client's default User-Agent."
+  "metabase-sparql-driver (https://github.com/jhisse/metabase-sparql-driver)")
+
 (defn- ^:private create-http-options
   "Create HTTP options map for SPARQL query execution.
   
@@ -27,10 +32,11 @@
   (cond-> {:accept :json
            :cookie-policy :none
            :throw-exceptions false
-           :form-params {:query query}}
+           :form-params {:query query}
+           :headers {"User-Agent" user-agent}}
     insecure? (assoc :insecure? true)
     default-graph (assoc :query-params {:default-graph-uri default-graph})
-    (seq auth) (merge auth)))
+    (seq auth) (#(merge-with merge % auth))))
 
 (defn- ^:private parse-json-response
   "Parse JSON response body from SPARQL endpoint.
