@@ -248,6 +248,7 @@
 (def ^:private xsd-date     "<http://www.w3.org/2001/XMLSchema#date>")
 (def ^:private xsd-datetime "<http://www.w3.org/2001/XMLSchema#dateTime>")
 (def ^:private xsd-integer  "<http://www.w3.org/2001/XMLSchema#integer>")
+(def ^:private xsd-double   "<http://www.w3.org/2001/XMLSchema#double>")
 
 (def ^:private ^DateTimeFormatter xsd-datetime-format
   "xsd:dateTime lexical form. Seconds are always written: ISO_OFFSET_DATE_TIME
@@ -474,17 +475,6 @@
 ;; Custom expressions (Metabase "custom columns") → SPARQL
 ;; ---------------------------------------------------------------------------
 
-(def ^:private xsd "http://www.w3.org/2001/XMLSchema#")
-
-(defn- sparql-str-lit
-  "Render `s` as a SPARQL string literal, escaping backslashes and double quotes
-   (needed for regex patterns, which carry backslashes)."
-  [s]
-  (str "\"" (-> (str s)
-                (str/replace "\\" "\\\\")
-                (str/replace "\"" "\\\""))
-       "\""))
-
 (defn- regex-escape
   "Escape regex metacharacters so `s` matches literally inside a SPARQL REPLACE pattern."
   [s]
@@ -499,7 +489,7 @@
   [arg resolve-token]
   (cond
     (number? arg)  (str arg)
-    (string? arg)  (sparql-str-lit arg)
+    (string? arg)  (uri/string-literal arg)
     (boolean? arg) (if arg "true" "false")
     (nil? arg)     "\"\""
     (and (vector? arg) (= :value (first arg)))      (expr-arg (second arg) resolve-token)
@@ -533,7 +523,7 @@
   [clause resolve-token]
   (let [a #(expr-arg % resolve-token)
         s #(format "STR(%s)" (a %))
-        cast (fn [iri x] (format "<%s%s>(%s)" xsd iri (a x)))]
+        cast (fn [iri x] (format "%s(%s)" iri (a x)))]
     (if-not (sequential? clause)
       (a clause)
       (let [[op & args] clause]
@@ -563,18 +553,19 @@
           :replace (let [[txt find repl] args
                          find-str (if (string? find) find (second find))
                          repl-str (if (string? repl) repl (second repl))]
-                     (format "REPLACE(%s, \"%s\", %s)"
+                     ;; `\` and `$` are special in a REPLACE replacement string.
+                     (format "REPLACE(%s, %s, %s)"
                              (s txt)
-                             (regex-escape find-str)
-                             (sparql-str-lit (str/replace (str repl-str) "$" "\\$"))))
-          (:regex-match-first :regexextract)
+                             (uri/string-literal (regex-escape find-str))
+                             (uri/string-literal (str/replace (str repl-str) #"[\\$]" "\\\\$0"))))
+          :regex-match-first
           (let [[txt pat] args
                 pat-str (if (string? pat) pat (second pat))]
             (format "REPLACE(%s, %s, \"$1\")"
                     (s txt)
-                    (sparql-str-lit (str "^.*?(" pat-str ").*$"))))
-          (:float :double) (cast "double" (first args))
-          :integer (cast "integer" (first args))
+                    (uri/string-literal (str "^.*?(" pat-str ").*$"))))
+          :float   (cast xsd-double (first args))
+          :integer (cast xsd-integer (first args))
           :text    (format "STR(%s)" (a (first args)))
           ;; comparison / logical operators (used inside :case predicates)
           :=  (format "(%s = %s)"  (a (first args)) (a (second args)))

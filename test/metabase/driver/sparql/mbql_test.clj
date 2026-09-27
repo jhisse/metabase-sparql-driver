@@ -342,7 +342,11 @@
                         (if (= :expression (first tok))
                           (@#'mbql/sanitize-var-name (second tok))
                           (get {1 "a" 2 "b"} (second tok) (str (second tok)))))
-        f (fn [clause] (@#'mbql/compile-expression clause resolve-token))]
+        f (fn [clause]
+            (let [expr (@#'mbql/compile-expression clause resolve-token)
+                  q    (str "SELECT * WHERE { BIND(" expr " AS ?x) }")]
+              (is (nil? (tu/sparql-syntax-error q)) q)
+              expr))]
     (testing "arithmetic"
       (is (= "(?a + 1)" (f [:+ [:field 1 nil] 1])))
       (is (= "(?a - ?b)" (f [:- [:field 1 nil] [:field 2 nil]])))
@@ -359,6 +363,9 @@
     (testing "substring is 1-based SUBSTR"
       (is (= "SUBSTR(STR(?a), 2, 3)" (f [:substring [:field 1 nil] 2 3])))
       (is (= "SUBSTR(STR(?a), 2)" (f [:substring [:field 1 nil] 2]))))
+    (testing "replace escapes quotes, newlines and regex metacharacters in find, and \\ and $ in the replacement"
+      (is (= "REPLACE(STR(?a), \"a\\\"\\\\.b\\n\", \"\\\\$1\\\\\\\\\")"
+             (f [:replace [:field 1 nil] "a\".b\n" "$1\\"]))))
     (testing "casts use the full xsd IRI constructor"
       (is (= "<http://www.w3.org/2001/XMLSchema#double>(?a)" (f [:float [:field 1 nil]])))
       (is (= "<http://www.w3.org/2001/XMLSchema#integer>(?a)" (f [:integer [:field 1 nil]]))))
