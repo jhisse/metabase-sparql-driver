@@ -106,8 +106,12 @@
     (testing "an :aggregation-options wrapper is transparent"
       (is (= {:select "(COUNT(*) AS ?ag_0)" :var "ag_0"}
              (f [:aggregation-options [:count] {:name "c"}] 0 (constantly nil) true))))
-    (testing "unsupported aggregations compile to nil"
-      (is (nil? (f [:stddev [:field "amount" nil]] 0 (constantly "amount")))))))
+    (testing "an aggregation it cannot compile throws instead of dropping the column"
+      (is (thrown-with-msg? clojure.lang.ExceptionInfo #"does not support the stddev aggregation"
+                            (f [:stddev [:field "amount" nil]] 0 (constantly "amount"))))
+      (is (= driver-api/qp.error-type.unsupported-feature
+             (try (f [:count-where [:> [:field "amount" nil] 1]] 0 (constantly "amount"))
+                  (catch clojure.lang.ExceptionInfo e (:type (ex-data e)))))))))
 
 (deftest compile-filter-expr-test
   (let [f #(@#'mbql/compile-filter-expr % {"naam" "naam" "leeftijd" "leeftijd"} {})]
@@ -385,7 +389,10 @@
              (f [:case [[[:contains [:field "a" nil] "x" {:case-sensitive false}] 1]] {:default 0}]))))
     (testing "an unsupported function throws a clear error"
       (is (thrown-with-msg? clojure.lang.ExceptionInfo #"Unsupported expression function"
-                            (f [:totally-bogus [:field "a" nil]]))))))
+                            (f [:totally-bogus [:field "a" nil]])))
+      (is (= driver-api/qp.error-type.unsupported-feature
+             (try (f [:datetime-diff [:field "a" nil] [:field "b" nil] :year])
+                  (catch clojure.lang.ExceptionInfo e (:type (ex-data e)))))))))
 
 (deftest inner-var-for-ref-test
   (let [f @#'mbql/inner-var-for-ref]
