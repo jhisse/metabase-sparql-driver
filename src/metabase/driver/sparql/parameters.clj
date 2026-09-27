@@ -7,6 +7,7 @@
      - strings → `\"escaped\"`
      - IRIs (`http(s)://` or `urn:` values) → `<value>`
      - numbers / booleans → bare literal
+     - dates → `\"2024-01-15\"^^xsd:date` (`xsd:dateTime` when a time is given)
      - sequential collections → comma-separated SPARQL terms (only valid inside
        `IN(...)` / `VALUES`; template authors must wrap accordingly)
      - missing/optional values → placeholder is left untouched and a warning logged"
@@ -36,8 +37,6 @@
   [v]
   (cond
     (unsupported-record? v)              :unsupported
-    ;; Date — a single date string (`:s`).
-    (instance? metabase.driver.common.parameters.Date v)         (:s v)
     ;; DateRange / DateTimeRange — render as ISO "start/end".
     (or (instance? metabase.driver.common.parameters.DateRange v)
         (instance? metabase.driver.common.parameters.DateTimeRange v))
@@ -49,6 +48,14 @@
     (:value v)
     :else                                v))
 
+(defn- date-literal
+  "A Date parameter's `s` as a typed literal: a plain string never compares
+   equal to, or orders against, an xsd:date value. xsd:dateTime needs seconds,
+   which a `…THH:mm` value lacks."
+  [s]
+  (str (uri/string-literal (cond-> s (re-find #"T\d{2}:\d{2}$" s) (str ":00")))
+       "^^<http://www.w3.org/2001/XMLSchema#" (if (str/includes? s "T") "dateTime" "date") ">"))
+
 (declare ->sparql-term)
 
 (defn- ->sparql-term
@@ -58,6 +65,7 @@
   [v]
   (let [v (record-value v)]
     (cond
+      (instance? metabase.driver.common.parameters.Date v) (date-literal (:s v))
       (or (nil? v) (= params/no-value v)) nil
       (= :unsupported v)    (do (log/warnf "[sparql.params] Unsupported parameter type; placeholder left untouched")
                                 nil)

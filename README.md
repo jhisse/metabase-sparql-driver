@@ -164,7 +164,8 @@ Native SPARQL questions can use Metabase's `{{tag}}` template parameters. The dr
 | IRI-shaped (`http://`, `https://`, `urn:`) — `https://data.example/Item` | `<https://data.example/Item>` (IRI) |
 | Number — `25`                             | `25` (bare literal)          |
 | Boolean — `true`                          | `true` (bare literal)        |
-| Date / date range                         | `"2024-01-15"` / `"2024-01-01/2024-01-31"` (quoted string) |
+| Date — `2024-01-15`                       | `"2024-01-15"^^xsd:date` (`xsd:dateTime` when a time is given) |
+| Date range                                | `"2024-01-01/2024-01-31"` (quoted string) |
 | Multi-value — `[A B C]`                   | `"A", "B", "C"` (each value rendered as above) — wrap with `IN(...)` / `VALUES` |
 | Missing optional                          | `{{tag}}` left in place + warning logged |
 

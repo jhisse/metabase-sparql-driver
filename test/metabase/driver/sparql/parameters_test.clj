@@ -98,3 +98,17 @@
                    :parameters    [{:type "category"
                                     :target [:variable [:template-tag "x"]]
                                     :value "$1 backslash\\here"}]})))))
+
+(deftest date-parameter-is-typed
+  (letfn [(date [value]
+            (subst {:query         "SELECT * WHERE { ?s ex:d ?d FILTER(?d > {{d}}) }"
+                    :template-tags {"d" {:name "d" :display-name "D" :type :date}}
+                    :parameters    [{:type   "date/single"
+                                     :target [:variable [:template-tag "d"]]
+                                     :value  value}]}))]
+    (testing "a date compares as xsd:date, not as a plain string"
+      (is (= "SELECT * WHERE { ?s ex:d ?d FILTER(?d > \"2005-01-01\"^^<http://www.w3.org/2001/XMLSchema#date>) }"
+             (date "2005-01-01"))))
+    (testing "a date with a time is an xsd:dateTime, seconds added"
+      (is (= "SELECT * WHERE { ?s ex:d ?d FILTER(?d > \"2005-01-01T10:30:00\"^^<http://www.w3.org/2001/XMLSchema#dateTime>) }"
+             (date "2005-01-01T10:30"))))))
