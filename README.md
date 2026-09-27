@@ -43,21 +43,30 @@ This driver represents RDF classes as tables and properties as columns, allowing
 
 ## :world_map: A tour with Wikidata
 
+Native SPARQL, maps, variables and dashboards on the largest open knowledge graph.
+
+| Setting                | Value                                                       |
+|:-----------------------|:------------------------------------------------------------|
+| SPARQL Endpoint        | `https://query.wikidata.org/sparql`                         |
+| Default Graph URI      | *(empty)*                                                   |
+| Metadata Sync Strategy | `none`                                                      |
+| Example queries        | [`docs/examples/wikidata`](docs/examples/wikidata)          |
+
 ### 1. Connect
 
-Add a database, pick **SPARQL**, and enter `https://query.wikidata.org/sparql` as the endpoint. Under the advanced options, set **Metadata Sync Strategy** to `none`: Wikidata is too large to sample, and its items use `wdt:P31` instead of `rdf:type`, so the query builder has no tables to offer there. Everything below is written in SPARQL.
+Add a database, pick **SPARQL**, and fill in the settings above. Wikidata is too large to sample, and its items use `wdt:P31` instead of `rdf:type`, so the query builder has no tables to offer there: this tour is written in SPARQL.
 
 ![Connection form for Wikidata](./images/wikidata/connection.webp)
 
 ### 2. Ask in SPARQL
 
-Open a new native query and write SPARQL. Wikidata's prefixes (`wd:`, `wdt:`, `p:`…) are predefined by the endpoint. Numeric columns such as `?latitude` and `?longitude` come back typed, so a pin map works right away: [`heritage-map.rq`](docs/examples/wikidata/heritage-map.rq) plots all the World Heritage Sites.
+Wikidata's prefixes (`wd:`, `wdt:`, `p:`…) are predefined by the endpoint. Numeric columns come back typed, so `?latitude` and `?longitude` feed a pin map right away. Query: [`heritage-map.rq`](docs/examples/wikidata/heritage-map.rq).
 
 ![Native SPARQL query with a pin map of World Heritage Sites](./images/wikidata/native-query-map.webp)
 
 ### 3. Add a variable
 
-A `{{country}}` tag turns into a filter widget, and the driver renders its value as an escaped SPARQL literal (see [Native Query Parameters](#native-query-parameters)). Here [`heritage-in-country.rq`](docs/examples/wikidata/heritage-in-country.rq) shows Iceland's three sites.
+A `{{country}}` tag turns into a filter widget, and the driver renders its value as an escaped SPARQL literal (see [Native Query Parameters](#native-query-parameters)). Here it shows Iceland's three sites. Query: [`heritage-in-country.rq`](docs/examples/wikidata/heritage-in-country.rq).
 
 ![Native SPARQL query with a country variable set to Iceland](./images/wikidata/native-parameter.webp)
 
@@ -65,54 +74,43 @@ A `{{country}}` tag turns into a filter widget, and the driver renders its value
 
 Save the questions and put them on a dashboard. A dashboard filter mapped to the `{{country}}` variable drives the country map, as in the dashboard at the top of this page.
 
-## :bulb: Try with DBpedia
+## :books: A tour with DBpedia
 
-- Endpoint URL: `https://dbpedia.org/sparql`
-- Default Graph: `http://dbpedia.org`
+`PREFIX` declarations, typed dates, `ASK` and charts on the structured side of Wikipedia.
 
-![DBpedia Connection](./images/sparql-connection.png)
+| Setting                | Value                                                       |
+|:-----------------------|:------------------------------------------------------------|
+| SPARQL Endpoint        | `https://dbpedia.org/sparql`                                |
+| Default Graph URI      | `http://dbpedia.org`                                        |
+| Metadata Sync Strategy | `none` (or `auto` to sample classes for the query builder)  |
+| Example queries        | [`docs/examples/dbpedia`](docs/examples/dbpedia)            |
 
-### Select Query Example
+### 1. Connect
 
-```sparql
-PREFIX dbr: <http://dbpedia.org/resource/>
-PREFIX dbo: <http://dbpedia.org/ontology/>
-PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
+Add a database, pick **SPARQL**, and fill in the settings above. The Default Graph URI names the graph DBpedia keeps its data in.
 
-SELECT DISTINCT ?scientist ?name ?birthDate ?deathDate
-WHERE {
-  ?scientist a dbo:Scientist ;
-             dbo:nationality dbr:Brazil ;
-             rdfs:label ?name .
-  OPTIONAL { ?scientist dbo:birthDate ?birthDateRaw }
-  OPTIONAL { ?scientist dbo:deathDate ?deathDateRaw }
-  BIND(STRDT(?birthDateRaw, <http://www.w3.org/2001/XMLSchema#date>) AS ?birthDate)
-  BIND(STRDT(?deathDateRaw, <http://www.w3.org/2001/XMLSchema#date>) AS ?deathDate)
-  FILTER(LANG(?name) = "pt")
-}
-ORDER BY DESC(?birthDate) (LANG(?name) = "pt")
-LIMIT 30
-```
+![Connection form for DBpedia](./images/dbpedia/connection.webp)
 
-![DBpedia Select Query](./images/select-query-example.png)
+### 2. Ask in SPARQL
 
-### Ask Query Example
+`STRDT(…, xsd:date)` turns DBpedia's date strings into dates, which Metabase then formats, sorts and filters as dates. Query: [`brazilian-scientists.rq`](docs/examples/dbpedia/brazilian-scientists.rq).
 
-```sparql
-PREFIX dbr: <http://dbpedia.org/resource/>
-PREFIX dbo: <http://dbpedia.org/ontology/>
-PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
+![Native SPARQL query listing Brazilian scientists with birth and death dates](./images/dbpedia/native-query-table.webp)
 
-ASK { dbr:Albert_Einstein a dbo:Scientist }
-```
+### 3. Ask a yes/no question
 
-![DBpedia Ask Query](./images/ask-query-example.png)
+An `ASK` query returns one `boolean` column. Query: [`einstein-is-scientist.rq`](docs/examples/dbpedia/einstein-is-scientist.rq).
 
-## :camera: Screenshots
+![ASK query answering true](./images/dbpedia/ask-query.webp)
 
-![AgroVoc SPARQL Example - Concepts by Language](./images/sparql-example-agrovoc-concepts-by-language.png)
+### 4. Chart it
 
-![DBpedia SPARQL Example - Books by Country by Genre](./images/sparql-example-books-by-country-by-genre.png)
+Aggregate in SPARQL and pick a visualization: here, books by literary genre, stacked by country. Query: [`books-by-country-and-genre.rq`](docs/examples/dbpedia/books-by-country-and-genre.rq).
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="./images/dbpedia/chart-dark.webp">
+  <img alt="Stacked bar chart of DBpedia books by literary genre and country" src="./images/dbpedia/chart-light.webp">
+</picture>
 
 ## :arrows_counterclockwise: Automatic Type Conversion
 
