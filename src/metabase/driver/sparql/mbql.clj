@@ -778,7 +778,9 @@
    any other token through `token->var`, and `:aliases` lets a later stage find a
    bucket by the raw column name Lib still uses."
   [breakout token->var]
-  (let [bucket-key (juxt field-token->id (comp :temporal-unit field-token->opts) field-token->join-alias)
+  ;; Keyed by the raw var, not the field id: two paths to one field (a joined column
+  ;; and a FK display value inside the same join) resolve to different vars.
+  (let [bucket-key (juxt token->var (comp :temporal-unit field-token->opts))
         buckets    (for [tok  breakout
                          :let [raw  (token->var tok)
                                unit (:temporal-unit (field-token->opts tok))]
@@ -1211,7 +1213,7 @@
         joined-field-vars (->> fields
                                (filter field-token->join-alias)
                                (group-by (juxt field-token->id field-token->join-alias))
-                               (into {} (map (fn [[k toks]] [k (vec (distinct (map token->var toks)))]))))
+                               (into {} (map (fn [[k toks]] [k (mapv token->var toks)]))))
         ;; When Lib's expected columns are known, reconcile the SELECT against them so
         ;; the driver's column count/order can never drift from the `annotate` middleware.
         reconciled  (when (and expected-cols (not agg?))

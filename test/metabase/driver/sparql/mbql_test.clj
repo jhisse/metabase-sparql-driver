@@ -620,7 +620,30 @@
                                      [{:id 1} {:id 10 :lib/join-alias "P"} {:id 10 :lib/join-alias "P"}])]
             (is (= ["subject" "P__label" "P__kent__label"] vars))
             (is (str/includes? sparql (str "?P_subject <" base "kent> ?P__kent_subject . "
-                                           "?P__kent_subject <" base "label> ?P__kent__label .")))))))))
+                                           "?P__kent_subject <" base "label> ?P__kent__label ."))))
+          (testing "grouped by both, each sorts by its own variable"
+            (is (str/includes? (:sparql (compile-base-stage*
+                                         {:source-table 100
+                                          :aggregation  [[:count]]
+                                          :breakout     [[:field 10 {:join-alias "P"}]
+                                                         [:field 10 {:join-alias "P" :source-field 4}]]
+                                          :order-by     [[:asc [:field 10 {:join-alias "P"}]]
+                                                         [:desc [:field 10 {:join-alias "P" :source-field 4}]]]
+                                          :joins        [{:alias     "P"
+                                                          :condition [:= [:field 4 nil] [:field 1 {:join-alias "P"}]]}]}
+                                         nil))
+                               "ORDER BY ASC(?P__label) DESC(?P__kent__label)")))
+          (testing "two columns sharing one variable keep the next column aligned"
+            (is (= ["subject" "P__label" "P__label" "P__kent__label"]
+                   (:vars (compile-base-stage* {:source-table 100
+                                                :fields [[:field 1 nil]
+                                                         [:field 10 {:join-alias "P"}]
+                                                         [:field 10 {:join-alias "P" :binning {:strategy :default}}]
+                                                         [:field 10 {:join-alias "P" :source-field 4}]]
+                                                :joins  [{:alias     "P"
+                                                          :condition [:= [:field 4 nil] [:field 1 {:join-alias "P"}]]}]}
+                                               [{:id 1} {:id 10 :lib/join-alias "P"} {:id 10 :lib/join-alias "P"}
+                                                {:id 10 :lib/join-alias "P"}]))))))))))
 
 (deftest compile-base-stage-implicit-join-projection-test
   (testing "Lib's result-metadata strips :lib/join-alias from implicit-joinable
