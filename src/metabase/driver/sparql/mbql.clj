@@ -189,7 +189,8 @@
 (defn- collect-joined-pairs
   "Walk a legacy-MBQL stage and return the set of `[field-id alias source-field]`
    for every `[:field id {:join-alias \"...\"}]` token that appears in `:fields`,
-   `:order-by`, or `:filter`. `source-field` is the token's `:source-field`, or nil."
+   `:order-by`, `:expressions`, or `:filter`. `source-field` is the token's
+   `:source-field`, or nil."
   [{:keys [fields order-by expressions] filter-clause :filter}]
   (letfn [(walk [x]
             (cond
@@ -965,7 +966,7 @@
         triple-inner  (assoc inner :fields output-tokens)
         _             (log/debugf "[mbql] Start compile: table-id=%s agg?=%s output-fields=%d breakout=%d order-by=%d joins=%d"
                                   table-id agg? (count output-tokens) (count breakout) (count order-by) (count joins))
-        ;; Joined-field references: `[field-id alias]` pairs that appear anywhere in the stage.
+        ;; Joined-field references: `[field-id alias source-field]` that appear anywhere in the stage.
         joined-pairs   (collect-joined-pairs triple-inner)
         ;; Per-join intermediate var: ?<alias>_subject — binds the joined entity URI.
         alias->intermediate-var (into {}
@@ -1046,13 +1047,12 @@
         ;; since the join can reach the same field directly or through another FK.
         ;; An implicit join's tokens carry its own FK as `:source-field`: no hop.
         implicit-aliases (set (keep #(when (:fk-field-id %) (:alias %)) joins))
-        pair-key  (fn [[fid alias sf]]
-                    (if (and sf (not (implicit-aliases alias))) [fid alias sf] [fid alias]))
+        joined-keys (set (for [[fid alias sf] joined-pairs]
+                           (if (and sf (not (implicit-aliases alias))) [fid alias sf] [fid alias])))
         pair->hop (into {}
-                        (for [[_ alias sf :as pair] joined-pairs
-                              :when (and sf (not (implicit-aliases alias)))
-                              :let [k (pair-key pair)
-                                    nm (:name (field-id->metadata sf))]
+                        (for [[_ alias sf :as k] joined-keys
+                              :when sf
+                              :let [nm (:name (field-id->metadata sf))]
                               :when nm]
                           [k {:name nm
                               :prop (uri/absolute-uri nm naming)
@@ -1061,8 +1061,7 @@
         ;; own subject column IS the intermediate var (no extra triple needed); every
         ;; other joined column gets a unique `<alias>__[<hop>__]<field-name>` var.
         pair->target-var (into {}
-                               (for [[fid alias :as pair] joined-pairs
-                                     :let [k (pair-key pair)]]
+                               (for [[fid alias :as k] joined-keys]
                                  [k
                                   (if (id-field? fid)
                                     (or (:var (pair->hop k)) (get alias->intermediate-var alias))
@@ -1130,7 +1129,7 @@
                           (emit-optional-group path))
         ;; One triple per joined column. A subject column needs no triple: it IS the
         ;; intermediate (or hop) var, already bound by the FK triple.
-        join-target-triples (for [[fid alias :as k] (distinct (map pair-key joined-pairs))
+        join-target-triples (for [[fid alias :as k] joined-keys
                                   :let [hop (pair->hop k)
                                         id? (id-field? fid)]
                                   :when (or hop (not id?))
@@ -1156,9 +1155,9 @@
                                                 extra-direct-fids)
                                         (filter lang-string-field?)
                                         (keep #(get field-id->var %)))
-                  joined-lang-vars (->> joined-pairs
-                                        (filter (fn [[fid _]] (lang-string-field? fid)))
-                                        (keep #(get pair->target-var (pair-key %))))]
+                  joined-lang-vars (->> joined-keys
+                                        (filter (fn [[fid]] (lang-string-field? fid)))
+                                        (keep pair->target-var))]
               (mapv #(lang-filter-line % lang)
                     (distinct (concat direct-lang-vars joined-lang-vars))))))
         _ (log/debugf "[mbql] LANG filter lines: %d" (count (or lang-filter-lines [])))
