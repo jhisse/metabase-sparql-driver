@@ -16,6 +16,10 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
+env:
+  # Pinned, so a new Clojure CLI release cannot change a build unannounced.
+  CLOJURE_CLI_VERSION: 1.12.6.1673
+
 jobs:
   lint:
     name: Lint Code
@@ -34,7 +38,7 @@ jobs:
       - name: Setup Clojure Tools
         uses: DeLaGuardo/setup-clojure@13.7.0
         with:
-          cli: latest
+          cli: ${{ env.CLOJURE_CLI_VERSION }}
 
       - name: Cache Clojure dependencies
         uses: actions/cache@v6
@@ -74,7 +78,7 @@ jobs:
       - name: Setup Clojure Tools
         uses: DeLaGuardo/setup-clojure@13.7.0
         with:
-          cli: latest
+          cli: ${{ env.CLOJURE_CLI_VERSION }}
 
       - name: Cache Clojure dependencies
         uses: actions/cache@v6
@@ -114,7 +118,7 @@ jobs:
       - name: Setup Clojure Tools
         uses: DeLaGuardo/setup-clojure@13.7.0
         with:
-          cli: latest
+          cli: ${{ env.CLOJURE_CLI_VERSION }}
 
       - name: Cache Clojure dependencies
         uses: actions/cache@v6
@@ -155,7 +159,7 @@ jobs:
       - name: Setup Clojure Tools
         uses: DeLaGuardo/setup-clojure@13.7.0
         with:
-          cli: latest
+          cli: ${{ env.CLOJURE_CLI_VERSION }}
 
       - name: Cache Clojure dependencies
         uses: actions/cache@v6
@@ -201,7 +205,7 @@ jobs:
       - name: Setup Clojure Tools
         uses: DeLaGuardo/setup-clojure@13.7.0
         with:
-          cli: latest
+          cli: ${{ env.CLOJURE_CLI_VERSION }}
 
       - name: Cache Clojure dependencies
         uses: actions/cache@v6
