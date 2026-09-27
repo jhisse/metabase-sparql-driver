@@ -16,6 +16,11 @@
    to the HTTP client's default User-Agent."
   "metabase-sparql-driver (https://github.com/jhisse/metabase-sparql-driver)")
 
+(def ^:private accept
+  "SPARQL 1.1 JSON results, with plain JSON as a fallback for endpoints that
+   only know that media type."
+  "application/sparql-results+json, application/json;q=0.9")
+
 (def ^:private connect-timeout-ms
   "How long to wait for the endpoint to accept the connection."
   10000)
@@ -50,14 +55,14 @@
    Redirects are not followed: the HTTP client would re-send the credentials
    to the new host, and would turn the POST into a GET without the query."
   [query {:keys [insecure? default-graph auth read-timeout-ms]}]
-  (cond-> {:accept :json
-           :cookie-policy :none
+  (cond-> {:cookie-policy :none
            :throw-exceptions false
            :redirect-strategy :none
            :connection-timeout connect-timeout-ms
            :socket-timeout (or read-timeout-ms (query-timeout-ms))
            :form-params {:query query}
-           :headers {"User-Agent" user-agent}}
+           :headers {"User-Agent" user-agent
+                     "Accept"     accept}}
     insecure? (assoc :insecure? true)
     default-graph (assoc :query-params {:default-graph-uri default-graph})
     (seq auth) (#(merge-with merge % auth))))

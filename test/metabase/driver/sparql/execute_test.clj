@@ -133,7 +133,8 @@
     (let [{:keys [url opts result]} (post-with {})]
       (is (= "http://sparql.invalid/query" url))
       (is (= {:query "ASK {}"} (:form-params opts)))
-      (is (= :json (:accept opts)))
+      (is (= "application/sparql-results+json, application/json;q=0.9"
+             (get-in opts [:headers "Accept"])))
       (is (false? (:throw-exceptions opts)) "non-200s must reach process-response, not throw")
       (is (= :none (:redirect-strategy opts))
           "a followed redirect re-sends the credentials to the new host")
@@ -144,7 +145,7 @@
   (testing "no options: no default graph, TLS verification on, no credentials"
     (let [{:keys [opts]} (post-with {})]
       (is (empty? (select-keys opts [:query-params :insecure? :basic-auth])))
-      (is (= ["User-Agent"] (keys (:headers opts))))))
+      (is (= #{"User-Agent" "Accept"} (set (keys (:headers opts)))))))
   (testing "the read timeout is Metabase's query timeout at call time, unless given"
     (binding [driver.settings/*query-timeout-ms* 1234]
       (is (= 1234 (:socket-timeout (:opts (post-with {})))))
