@@ -707,7 +707,8 @@
 (defn- aggregation->projection
   "Compile one aggregation clause to a SPARQL projection
    `{:select \"(EXPR AS ?ag_N)\" :var \"ag_N\"}`. `token->var` resolves a field
-   token to its SPARQL variable. Returns nil for unsupported aggregations.
+   token to its SPARQL variable. Throws for an aggregation it cannot compile,
+   which would otherwise drop the column.
 
    `[:count]` with no argument becomes `COUNT(DISTINCT ?subject)` in a base
    stage (so the multi-valued OPTIONAL fan-out does not inflate entity counts);
@@ -732,9 +733,12 @@
                    :min      (when arg-var (format "MIN(?%s)" arg-var))
                    :max      (when arg-var (format "MAX(?%s)" arg-var))
                    nil)]
-     (when expr
-       {:select (format "(%s AS ?%s)" expr out)
-        :var    out}))))
+     (when-not expr
+       (throw (ex-info (format "The SPARQL driver does not support the %s aggregation." (some-> op name))
+                       {:type driver-api/qp.error-type.unsupported-feature
+                        :clause agg})))
+     {:select (format "(%s AS ?%s)" expr out)
+      :var    out})))
 
 (def ^:private temporal-bucket-exprs
   "SPARQL expression per breakout `:temporal-unit`, as a format string over the
@@ -1121,8 +1125,8 @@
         _ (log/debugf "[mbql] Filters count: %d" (count filters))
         ;; --- SELECT / GROUP BY / ORDER BY ------------------------------------
         agg-projections (when agg?
-                          (keep-indexed (fn [i a] (aggregation->projection a i token->var))
-                                        aggregations))
+                          (map-indexed (fn [i a] (aggregation->projection a i token->var))
+                                       aggregations))
         bucketed        (bucket-breakout breakout token->var)
         breakout-vars   (when agg? (:vars bucketed))
         ;; Custom-column BINDs. Emitted after the triples that bind the variables
@@ -1283,8 +1287,8 @@
         order-by      (:order-by stage)
         limit         (:limit stage)
         agg-projections (when agg?
-                          (vec (keep-indexed (fn [i a] (aggregation->projection a i token->var true))
-                                             aggregations)))
+                          (vec (map-indexed (fn [i a] (aggregation->projection a i token->var true))
+                                            aggregations)))
         bucketed        (bucket-breakout breakout token->var)
         breakout-vars   (when agg? (:vars bucketed))
         ;; Non-agg explicit projection: resolve every :fields token; fall back to
