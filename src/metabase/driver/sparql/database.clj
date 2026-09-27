@@ -9,7 +9,8 @@
             [metabase.driver.sparql.execute :as execute]
             [metabase.driver.sparql.shacl :as shacl]
             [metabase.driver.sparql.templates :as templates]
-            [metabase.driver.sparql.uri :as uri]))
+            [metabase.driver.sparql.uri :as uri]
+            [toucan2.core :as t2]))
 
 ;; This coercion only exists because Metabase's manifest spec
 ;; (`build-drivers.lint-manifest-file/property-types`) rejects `integer`/`select`.
@@ -153,7 +154,8 @@
 (defn- describe-table-auto
   "Discover the properties of `table` by sampling its instances, capped by the
   database's property limit (default 20) and sample limit (default 10000). A
-  failed query logs and returns `{:fields #{}}`."
+  failed query throws: an empty field set would make Metabase retire every
+  field of the table."
   [database table]
   (let [details        (:details database)
         naming         (uri/naming-context details)
@@ -172,7 +174,7 @@
        :fields (build-fields-from-sparql-query naming hide-foreign? (get-in result [:results :bindings]))}
       (do
         (log/error "Error describing SPARQL table:" result)
-        {:fields #{}}))))
+        (throw (ex-info (str "Error describing SPARQL table: " result) {:table (:name table)}))))))
 
 ;; ---- SHACL-driven sync ------------------------------------------------------
 
@@ -217,7 +219,7 @@
   (let [pk-field   (build-pk-field)
         candidates (cond->> properties
                      hide-foreign? (remove #(uri/foreign-uri? (:property-uri %) naming))
-                     :always       (sort-by (juxt #(or (:order %) Long/MAX_VALUE)
+                     :always       (sort-by (juxt #(or (:order %) ##Inf)
                                                   :property-uri)))
         fields     (->> candidates
                         (map-indexed (fn [idx p] (shacl-prop->field naming hide-foreign? idx p)))
@@ -248,22 +250,50 @@
      :socket-timeout-ms  (scaled (:shacl-socket-timeout details) 1000 Integer/MAX_VALUE)
      :max-bytes          (scaled (:shacl-max-size-mb details) (* 1024 1024) Long/MAX_VALUE)}))
 
-(defn shacl-shapes
-  "Return the SHACL shapes of `database` (cached by [[shacl/metadata]]), or
-   nil when the sync strategy is not `shacl`, no SHACL URL is configured, or
-   the document cannot be fetched or parsed (the error is logged). The
+(defn- shacl-url
+  "Return the SHACL URL of connection `details`, or nil when it is blank."
+  [details]
+  (not-empty (str/trim (str (:shacl-url details)))))
+
+(defn- load-shacl-shapes
+  "Return the SHACL shapes of `database` (cached by [[shacl/metadata]]). The
    language for `sh:name`/`sh:description` and the HTTP timeouts and size cap
-   come from the connection details."
+   come from the connection details. Throws when no SHACL URL is set, or the
+   document cannot be fetched or parsed or has no shapes (an empty body from
+   a proxy parses as an empty document)."
   [database]
   (let [details (:details database)
-        url     (not-empty (str/trim (str (:shacl-url details))))]
-    (when (and url (= :shacl (sync-strategy details)))
+        url     (or (shacl-url details)
+                    (throw (ex-info "The shacl sync strategy needs a SHACL URL" {})))]
+    (try
+      (or (not-empty (shacl/metadata url
+                                     (or (:default-language details) "")
+                                     (shacl-fetch-opts details)))
+          (throw (ex-info "the document has no shapes" {})))
+      (catch Exception t
+        (throw (ex-info (format "Failed to load SHACL document at %s: %s"
+                                (uri/redact-userinfo url) (ex-message t))
+                        {:url (uri/redact-userinfo url)}
+                        t))))))
+
+(defn check-sync-settings!
+  "Throw when connection `details` cannot be synced, so the connection form
+   says so: the shacl strategy needs a SHACL URL."
+  [details]
+  (when (and (= :shacl (sync-strategy details)) (not (shacl-url details)))
+    (throw (ex-info "The shacl sync strategy needs a SHACL URL" {}))))
+
+(defn shacl-shapes
+  "Return the SHACL shapes of `database` as [[load-shacl-shapes]] does, or
+   nil when the sync strategy is not `shacl`, no SHACL URL is configured, or
+   the document cannot be fetched or parsed (the error is logged)."
+  [database]
+  (let [details (:details database)]
+    (when (and (shacl-url details) (= :shacl (sync-strategy details)))
       (try
-        (shacl/metadata url
-                        (or (:default-language details) "")
-                        (shacl-fetch-opts details))
+        (load-shacl-shapes database)
         (catch Exception t
-          (log/errorf t "[shacl] Failed to load SHACL document at %s" (uri/redact-userinfo url))
+          (log/error t "[shacl]" (ex-message t))
           nil)))))
 
 (defn fks
@@ -293,25 +323,28 @@
        :pk-column-name  "subject"})))
 
 (defn- describe-database-shacl
+  "Return one table per shape of the SHACL document of `database`. Throws when
+   the document cannot be loaded: an empty table set would make Metabase
+   retire every table."
   [database]
   (let [details       (:details database)
         naming        (uri/naming-context details)
         hide-foreign? (boolean (:hide-foreign-uris details))
-        shapes        (shacl-shapes database)]
-    (when-not shapes
-      (log/warnf "[shacl] No shapes available for database %s; returning empty table set" (:name database)))
-    {:tables (->> (or shapes [])
+        shapes        (load-shacl-shapes database)]
+    {:tables (->> shapes
                   (remove (fn [s] (and hide-foreign?
                                        (uri/foreign-uri? (:class-uri s) naming))))
                   (map #(shacl-shape->table naming %))
                   set)}))
 
 (defn- describe-table-shacl
+  "Return the fields of the shape of `table`, or only the synthetic PK when the
+   document has no shape for it. Throws when the document cannot be loaded."
   [database table]
   (let [details       (:details database)
         naming        (uri/naming-context details)
         hide-foreign? (boolean (:hide-foreign-uris details))
-        shapes        (shacl-shapes database)
+        shapes        (load-shacl-shapes database)
         match         (shape-for-table shapes naming table)]
     (if match
       (shacl-shape->describe-table naming hide-foreign? match)
@@ -384,7 +417,8 @@
 
 (defn- describe-database-auto
   "Discover the classes with the discovery query, capped by the database's
-  class limit (default 100). A failed query logs and returns no tables."
+  class limit (default 100). A failed query throws: an empty table set would
+  make Metabase retire every table."
   [database]
   (let [details       (:details database)
         naming        (uri/naming-context details)
@@ -404,29 +438,43 @@
         {:tables (set (map #(build-table-from-sparql-result naming %) classes-with-counts))})
       (do
         (log/error "Error describing SPARQL database:" result)
-        {:tables #{}}))))
+        (throw (ex-info (str "Error describing SPARQL database: " result) {}))))))
+
+(defn- has-synced-tables?
+  "True when Metabase already holds active tables for `database`."
+  [database]
+  (boolean (some->> (:id database) (t2/exists? :model/Table :active true :db_id))))
 
 (defn describe-database
   "Return `{:tables #{…}}` with the RDF classes of `database`, one table per
    class, found by its metadata sync strategy (auto, explicit, SHACL or none).
 
    An explicit strategy without a valid schema configuration falls back to
-   auto."
+   auto. When the classes cannot be discovered, this throws if tables were
+   already synced, which keeps them; before the first successful sync it
+   returns no tables instead, because Metabase never finishes a first sync
+   whose `describe-database` throws."
   [_ database]
   (let [details       (:details database)
         strategy      (sync-strategy details)
         naming        (uri/naming-context details)
         hide-foreign? (boolean (:hide-foreign-uris details))
         schema-config (some-> details :schema-config parse-schema-config)]
-    (cond
-      (= strategy :none)
-      (describe-database-none)
+    (try
+      (cond
+        (= strategy :none)
+        (describe-database-none)
 
-      (= strategy :shacl)
-      (describe-database-shacl database)
+        (= strategy :shacl)
+        (describe-database-shacl database)
 
-      (and (= strategy :explicit) schema-config)
-      (describe-database-explicit naming hide-foreign? database schema-config)
+        (and (= strategy :explicit) schema-config)
+        (describe-database-explicit naming hide-foreign? database schema-config)
 
-      :else
-      (describe-database-auto database))))
+        :else
+        (describe-database-auto database))
+      (catch Exception e
+        (if (has-synced-tables? database)
+          (throw e)
+          (do (log/warn e "[sync] No tables synced yet; the first sync continues without tables")
+              {:tables #{}}))))))

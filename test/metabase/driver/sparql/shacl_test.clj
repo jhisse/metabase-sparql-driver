@@ -77,6 +77,23 @@
       (is (= 2 (count props)))
       (is (every? (comp false? :database-required) props)))))
 
+(deftest decimal-order-test
+  (testing "sh:order is an xsd:decimal: 2.5 and 1.0 are read, not dropped"
+    (let [ttl   (str "@prefix sh: <http://www.w3.org/ns/shacl#> .\n"
+                     "@prefix ex: <https://example.org/> .\n"
+                     "ex:S a sh:NodeShape ; sh:targetClass ex:C ; sh:property ex:p1 , ex:p2 , ex:p3 , ex:p4 .\n"
+                     "ex:p1 a sh:PropertyShape ; sh:path ex:a ; sh:order 2.5 .\n"
+                     "ex:p2 a sh:PropertyShape ; sh:path ex:b ; sh:order \"1.0\" .\n"
+                     "ex:p3 a sh:PropertyShape ; sh:path ex:c ; sh:order \"first\" .\n"
+                     "ex:p4 a sh:PropertyShape ; sh:path ex:d ; sh:order 9007199254740993 .\n")
+          order (->> (shacl->metadata (shacl/parse-turtle ttl base) "")
+                     first :properties
+                     (into {} (map (juxt :property-uri :order))))]
+      (is (= {"https://example.org/a" 2.5M "https://example.org/b" 1.0M "https://example.org/c" nil
+              "https://example.org/d" 9007199254740993M}
+             order)
+          "exact: a double would turn 9007199254740993 into 9007199254740992"))))
+
 (deftest shacl->metadata-test
   (let [shapes  (shacl->metadata (shacl/parse-turtle turtle base) "nl")
         by-cls  (into {} (map (juxt :class-uri identity)) shapes)
@@ -173,20 +190,24 @@
   (testing "non-XSD datatypes are not resolved here"
     (is (nil? (xsd-base-type "http://www.w3.org/1999/02/22-rdf-syntax-ns#langString")))))
 
+(defn- stream
+  "An InputStream over the UTF-8 bytes of `s`, as clj-http returns with `:as :stream`."
+  [^String s]
+  (java.io.ByteArrayInputStream. (.getBytes s "UTF-8")))
+
 (deftest fetch-shacl-test
   (let [req (atom nil)
-        respond-with (fn [resp] (fn [url opts] (reset! req {:url url :opts opts}) resp))]
+        respond-with (fn [resp] (fn [url opts]
+                                  (reset! req {:url url :opts opts})
+                                  (update resp :body #(if (string? %) (stream %) %))))]
     (testing "a 200 returns the body and asks for Turtle with the default limits"
       (with-redefs [http/get (respond-with {:status 200 :body "ttl"})]
         (is (= "ttl" (shacl/fetch-shacl "https://example.org/shapes.ttl")))
         (is (= "text/turtle" (get-in @req [:opts :headers "Accept"])))
         (is (= 10000 (get-in @req [:opts :connection-timeout])))
         (is (= 30000 (get-in @req [:opts :socket-timeout])))
-        (is (nil? (get-in @req [:opts :redirect-strategy])) "w3id-style URLs rely on redirects")))
-    (testing "a URL with credentials does not follow redirects, which would re-send them"
-      (with-redefs [http/get (respond-with {:status 200 :body "ttl"})]
-        (shacl/fetch-shacl "https://u:p@example.org/shapes.ttl")
-        (is (= :none (get-in @req [:opts :redirect-strategy])))))
+        (is (= :none (get-in @req [:opts :redirect-strategy]))
+            "redirects are followed by hand, each target checked first")))
     (testing "configured timeouts are forwarded"
       (with-redefs [http/get (respond-with {:status 200 :body "ttl"})]
         (shacl/fetch-shacl "https://example.org/shapes.ttl" {:connect-timeout-ms 1 :socket-timeout-ms 2})
@@ -205,7 +226,99 @@
         (is (= "ééé" (shacl/fetch-shacl "https://example.org/x.ttl" {:max-bytes 6})))
         (let [e (is (thrown? clojure.lang.ExceptionInfo
                              (shacl/fetch-shacl "https://example.org/x.ttl" {:max-bytes 5})))]
-          (is (= 6 (:bytes (ex-data e)))))))))
+          (is (= 6 (:bytes (ex-data e)))))))
+    (testing "a Content-Length over the cap is rejected before reading the body"
+      (let [unread (proxy [java.io.InputStream] []
+                     (read [& _] (throw (AssertionError. "body was read"))))]
+        (with-redefs [http/get (respond-with {:status 200 :headers {"content-length" "200000000"} :body unread})]
+          (let [e (is (thrown? clojure.lang.ExceptionInfo
+                               (shacl/fetch-shacl "https://example.org/x.ttl" {:max-bytes 1000})))]
+            (is (= 200000000 (:bytes (ex-data e))))))))
+    (testing "an abandoned body aborts the request, since clj-http's close would download the rest"
+      (let [aborted? (atom false)
+            request  (proxy [org.apache.http.client.methods.HttpGet] []
+                       (abort [] (reset! aborted? true)))]
+        (with-redefs [http/get (respond-with {:status 200 :body "éé" :request {:http-req request}})]
+          (is (thrown? clojure.lang.ExceptionInfo (shacl/fetch-shacl "https://example.org/x.ttl" {:max-bytes 3})))
+          (is (true? @aborted?))
+          (is (true? (get-in @req [:opts :save-request])) "the request object is only kept when asked for"))))
+    (testing "a body trickling in past the read timeout is abandoned, not read to the end"
+      (let [trickle (proxy [java.io.InputStream] []
+                      (read [& [^bytes buf]]
+                        (Thread/sleep 20)
+                        (if buf (do (aset-byte buf 0 35) 1) 35)))]
+        (with-redefs [http/get (respond-with {:status 200 :body trickle})]
+          (is (thrown-with-msg? clojure.lang.ExceptionInfo #"took too long"
+                                (shacl/fetch-shacl "https://example.org/x.ttl" {:socket-timeout-ms 50}))))))))
+
+(deftest fetch-shacl-redirects-test
+  (let [requested (atom [])
+        opts      (atom nil)
+        serve     (fn [routes]
+                    (fn [url o]
+                      (swap! requested conj url)
+                      (reset! opts o)
+                      (let [[status target] (get routes url [404])]
+                        (if (= 200 status)
+                          {:status 200 :body (stream "ttl")}
+                          {:status status :headers (if target {"location" target} {}) :body (stream "")}))))
+        fetch     (fn [routes url]
+                    (reset! requested [])
+                    (with-redefs [http/get (serve routes)]
+                      (shacl/fetch-shacl url)))]
+    (testing "a redirect to another host is followed (w3id-style), through the guarded resolver"
+      (is (= "ttl" (fetch {"https://w3id.example/ns" [303 "https://pages.example/ns.ttl"]
+                           "https://pages.example/ns.ttl" [200]}
+                          "https://w3id.example/ns")))
+      (is (= :none (:redirect-strategy @opts)))
+      (is (instance? org.apache.http.conn.DnsResolver (:dns-resolver @opts))))
+    (testing "a relative or query-only Location resolves against the current URL"
+      (is (= "ttl" (fetch {"https://example.org/a/ns" [302 "../b/ns.ttl"]
+                           "https://example.org/b/ns.ttl" [200]}
+                          "https://example.org/a/ns")))
+      (is (= "ttl" (fetch {"https://example.org/a/ns" [302 "?format=ttl"]
+                           "https://example.org/a/ns?format=ttl" [200]}
+                          "https://example.org/a/ns"))))
+    (testing "only http(s) targets, a usable Location, and at most 5 redirects"
+      (is (thrown-with-msg? clojure.lang.ExceptionInfo #"only http and https"
+                            (fetch {"https://example.org/ns" [302 "ftp://example.org/ns.ttl"]} "https://example.org/ns")))
+      (is (thrown-with-msg? clojure.lang.ExceptionInfo #"no Location"
+                            (fetch {"https://example.org/ns" [302]} "https://example.org/ns")))
+      (is (thrown-with-msg? clojure.lang.ExceptionInfo #"not a URL"
+                            (fetch {"https://example.org/ns" [302 "gopher://example.org/"]} "https://example.org/ns")))
+      (let [loop-routes (into {} (for [i (range 7)]
+                                   [(str "https://example.org/" i) [302 (str "https://example.org/" (inc i))]]))]
+        (is (thrown-with-msg? clojure.lang.ExceptionInfo #"more than 5 redirects"
+                              (fetch loop-routes "https://example.org/0")))
+        (is (= 6 (count @requested)))))
+    (testing "credentials in the URL do not follow a redirect to another host, nor leak in errors"
+      (fetch {"https://u:p^ss@example.org/ns" [302 "https://other.example/ns.ttl"]
+              "https://other.example/ns.ttl" [200]}
+             "https://u:p^ss@example.org/ns")
+      (is (= ["https://u:p^ss@example.org/ns" "https://other.example/ns.ttl"] @requested))
+      (let [e (is (thrown? clojure.lang.ExceptionInfo
+                           (fetch {"https://u:secret@example.org/ns" [302]} "https://u:secret@example.org/ns")))]
+        (is (not (re-find #"secret" (ex-message e))))))))
+
+(deftest guarded-resolver-test
+  ;; IP literals keep DNS out: 192.0.2.0/24 (RFC 5737) is public.
+  (let [resolve (fn [resolver host] (.resolve ^org.apache.http.conn.DnsResolver resolver host))]
+    (testing "after a public SHACL host, internal addresses are refused"
+      (doseq [internal ["127.0.0.1" "10.0.0.1" "172.16.0.1" "192.168.1.1" "169.254.169.254"
+                        "100.100.100.200" "100.64.0.1" "0.1.2.3" "::1" "fd00::1" "fe80::1"]]
+        (let [r (#'shacl/guarded-resolver)]
+          (is (seq (resolve r "192.0.2.1")))
+          (is (thrown? java.net.UnknownHostException (resolve r internal)) internal)
+          (is (seq (resolve r "192.0.2.2")) "public hosts stay allowed"))))
+    (testing "100.128.0.1 is outside carrier-grade NAT, so it stays public"
+      (let [r (#'shacl/guarded-resolver)]
+        (resolve r "192.0.2.1")
+        (is (seq (resolve r "100.128.0.1")))))
+    (testing "an internal SHACL host, chosen by the admin, may reach other internal hosts"
+      (let [r (#'shacl/guarded-resolver)]
+        (is (seq (resolve r "10.0.0.1")))
+        (is (seq (resolve r "10.0.0.2")))
+        (is (seq (resolve r "192.0.2.1")))))))
 
 (deftest metadata-cache-test
   (let [url     "https://example.org/cache-test.ttl"

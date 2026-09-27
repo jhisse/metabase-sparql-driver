@@ -19,7 +19,10 @@
             [clojure.string :as str]
             [metabase.driver.sparql.uri :as uri]
             [metabase.util.log :as log])
-  (:import (java.io StringReader)
+  (:import (java.io ByteArrayOutputStream InputStream StringReader)
+           (java.net Inet4Address InetAddress URL UnknownHostException)
+           (org.apache.http.client.methods HttpUriRequest)
+           (org.apache.http.conn DnsResolver)
            (org.eclipse.rdf4j.model BNode IRI Literal Resource Statement Value)
            (org.eclipse.rdf4j.rio RDFFormat Rio)))
 
@@ -78,15 +81,133 @@
 (def ^:private default-socket-timeout-ms  30000)
 (def ^:private default-max-bytes (* 10 1024 1024))
 
+(defn- too-large
+  "Return the error for a SHACL document from `shown-url` of `bytes` bytes or
+   more, over the `max-bytes` limit."
+  [shown-url bytes max-bytes]
+  (ex-info (format "SHACL document from %s exceeds the %d-byte limit (%d bytes or more)"
+                   shown-url max-bytes bytes)
+           {:url shown-url :bytes bytes :max-bytes max-bytes}))
+
+(defn- read-capped
+  "Read `in` into a UTF-8 string. Throws as soon as more than `max-bytes` bytes
+   have arrived, or once the clock passes `deadline` (epoch millis), so a huge
+   or trickling document is not downloaded to the end."
+  [^InputStream in max-bytes deadline shown-url]
+  (let [out (ByteArrayOutputStream.)
+        buf (byte-array 8192)]
+    (loop []
+      (let [n (.read in buf)]
+        (when-not (neg? n)
+          (.write out buf 0 n)
+          (when (> (.size out) max-bytes)
+            (throw (too-large shown-url (.size out) max-bytes)))
+          (when (> (System/currentTimeMillis) deadline)
+            (throw (ex-info (format "SHACL document from %s took too long to download" shown-url)
+                            {:url shown-url})))
+          (recur))))
+    (.toString out "UTF-8")))
+
+(defn- release!
+  "Release the `:as :stream` response `resp` without reading the rest of its
+   body. clj-http's close drains the body first, which would download a huge
+   or endless document to the end, so the request is aborted before."
+  [resp]
+  (some-> ^HttpUriRequest (get-in resp [:request :http-req]) .abort)
+  (some-> ^InputStream (:body resp) .close))
+
+(def ^:private max-redirects
+  "How many redirects the SHACL fetch follows."
+  5)
+
+(defn- internal-address?
+  "True when `a` is a loopback, private (site-local, carrier-grade NAT
+   100.64.0.0/10 or IPv6 unique-local), link-local or unspecified (0.0.0.0/8)
+   address."
+  [^InetAddress a]
+  (let [b  (.getAddress a)
+        b0 (bit-and 0xff (aget b 0))]
+    (or (.isLoopbackAddress a) (.isSiteLocalAddress a)
+        (.isLinkLocalAddress a) (.isAnyLocalAddress a)
+        (if (instance? Inet4Address a)
+          (or (zero? b0)
+              (and (= 100 b0) (= 64 (bit-and 0xc0 (aget b 1)))))
+          (= 0xfc (bit-and 0xfe b0))))))
+
+(defn- guarded-resolver
+  "Return a DNS resolver for the requests of one SHACL fetch. The first host
+   it resolves is the SHACL URL's own. When that one is public, a later host
+   that resolves to an internal address is refused, so a public document
+   cannot send the fetch to the services next to Metabase; an internal SHACL
+   URL, chosen by the admin, may go anywhere. The check runs when the
+   connection is opened, so a DNS answer that changes in between is caught
+   too."
+  []
+  (let [internal-source? (atom nil)]
+    (reify DnsResolver
+      (resolve [_ host]
+        (let [addresses (InetAddress/getAllByName host)
+              internal? (boolean (some internal-address? addresses))]
+          (when (nil? @internal-source?)
+            (reset! internal-source? internal?))
+          (when (and internal? (not @internal-source?))
+            (throw (UnknownHostException.
+                    (str host " resolves to an internal address, which a public SHACL URL may not redirect to"))))
+          addresses)))))
+
+(defn- resolve-location
+  "Resolve the redirect `location` against `target` as a URL. Parsed as
+   leniently as clj-http parses URLs. A query-only location keeps the path of
+   `target` (RFC 3986), which `java.net.URL` gets wrong."
+  ^URL [target location]
+  (if (str/starts-with? location "?")
+    (URL. (str (first (str/split target #"[?#]" 2)) location))
+    (URL. (URL. target) location)))
+
+(defn- get-following-redirects
+  "GET `url` with the clj-http `opts`, following up to [[max-redirects]]
+   redirects by hand, and return the final response.
+
+   Each hop is a fresh request to the target, so credentials in `url` never
+   reach another host. Only http(s) targets are followed, and every
+   connection goes through one [[guarded-resolver]]."
+  [url opts]
+  (let [opts (assoc opts :redirect-strategy :none :dns-resolver (guarded-resolver))]
+    (loop [target url
+           hops   0]
+      (let [resp   (http/get target opts)
+            status (:status resp)]
+        (if-not (and (int? status) (<= 300 status 399))
+          resp
+          (let [location (get-in resp [:headers "location"])
+                refuse   (fn [reason]
+                           (throw (ex-info (format "SHACL document at %s redirected (%s): %s"
+                                                   (uri/redact-userinfo target) status reason)
+                                           {:url (uri/redact-userinfo target) :status status})))
+                _        (release! resp)
+                next-url (when location
+                           (try (resolve-location target (str location)) (catch Exception _ nil)))]
+            (cond
+              (nil? location)         (refuse "no Location")
+              (nil? next-url)         (refuse "the Location is not a URL")
+              (>= hops max-redirects) (refuse (str "more than " max-redirects " redirects"))
+              (not (#{"http" "https"} (str/lower-case (.getProtocol ^URL next-url))))
+              (refuse (str "only http and https targets are followed, not " (.getProtocol ^URL next-url))))
+            (recur (str next-url) (inc hops))))))))
+
 (defn fetch-shacl
   "Return the body of the SHACL document at `url` as a string, requested as
    `text/turtle`.
 
    `opts` may supply `:connect-timeout-ms`, `:socket-timeout-ms` and
    `:max-bytes`; each falls back to a built-in default (10 s, 30 s, 10 MB).
+   The socket timeout bounds each read and, counted once the response
+   arrives, the whole body, which can therefore take up to about twice that.
+   The size cap is checked against `Content-Length` and while reading. A
+   body that is not read to the end is aborted, not drained.
 
-   Redirects are followed, unless `url` carries credentials: the HTTP client
-   would re-send them to the new host.
+   Redirects are followed as [[get-following-redirects]] describes, each hop
+   with its own connect and read timeouts.
 
    Throws an `ex-info` on any non-200 response or when the body exceeds the
    size cap; connection errors and timeouts propagate from clj-http."
@@ -97,23 +218,25 @@
          max-bytes  (or max-bytes default-max-bytes)
          shown-url  (uri/redact-userinfo url)]
      (log/infof "[shacl] Fetching SHACL document from %s" shown-url)
-     (let [resp (http/get url (cond-> {:headers            {"Accept" "text/turtle"}
-                                       :throw-exceptions   false
-                                       :connection-timeout connect-ms
-                                       :socket-timeout     socket-ms
-                                       :as                 :string}
-                                (not= url shown-url) (assoc :redirect-strategy :none)))]
-       (if (= 200 (:status resp))
-         (let [body  (:body resp)
-               bytes (alength (.getBytes ^String body "UTF-8"))]
-           (when (> bytes max-bytes)
-             (throw (ex-info (format "SHACL document from %s is %d bytes, exceeding the %d-byte limit"
-                                     shown-url bytes max-bytes)
-                             {:url shown-url :bytes bytes :max-bytes max-bytes})))
-           body)
-         (throw (ex-info (format "Failed to fetch SHACL document from %s (status %s)"
-                                 shown-url (:status resp))
-                         {:url shown-url :status (:status resp)})))))))
+     (let [resp (get-following-redirects url {:headers            {"Accept" "text/turtle"}
+                                              :throw-exceptions   false
+                                              :connection-timeout connect-ms
+                                              :socket-timeout     socket-ms
+                                              :as                 :stream
+                                              ;; Keeps :http-req in the response, for release!
+                                              :save-request       true})]
+       (try
+         (if (= 200 (:status resp))
+           (do
+             (when-let [length (some-> (get-in resp [:headers "content-length"]) str str/trim parse-long)]
+               (when (> length max-bytes)
+                 (throw (too-large shown-url length max-bytes))))
+             (read-capped (:body resp) max-bytes (+ (System/currentTimeMillis) socket-ms) shown-url))
+           (throw (ex-info (format "Failed to fetch SHACL document from %s (status %s)"
+                                   shown-url (:status resp))
+                           {:url shown-url :status (:status resp)})))
+         (finally
+           (release! resp)))))))
 
 (def ^:private no-contexts
   "Empty array for the trailing `Resource...` varargs on `Rio/parse`. Clojure's
@@ -191,6 +314,15 @@
   (when (literal? t)
     (try (Long/parseLong (:value t)) (catch Exception _ nil))))
 
+(defn- parse-decimal-literal
+  "Return the literal `t` as a BigDecimal, or nil when it is not a number.
+   `sh:order` is an `xsd:decimal`, so `2.5` and `1.0` are valid, and a double
+   would make close large values equal."
+  [t]
+  (when (literal? t)
+    (try (bigdec (str/trim (:value t)))
+         (catch NumberFormatException _ nil))))
+
 (defn- pick-localized
   "Return the string value of the literal in `terms` that best fits `lang`:
    one tagged `lang`, else an untagged one, else the first literal. nil when
@@ -238,7 +370,7 @@
        :base-type         base-type
        :semantic-type     sem-type
        :description       (when-not (str/blank? descr) descr)
-       :order             (parse-long-literal order-lit)
+       :order             (parse-decimal-literal order-lit)
        ;; Values are IRI nodes: an explicit sh:nodeKind sh:IRI, or an sh:class
        ;; target (FK). Synced as :database-type "uri" (see shacl-prop->field).
        :iri-kind?         (boolean (or (iri? target-cls)
@@ -329,7 +461,7 @@
                       :description \"…\" or nil
                       :fk-target-class \"…\" or nil
                       :display-value-property \"…\" or nil
-                      :order long or nil
+                      :order number or nil
                       :iri-kind? true|false
                       :database-required true|false
                       :lang-string? true|false
