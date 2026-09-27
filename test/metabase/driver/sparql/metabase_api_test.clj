@@ -107,6 +107,9 @@
         label  (get-in person [:fields tu/rdfs-label :id])]
     (testing "the default table view keeps one row per Person"
       (is (= 2 (count (:rows (run-mbql :shacl {:source-table (:id person)}))))))
+    (testing "filtering the default view by the label a self-referencing FK also displays"
+      (is (= 1 (count (:rows (run-mbql :shacl {:source-table (:id person)
+                                               :filter       [:= [:field label nil] "Alice"]}))))))
     (testing "grouping by the label behind a missing FK"
       (is (= #{[nil 25] ["Bob" 30]}
              (set (:rows (run-mbql :shacl {:source-table (:id person)
@@ -131,6 +134,39 @@
       (is (= [[false] [true]]
              (:values (api :get (format "/api/field/%d/values"
                                         (get-in company [:fields "listed" :id])))))))))
+
+(deftest ^:integration explicit-join-with-remapped-fk-test
+  (testing "a FK display value inside an explicit join reads the FK's target"
+    (let [{:strs [Person Company]} (tables :shacl)
+          {:keys [cols rows]}
+          (run-mbql :shacl {:source-table (:id Person)
+                            :fields       [(field-ref Person tu/rdfs-label)]
+                            :joins        [{:source-table (:id Company)
+                                            :alias        "C"
+                                            :condition    [:= (field-ref Person "worksFor")
+                                                           [:field (get-in Company [:fields "subject" :id]) {:join-alias "C"}]]
+                                            :fields       [[:field (get-in Company [:fields tu/rdfs-label :id]) {:join-alias "C"}]
+                                                           [:field (get-in Company [:fields "headquarters" :id]) {:join-alias "C"}]]}]})]
+      (is (= 4 (count cols)) "label, C's label and headquarters, and the headquarters' label")
+      (is (= #{["Alice" "Acme Inc" "https://example.org/springfield" "Springfield"]
+               ["Bob" "Globex" "https://example.org/springfield" "Springfield"]}
+             (set rows)))))
+  (testing "a self-join keeps the joined label apart from the joined FK's display value of the same field"
+    (let [person (get (tables :shacl) "Person")
+          {:keys [rows]}
+          (run-mbql :shacl {:source-table (:id person)
+                            :fields       [(field-ref person tu/rdfs-label)]
+                            :joins        [{:source-table (:id person)
+                                            :alias        "P"
+                                            :condition    [:= (field-ref person "knows")
+                                                           [:field (get-in person [:fields "subject" :id]) {:join-alias "P"}]]
+                                            :fields       [[:field (get-in person [:fields tu/rdfs-label :id]) {:join-alias "P"}]
+                                                           [:field (get-in person [:fields "knows" :id]) {:join-alias "P"}]
+                                                           [:field (get-in person [:fields "worksFor" :id]) {:join-alias "P"}]]}]})]
+      ;; label, P's label, knows and worksFor, then the display values of P's knows and worksFor
+      (is (= #{["Alice" "Bob" nil "https://example.org/globex" nil "Globex"]
+               ["Bob" nil nil nil nil nil]}
+             (set rows))))))
 
 (deftest ^:integration result-column-display-names-test
   (testing "MBQL result columns keep Metabase's display names, not SPARQL var names"

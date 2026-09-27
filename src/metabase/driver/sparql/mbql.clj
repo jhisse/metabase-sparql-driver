@@ -113,18 +113,21 @@
     uri))
 
 (defn- collect-field-ids
-  "Collect referenced field IDs from fields/order-by/filter/expressions."
+  "Collect the IDs of fields read off the row itself from
+   fields/order-by/filter/expressions. A `:join-alias` token is left out: it
+   reads the joined entity, through `pair->target-var`."
   [{:keys [fields order-by expressions] filter-clause :filter}]
-  (let [ids-from-fields (set (keep field-token->id fields))
-        ids-from-order  (set (keep (fn [[_dir fld & _]] (field-token->id fld)) order-by))
+  (let [direct-ids      #(set (keep field-token->id (remove field-token->join-alias %)))
+        ids-from-fields (direct-ids fields)
+        ids-from-order  (direct-ids (map second order-by))
         ids-from-filter (letfn [(collect-field-tokens [x]
                                   (cond
                                     (and (vector? x) (= :field (first x))) [x]
                                     (sequential? x) (mapcat collect-field-tokens x)
                                     (map? x) (mapcat collect-field-tokens (vals x))
                                     :else []))]
-                          (set (keep field-token->id (collect-field-tokens filter-clause))))
-        ids-from-expr   (set (keep field-token->id (collect-expression-tokens expressions)))
+                          (direct-ids (collect-field-tokens filter-clause)))
+        ids-from-expr   (direct-ids (collect-expression-tokens expressions))
         all-ids         (vec (set/union ids-from-fields ids-from-order ids-from-filter ids-from-expr))]
     (log/debugf "[mbql] Collected field IDs: fields=%d order=%d filter=%d total=%d"
                 (count ids-from-fields) (count ids-from-order) (count ids-from-filter) (count all-ids))
@@ -134,7 +137,8 @@
   "Resolve the SPARQL variable name for a `[:field id opts]` token.
 
    - If the token carries `:join-alias`, look up the joined target var via
-     `pair->target-var` keyed by `[field-id alias]`.
+     `pair->target-var` keyed by `[field-id alias source-field]` (a FK column's
+     display value inside an explicit join), else by `[field-id alias]`.
    - Otherwise the subject (PK) field always maps to `?subject`.
    - Otherwise look up the regular alias from `field-id->var`. A string ref
      (a source-query column name, e.g. `birth-date`) also tries its sanitized
@@ -144,7 +148,8 @@
         alias (field-token->join-alias field-token)]
     (cond
       (expression-token? field-token) (sanitize-var-name (expression-token->name field-token))
-      (and fid alias) (get pair->target-var [fid alias])
+      (and fid alias) (or (get pair->target-var [fid alias (:source-field (field-token->opts field-token))])
+                          (get pair->target-var [fid alias]))
       (and fid (id-field? fid)) "subject"
       fid (or (get field-id->var fid)
               (when (string? fid)
@@ -182,15 +187,16 @@
   ([condition this-alias] (field-token->id (condition->fk-ref condition this-alias))))
 
 (defn- collect-joined-pairs
-  "Walk a legacy-MBQL stage and return the set of `[field-id alias]` pairs for every
-   `[:field id {:join-alias \"...\"}]` token that appears in `:fields`, `:order-by`,
-   or `:filter`."
+  "Walk a legacy-MBQL stage and return the set of `[field-id alias source-field]`
+   for every `[:field id {:join-alias \"...\"}]` token that appears in `:fields`,
+   `:order-by`, `:expressions`, or `:filter`. `source-field` is the token's
+   `:source-field`, or nil."
   [{:keys [fields order-by expressions] filter-clause :filter}]
   (letfn [(walk [x]
             (cond
               (and (vector? x) (= :field (first x)))
               (when-let [a (field-token->join-alias x)]
-                [[(field-token->id x) a]])
+                [[(field-token->id x) a (:source-field (field-token->opts x))]])
               (sequential? x) (mapcat walk x)
               (map? x) (mapcat walk (vals x))
               :else []))]
@@ -773,7 +779,9 @@
    any other token through `token->var`, and `:aliases` lets a later stage find a
    bucket by the raw column name Lib still uses."
   [breakout token->var]
-  (let [bucket-key (juxt field-token->id (comp :temporal-unit field-token->opts) field-token->join-alias)
+  ;; Keyed by the raw var, not the field id: two paths to one field (a joined column
+  ;; and a FK display value inside the same join) resolve to different vars.
+  (let [bucket-key (juxt token->var (comp :temporal-unit field-token->opts))
         buckets    (for [tok  breakout
                          :let [raw  (token->var tok)
                                unit (:temporal-unit (field-token->opts tok))]
@@ -848,16 +856,23 @@
 
    Returns `{:vars [...] :triples [...]}`."
   [expected-cols {:keys [field-id->var pair->target-var alias->intermediate-var
-                         fk-fid->alias join-path naming]}]
-  (let [placeholder (atom 0)]
+                         fk-fid->alias join-path naming joined-field-vars]}]
+  (let [placeholder (atom 0)
+        seen        (atom {})]
     (reduce
      (fn [acc col]
        (let [fid      (:id col)
              alias    (or (:lib/join-alias col)
                           (when-let [fk-fid (:fk-field-id col)]
                             (get fk-fid->alias fk-fid)))
+             shared   [fid (:lib/join-alias col)]
+             in-order (get-in joined-field-vars [shared (get @seen shared 0)])
              existing (resolve-expected-var col field-id->var pair->target-var fk-fid->alias)]
          (cond
+           in-order
+           (do (swap! seen update shared (fnil inc 0))
+               (update acc :vars conj in-order))
+
            existing
            (update acc :vars conj existing)
 
@@ -951,9 +966,8 @@
         triple-inner  (assoc inner :fields output-tokens)
         _             (log/debugf "[mbql] Start compile: table-id=%s agg?=%s output-fields=%d breakout=%d order-by=%d joins=%d"
                                   table-id agg? (count output-tokens) (count breakout) (count order-by) (count joins))
-        ;; Joined-field references: `[field-id alias]` pairs that appear anywhere in the stage.
+        ;; Joined-field references: `[field-id alias source-field]` that appear anywhere in the stage.
         joined-pairs   (collect-joined-pairs triple-inner)
-        joined-fids    (set (map first joined-pairs))
         ;; Per-join intermediate var: ?<alias>_subject — binds the joined entity URI.
         alias->intermediate-var (into {}
                                       (for [j joins]
@@ -1027,27 +1041,50 @@
                          (let [prefix (when parent (join-path parent (conj seen alias)))]
                            (when (or (nil? parent) prefix)
                              (conj (vec prefix) (triple-pattern src fk inter))))))))
+        ;; The display value of a FK column inside an explicit join, e.g.
+        ;; `[:field <City.label> {:join-alias "C" :source-field <C.headquarters>}]`,
+        ;; sits one hop past the joined entity. It is keyed with its `:source-field`,
+        ;; since the join can reach the same field directly or through another FK.
+        ;; An implicit join's tokens carry its own FK as `:source-field`: no hop.
+        implicit-aliases (set (keep #(when (:fk-field-id %) (:alias %)) joins))
+        joined-keys (set (for [[fid alias sf] joined-pairs]
+                           (if (and sf (not (implicit-aliases alias))) [fid alias sf] [fid alias])))
+        pair->hop (into {}
+                        (for [[_ alias sf :as k] joined-keys
+                              :when sf
+                              :let [nm (:name (field-id->metadata sf))]
+                              :when nm]
+                          [k {:name nm
+                              :prop (uri/absolute-uri nm naming)
+                              :var  (joined-var-name alias (str nm "_subject"))}]))
         ;; Per joined-pair: the SPARQL var that carries the value. The joined entity's
         ;; own subject column IS the intermediate var (no extra triple needed); every
-        ;; other joined column gets a unique `<alias>__<field-name>` var.
+        ;; other joined column gets a unique `<alias>__[<hop>__]<field-name>` var.
         pair->target-var (into {}
-                               (for [[fid alias] joined-pairs]
-                                 [[fid alias]
+                               (for [[fid alias :as k] joined-keys]
+                                 [k
                                   (if (id-field? fid)
-                                    (get alias->intermediate-var alias)
+                                    (or (:var (pair->hop k)) (get alias->intermediate-var alias))
                                     (joined-var-name alias
-                                                     (or (:name (field-id->metadata fid))
-                                                         (str "f_" fid))))]))
-        ;; All field-ids referenced anywhere in the stage; we only build direct triples for
-        ;; those that aren't reached via a join. Field tokens whose parent `:table-id`
-        ;; isn't the base table are also excluded: they belong to a joined entity and
-        ;; would otherwise emit a bogus `?subject <foreign-prop> ?var` triple. The
-        ;; tolerated nil case keeps the test fixtures (no `:table-id`) working.
-        field-ids     (->> (collect-field-ids triple-inner)
-                           (remove joined-fids)
-                           (remove (fn [fid]
-                                     (when-let [tid (some-> fid field-id->metadata :table-id)]
-                                       (not= tid table-id)))))
+                                                     (str (some-> (pair->hop k) :name (str "__"))
+                                                          (or (:name (field-id->metadata fid))
+                                                              (str "f_" fid)))))]))
+        ;; A `:source-field` outside an implicit join must be a FK: Metabase adds no
+        ;; join for one that is not (auto sync has none), and inside an explicit join
+        ;; the display value hops through it.
+        _ (when-let [sf (->> (tree-seq coll? seq (select-keys triple-inner [:fields :order-by :filter :expressions]))
+                             (some #(when (and (vector? %) (= :field (first %)))
+                                      (let [{sf :source-field alias :join-alias} (field-token->opts %)]
+                                        (when (and sf (not (implicit-aliases alias))
+                                                   (or (nil? alias)
+                                                       (not= :type/FK (:semantic-type (field-id->metadata sf)))))
+                                          sf)))))]
+            (throw (ex-info (format "The SPARQL driver cannot follow %s: it is not a foreign key."
+                                    (let [meta (field-id->metadata sf)] (or (:display-name meta) (:name meta) sf)))
+                            {:type driver-api/qp.error-type.unsupported-feature})))
+        ;; Field-ids read off the row itself (a field can also be reached through a
+        ;; join, e.g. a self-referencing FK's display value).
+        field-ids     (collect-field-ids triple-inner)
         field-id->prop (into {}
                              (for [fid field-ids
                                    :let [nm (:name (field-id->metadata fid))]
@@ -1079,7 +1116,6 @@
                                  (keep field-token->id)
                                  set
                                  (remove (set (keep field-token->id (remove field-token->join-alias output-tokens))))
-                                 (remove joined-fids)
                                  (remove id-field?)))
         triples-for-extras (for [fid extra-direct-fids
                                  :let [prop (get field-id->prop fid)
@@ -1091,17 +1127,22 @@
                               :let [path (join-path (:alias j))]
                               :when path]
                           (emit-optional-group path))
-        ;; One triple per joined column. The joined entity's own subject column needs
-        ;; no triple — it IS the intermediate var, already bound by the FK triple.
-        join-target-triples (for [[fid alias] joined-pairs
-                                  :when (not (id-field? fid))
+        ;; One triple per joined column. A subject column needs no triple: it IS the
+        ;; intermediate (or hop) var, already bound by the FK triple.
+        join-target-triples (for [[fid alias :as k] joined-keys
+                                  :let [hop (pair->hop k)
+                                        id? (id-field? fid)]
+                                  :when (or hop (not id?))
                                   :let [nm (:name (field-id->metadata fid))
                                         prop (uri/absolute-uri nm naming)
-                                        target-var (get pair->target-var [fid alias])
+                                        target-var (get pair->target-var k)
                                         inter-var (get alias->intermediate-var alias)
                                         path (join-path alias)]
                                   :when (and prop target-var path)]
-                              (emit-optional-group (conj path (triple-pattern inter-var prop target-var))))
+                              (emit-optional-group
+                               (concat path
+                                       (when hop [(triple-pattern inter-var (:prop hop) (:var hop))])
+                                       (when-not id? [(triple-pattern (:var hop inter-var) prop target-var)]))))
         _ (log/debugf "[mbql] Triples: fields=%d extras=%d join-fk=%d join-targets=%d"
                       (count triples-for-fields) (count triples-for-extras)
                       (count join-fk-triples) (count join-target-triples))
@@ -1114,9 +1155,9 @@
                                                 extra-direct-fids)
                                         (filter lang-string-field?)
                                         (keep #(get field-id->var %)))
-                  joined-lang-vars (->> joined-pairs
-                                        (filter (fn [[fid _]] (lang-string-field? fid)))
-                                        (keep (fn [pair] (get pair->target-var pair))))]
+                  joined-lang-vars (->> joined-keys
+                                        (filter (fn [[fid]] (lang-string-field? fid)))
+                                        (keep pair->target-var))]
               (mapv #(lang-filter-line % lang)
                     (distinct (concat direct-lang-vars joined-lang-vars))))))
         _ (log/debugf "[mbql] LANG filter lines: %d" (count (or lang-filter-lines [])))
@@ -1138,6 +1179,7 @@
                                                           (vals field-id->var)
                                                           (vals pair->target-var)
                                                           (vals alias->intermediate-var)
+                                                          (keep :var (vals pair->hop))
                                                           (vals (:aliases bucketed))
                                                           (map :var agg-projections))))
         _ (log/debugf "[mbql] Expression BINDs: %d" (count expr-bind-lines))
@@ -1153,9 +1195,7 @@
                                   vec))
         joined-select-vars (when-not agg?
                              (->> fields
-                                  (keep (fn [tok]
-                                          (when-let [a (field-token->join-alias tok)]
-                                            (get pair->target-var [(field-token->id tok) a]))))
+                                  (keep #(when (field-token->join-alias %) (token->var %)))
                                   distinct
                                   vec))
         ;; Expression columns explicitly projected via :fields (fallback path only;
@@ -1166,6 +1206,14 @@
                                 (map token->var)
                                 distinct
                                 vec))
+        ;; Lib describes a joined column as `{:id f :lib/join-alias a}`, without the
+        ;; `:source-field` of a FK display value inside an explicit join, so a field
+        ;; reached directly and through a FK look alike. They come in `:fields` order,
+        ;; so joined columns take their vars in that order.
+        joined-field-vars (->> fields
+                               (filter field-token->join-alias)
+                               (group-by (juxt field-token->id field-token->join-alias))
+                               (into {} (map (fn [[k toks]] [k (mapv token->var toks)]))))
         ;; When Lib's expected columns are known, reconcile the SELECT against them so
         ;; the driver's column count/order can never drift from the `annotate` middleware.
         reconciled  (when (and expected-cols (not agg?))
@@ -1176,7 +1224,8 @@
                         :alias->intermediate-var alias->intermediate-var
                         :fk-fid->alias           fk-fid->alias
                         :join-path               join-path
-                        :naming                  naming}))
+                        :naming                  naming
+                        :joined-field-vars       joined-field-vars}))
         result-vars (cond
                       agg?       (vec (concat breakout-vars (keep :var agg-projections)))
                       reconciled (vec (:vars reconciled))

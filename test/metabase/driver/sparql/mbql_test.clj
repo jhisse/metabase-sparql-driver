@@ -77,8 +77,8 @@
 
 (deftest collect-joined-pairs-test
   (let [f @#'mbql/collect-joined-pairs]
-    (is (= #{[2 "J"]}
-           (f {:fields [[:field 1 nil] [:field 2 {:join-alias "J"}]]})))))
+    (is (= #{[2 "J" nil] [3 "J" 4]}
+           (f {:fields [[:field 1 nil] [:field 2 {:join-alias "J"}] [:field 3 {:join-alias "J" :source-field 4}]]})))))
 
 (deftest aggregation-helpers-test
   (let [unwrap  @#'mbql/unwrap-aggregation
@@ -539,6 +539,112 @@
         (is (str/includes? sparql
                            (str "OPTIONAL { ?subject <" base "geboorteplaats> ?Plaats_subject . ?Plaats_subject <" base "label> ?Plaats__label . }")))))))
 
+(deftest compile-base-stage-field-also-joined-test
+  (testing "a field that is also the display value of a self-referencing FK keeps its own variable"
+    (with-fixture
+      (let [{:keys [sparql vars]}
+            (compile-stage* {:source-table 100
+                             :fields [[:field 1 nil]
+                                      [:field 10 nil]
+                                      [:field 10 {:source-field 4 :join-alias "Kent"}]]
+                             :joins  [{:alias "Kent" :fk-field-id 4}]
+                             :filter [:= [:field 10 nil] "Jan"]})]
+        (is (= ["subject" "label" "Kent__label"] vars))
+        (is (str/includes? sparql (str "OPTIONAL { ?subject <" base "label> ?label . }")))
+        (is (str/includes? sparql "FILTER (?label = \"Jan\")"))))))
+
+(deftest compile-base-stage-remap-inside-explicit-join-test
+  (testing "the display value of a FK column inside an explicit join follows that FK"
+    (let [fields {1  {:name "subject" :table-id 100}
+                  4  {:name "werkgever" :table-id 100}
+                  10 {:name "label" :table-id 200}
+                  21 {:name "stad" :table-id 200 :semantic-type :type/FK}
+                  22 {:name "zetel" :table-id 200 :semantic-type :type/FK}
+                  23 {:name "notitie" :table-id 200}
+                  30 {:name "label" :table-id 300}
+                  31 {:name "subject" :table-id 300}}]
+      (with-redefs-fn
+        {#'mbql/field-id->metadata        (fn [id] (get fields id))
+         #'mbql/table-id->class-uri       (constantly (str base "Persoon"))
+         #'mbql/database-naming-context   (constantly {:default-graph base :prefixes []})
+         #'mbql/database-default-language (constantly "")}
+        (fn []
+          (let [{:keys [sparql vars]}
+                (compile-base-stage* {:source-table 100
+                                      :fields [[:field 1 nil]
+                                               [:field 10 {:join-alias "C"}]
+                                               [:field 30 {:join-alias "C" :source-field 21}]
+                                               [:field 30 {:join-alias "C" :source-field 22}]
+                                               [:field 31 {:join-alias "C" :source-field 21}]]
+                                      :joins  [{:alias     "C"
+                                                :condition [:= [:field 4 nil] [:field 1 {:join-alias "C"}]]}]}
+                                     [{:id 1} {:id 10 :lib/join-alias "C"}
+                                      {:id 30 :lib/join-alias "C"} {:id 30 :lib/join-alias "C"}
+                                      {:id 31 :lib/join-alias "C"}])]
+            (testing "two FKs to the same field keep one variable each"
+              (is (= ["subject" "C__label" "C__stad__label" "C__zetel__label" "C__stad_subject"] vars)))
+            (testing "the hopped entity's subject is the hop variable"
+              (is (str/includes? sparql (str "OPTIONAL { ?subject <" base "werkgever> ?C_subject . "
+                                             "?C_subject <" base "stad> ?C__stad_subject . }"))))
+            (is (str/includes? sparql (str "?C_subject <" base "stad> ?C__stad_subject . "
+                                           "?C__stad_subject <" base "label> ?C__stad__label ."))))
+          (testing "a column reached through a field that is not a FK fails clearly"
+            (is (thrown-with-msg? clojure.lang.ExceptionInfo #"cannot follow werkgever: it is not a foreign key"
+                                  (compile-stage* {:source-table 100
+                                                   :fields [[:field 1 nil] [:field 10 {:source-field 4}]]})))
+            (testing ", also inside an explicit join"
+              (is (thrown-with-msg? clojure.lang.ExceptionInfo #"cannot follow notitie: it is not a foreign key"
+                                    (compile-stage* {:source-table 100
+                                                     :fields [[:field 1 nil] [:field 30 {:join-alias "C" :source-field 23}]]
+                                                     :joins  [{:alias     "C"
+                                                               :condition [:= [:field 4 nil] [:field 1 {:join-alias "C"}]]}]}))))))))))
+
+(deftest compile-base-stage-explicit-self-join-test
+  (testing "a self-join on a FK: the joined label and that FK's display value inside the join stay apart"
+    (let [fields {1  {:name "subject" :table-id 100}
+                  4  {:name "kent" :table-id 100 :semantic-type :type/FK}
+                  10 {:name "label" :table-id 100}}]
+      (with-redefs-fn
+        {#'mbql/field-id->metadata        (fn [id] (get fields id))
+         #'mbql/table-id->class-uri       (constantly (str base "Persoon"))
+         #'mbql/database-naming-context   (constantly {:default-graph base :prefixes []})
+         #'mbql/database-default-language (constantly "")}
+        (fn []
+          (let [{:keys [sparql vars]}
+                (compile-base-stage* {:source-table 100
+                                      :fields [[:field 1 nil]
+                                               [:field 10 {:join-alias "P"}]
+                                               [:field 10 {:join-alias "P" :source-field 4}]]
+                                      :joins  [{:alias     "P"
+                                                :condition [:= [:field 4 nil] [:field 1 {:join-alias "P"}]]}]}
+                                     [{:id 1} {:id 10 :lib/join-alias "P"} {:id 10 :lib/join-alias "P"}])]
+            (is (= ["subject" "P__label" "P__kent__label"] vars))
+            (is (str/includes? sparql (str "?P_subject <" base "kent> ?P__kent_subject . "
+                                           "?P__kent_subject <" base "label> ?P__kent__label ."))))
+          (testing "grouped by both, each sorts by its own variable"
+            (is (str/includes? (:sparql (compile-base-stage*
+                                         {:source-table 100
+                                          :aggregation  [[:count]]
+                                          :breakout     [[:field 10 {:join-alias "P"}]
+                                                         [:field 10 {:join-alias "P" :source-field 4}]]
+                                          :order-by     [[:asc [:field 10 {:join-alias "P"}]]
+                                                         [:desc [:field 10 {:join-alias "P" :source-field 4}]]]
+                                          :joins        [{:alias     "P"
+                                                          :condition [:= [:field 4 nil] [:field 1 {:join-alias "P"}]]}]}
+                                         nil))
+                               "ORDER BY ASC(?P__label) DESC(?P__kent__label)")))
+          (testing "two columns sharing one variable keep the next column aligned"
+            (is (= ["subject" "P__label" "P__label" "P__kent__label"]
+                   (:vars (compile-base-stage* {:source-table 100
+                                                :fields [[:field 1 nil]
+                                                         [:field 10 {:join-alias "P"}]
+                                                         [:field 10 {:join-alias "P" :binning {:strategy :default}}]
+                                                         [:field 10 {:join-alias "P" :source-field 4}]]
+                                                :joins  [{:alias     "P"
+                                                          :condition [:= [:field 4 nil] [:field 1 {:join-alias "P"}]]}]}
+                                               [{:id 1} {:id 10 :lib/join-alias "P"} {:id 10 :lib/join-alias "P"}
+                                                {:id 10 :lib/join-alias "P"}]))))))))))
+
 (deftest compile-base-stage-implicit-join-projection-test
   (testing "Lib's result-metadata strips :lib/join-alias from implicit-joinable
             columns (only `:fk-field-id` remains). The compiler must still project
@@ -963,7 +1069,8 @@
   (testing "rdf:langString columns get a LANG filter when a default language is set"
     (with-redefs-fn
       {#'mbql/field-id->metadata        (fn [id] (get {1 {:name "subject"}
-                                                       2 {:name "naam" :database-type "langString"}}
+                                                       2 {:name "naam" :database-type "langString"}
+                                                       4 {:name "plaats"}}
                                                       id))
        #'mbql/table-id->class-uri       (constantly (str base "Persoon"))
        #'mbql/database-naming-context   (constantly {:default-graph base :prefixes []})
@@ -971,7 +1078,12 @@
       (fn []
         (let [{:keys [sparql]}
               (compile-stage* {:source-table 100
-                               :fields [[:field 1 nil] [:field 2 nil]]})]
+                               :fields [[:field 1 nil] [:field 2 nil] [:field 2 {:join-alias "P"}]]
+                               :joins  [{:alias "P" :fk-field-id 4}]})]
           (is (str/includes?
                sparql
-               "FILTER(!BOUND(?naam) || LANG(?naam) = \"nl\" || LANG(?naam) = \"\")")))))))
+               "FILTER(!BOUND(?naam) || LANG(?naam) = \"nl\" || LANG(?naam) = \"\")"))
+          (testing "also on a joined column"
+            (is (str/includes?
+                 sparql
+                 "FILTER(!BOUND(?P__naam) || LANG(?P__naam) = \"nl\" || LANG(?P__naam) = \"\")"))))))))
