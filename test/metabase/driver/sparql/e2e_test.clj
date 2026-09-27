@@ -127,6 +127,27 @@
         {:keys [rows]} (tu/run-query q)]
     (is (= [["Alice" 30]] rows))))
 
+(deftest ^:integration custom-columns-test
+  (let [q     (tu/person-query)
+        label (tu/column q tu/rdfs-label)
+        age   (tu/column q "age")
+        q     (-> q
+                  (lib/with-fields [label])
+                  (lib/expression "shout" (lib/upper label))
+                  (lib/expression "doubled" (lib/* age 2))
+                  ;; no default and no match: both are null for Bob
+                  (lib/expression "older" (lib/case [[(lib/> age 26) "old"]]))
+                  (lib/expression "li" (lib/regex-match-first label "l.")))]
+    (testing "custom columns come back computed, with null where Metabase gives null"
+      (is (= #{["Alice" "ALICE" 60 "old" "li"] ["Bob" "BOB" 50 nil nil]}
+             (set (:rows (tu/run-query q))))))
+    (testing "is-null on a custom column matches its null rows"
+      (is (= [["Bob"]]
+             (->> (lib/filter q (lib/is-null (lib/expression-ref q "older")))
+                  tu/run-query
+                  :rows
+                  (map (partial take 1))))))))
+
 (deftest ^:integration count-aggregation-test
   (let [q (lib/aggregate (tu/person-query) (lib/count))
         {:keys [cols rows]} (tu/run-query q)]
