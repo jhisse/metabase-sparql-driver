@@ -1,0 +1,16 @@
+# World Heritage Sites of one country
+SELECT ?whs (SAMPLE(?label) AS ?name) (MIN(?year) AS ?inscribed)
+       (SAMPLE(?lat) AS ?latitude) (SAMPLE(?lon) AS ?longitude)
+WHERE {
+  ?country rdfs:label {{country}}@en .
+  ?site p:P1435 ?listing ; wdt:P17 ?country ; wdt:P757 ?whsId ; rdfs:label ?label ;
+        p:P625/psv:P625 [ wikibase:geoLatitude ?lat ; wikibase:geoLongitude ?lon ] .
+  ?listing ps:P1435 wd:Q9259 .
+  OPTIONAL { ?listing pq:P580 ?start . BIND (YEAR(?start) AS ?year) }
+  FILTER NOT EXISTS { ?listing pq:P582 ?removed }
+  FILTER (!CONTAINS(?whsId, "-"))
+  FILTER (LANG(?label) = "en")
+  BIND (REPLACE(?whsId, "[^0-9].*$", "") AS ?whs)
+}
+GROUP BY ?whs
+ORDER BY ?inscribed

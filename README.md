@@ -5,7 +5,14 @@
 ![GitHub License](https://img.shields.io/github/license/jhisse/metabase-sparql-driver)
 ![GitHub Release Date](https://img.shields.io/github/release-date/jhisse/metabase-sparql-driver)
 
-A driver for connecting Metabase to SPARQL endpoints for querying RDF data.
+Turn any SPARQL endpoint into Metabase charts, maps and dashboards.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="./images/wikidata/dashboard-dark.webp">
+  <img alt="A Metabase dashboard of UNESCO World Heritage Sites and Nobel laureates, queried live from Wikidata" src="./images/wikidata/dashboard-light.webp">
+</picture>
+
+<sub>Every card above is a live SPARQL query against Wikidata. The queries are in [`docs/examples/wikidata`](docs/examples/wikidata).</sub>
 
 ## :mag: Overview
 
@@ -33,6 +40,30 @@ This driver represents RDF classes as tables and properties as columns, allowing
 2. **Copy** `sparql.metabase-driver.jar` to your Metabase `plugins/` directory
 3. **Restart** Metabase
 4. **Add database** → Select "SPARQL" → Enter endpoint URL
+
+## :world_map: A tour with Wikidata
+
+### 1. Connect
+
+Add a database, pick **SPARQL**, and enter `https://query.wikidata.org/sparql` as the endpoint. Under the advanced options, set **Metadata Sync Strategy** to `none`: Wikidata is too large to sample, and its items use `wdt:P31` instead of `rdf:type`, so the query builder has no tables to offer there. Everything below is written in SPARQL.
+
+![Connection form for Wikidata](./images/wikidata/connection.webp)
+
+### 2. Ask in SPARQL
+
+Open a new native query and write SPARQL. Wikidata's prefixes (`wd:`, `wdt:`, `p:`…) are predefined by the endpoint. Numeric columns such as `?latitude` and `?longitude` come back typed, so a pin map works right away: [`heritage-map.rq`](docs/examples/wikidata/heritage-map.rq) plots all the World Heritage Sites.
+
+![Native SPARQL query with a pin map of World Heritage Sites](./images/wikidata/native-query-map.webp)
+
+### 3. Add a variable
+
+A `{{country}}` tag turns into a filter widget, and the driver renders its value as an escaped SPARQL literal (see [Native Query Parameters](#native-query-parameters)). Here [`heritage-in-country.rq`](docs/examples/wikidata/heritage-in-country.rq) shows Iceland's three sites.
+
+![Native SPARQL query with a country variable set to Iceland](./images/wikidata/native-parameter.webp)
+
+### 4. Build a dashboard
+
+Save the questions and put them on a dashboard. A dashboard filter mapped to the `{{country}}` variable drives the country map, as in the dashboard at the top of this page.
 
 ### :bulb: Try with DBpedia
 
@@ -78,8 +109,6 @@ ASK { dbr:Albert_Einstein a dbo:Scientist }
 ![DBpedia Ask Query](./images/ask-query-example.png)
 
 ## :camera: Screenshots
-
-![Wikidata SPARQL Example - Barcelona Museums Map](./images/sparql-example-barcelona-museums-map.png)
 
 ![AgroVoc SPARQL Example - Concepts by Language](./images/sparql-example-agrovoc-concepts-by-language.png)
 

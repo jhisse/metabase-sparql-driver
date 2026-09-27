@@ -1,0 +1,8 @@
+# UNESCO World Heritage Sites currently on the list
+SELECT (COUNT(DISTINCT ?whs) AS ?sites) WHERE {
+  ?site p:P1435 ?listing ; wdt:P757 ?whsId .
+  ?listing ps:P1435 wd:Q9259 .
+  FILTER NOT EXISTS { ?listing pq:P582 ?removed }
+  FILTER (!CONTAINS(?whsId, "-"))                    # component parts carry "123-001"
+  BIND (REPLACE(?whsId, "[^0-9].*$", "") AS ?whs)    # extensions carry "123bis", "123rev"
+}
