@@ -5,6 +5,7 @@
   (:require [clojure.test :refer :all]
             [metabase.driver.sparql.database :as database]
             [metabase.driver.sparql.dimensions :as dimensions]
+            [metabase.driver.sparql.shacl :as shacl]
             [metabase.models.humanization :as humanization]
             [toucan2.core :as t2]))
 
@@ -43,6 +44,20 @@
         (testing "only FK properties with a display property whose both ends are synced are upserted,
                   with URIs shortened to the synced table/field names"
           (is (= [[10 "geboorteplaats" 20]] @upserts)))))))
+
+(deftest sync-display-dimensions-outside-shacl-strategy-test
+  (testing "with a SHACL URL but another sync strategy, the hook neither fetches nor writes"
+    (let [fetched? (atom false)
+          upserts  (atom [])]
+      (with-redefs [shacl/metadata                (fn [& _] (reset! fetched? true) shapes)
+                    dimensions/field-for          (fn [_ table field] (synced-fields [table field]))
+                    dimensions/upsert-dimension!  (fn [& args] (swap! upserts conj (vec args)))]
+        (dimensions/sync-display-dimensions!
+         {:id 1 :details {:default-graph          graph
+                          :shacl-url              "https://example.org/shapes.ttl"
+                          :metadata-sync-strategy "auto"}}))
+      (is (false? @fetched?))
+      (is (= [] @upserts)))))
 
 (deftest sync-display-dimensions-survives-upsert-failure-test
   (testing "a failing upsert is logged and does not abort the sync hook"

@@ -210,12 +210,17 @@
         (shacl/metadata url "en")
         (is (= 2 @fetches)))
       (testing "an entry older than the TTL is refetched"
-        (swap! @#'shacl/cache assoc-in [[url "nl"] :at] 0)
+        (swap! @#'shacl/cache assoc-in [[url "nl" nil] :at] 0)
         (shacl/metadata url "nl")
         (is (= 3 @fetches)))
-      (testing "invalidate! drops every language for the URL"
+      (testing "different fetch options are a cache miss, so each size cap is applied"
+        (shacl/metadata url "nl" {:max-bytes 100})
+        (shacl/metadata url "nl" {:max-bytes 100})
+        (is (= 4 @fetches)))
+      (testing "invalidate! drops every language and option set for the URL"
         (shacl/invalidate! url)
         (shacl/metadata url "nl")
         (shacl/metadata url "en")
-        (is (= 5 @fetches)))
+        (shacl/metadata url "nl" {:max-bytes 100})
+        (is (= 7 @fetches)))
       (shacl/invalidate! url))))

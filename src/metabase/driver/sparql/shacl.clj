@@ -376,13 +376,14 @@
 
 (defn metadata
   "Return the [[shacl->metadata]] shapes of the SHACL document at `url` under
-   language `lang`, fetching and parsing it unless `[url lang]` was cached in
-   the last 30 seconds. `opts` is forwarded to [[fetch-shacl]] (HTTP timeouts
-   and size cap) and is not part of the cache key. Fetch and parse errors
-   throw and are not cached."
+   language `lang`, fetching and parsing it unless `[url lang opts]` was
+   cached in the last 30 seconds. `opts` is forwarded to [[fetch-shacl]] (HTTP
+   timeouts and size cap) and is part of the cache key, so a database never
+   gets a document fetched under another database's size cap. Fetch and parse
+   errors throw and are not cached."
   ([url lang] (metadata url lang nil))
   ([url lang opts]
-   (let [k [url lang]]
+   (let [k [url lang opts]]
      (or (cache-lookup k)
          (cache-store! k
                        (-> (fetch-shacl url opts)
@@ -390,6 +391,6 @@
                            (shacl->metadata lang)))))))
 
 (defn invalidate!
-  "Forget the cached SHACL metadata for `url` (all languages)."
+  "Forget the cached SHACL metadata for `url` (all languages and options)."
   [url]
-  (swap! cache (fn [m] (into {} (remove (fn [[[u _] _]] (= u url)) m)))))
+  (swap! cache (fn [m] (into {} (remove (fn [[[u] _]] (= u url)) m)))))
