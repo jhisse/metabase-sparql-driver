@@ -320,7 +320,7 @@
 
 (deftest order-by-test
   (let [ob     #(@#'mbql/compile-order-by % {"naam" "naam" "leeftijd" "leeftijd"} {})
-        agg-ob #(@#'mbql/compile-agg-order-by % {"naam" "naam"} {})]
+        agg-ob #(@#'mbql/compile-agg-order-by % (fn [t] (@#'mbql/var-for-token t {"naam" "naam"} {})))]
     (is (= "ORDER BY ASC(?naam)" (ob [[:asc [:field "naam" nil]]])))
     (is (= "ORDER BY DESC(?naam) ASC(?leeftijd)"
            (ob [[:desc [:field "naam" nil]] [:asc [:field "leeftijd" nil]]])))
@@ -431,11 +431,43 @@
                              :aggregation [[:sum [:field 3 nil]]]
                              :breakout [[:field 2 nil]]})]
         (is (= ["naam" "ag_0"] vars))
-        (is (str/includes? sparql "(SUM(?leeftijd) AS ?ag_0)"))))))
+        (is (str/includes? sparql "(SUM(?leeftijd) AS ?ag_0)"))))
+    (testing "a breakout without aggregations still groups (distinct values)"
+      (let [{:keys [sparql vars]}
+            (compile-stage* {:source-table 100
+                             :breakout [[:field 2 nil]]})]
+        (is (= ["naam"] vars))
+        (is (str/includes? sparql "SELECT ?naam\n"))
+        (is (str/includes? sparql "GROUP BY ?naam"))))))
+
+(deftest compile-base-stage-temporal-breakout-test
+  (with-fixture
+    (testing "a breakout with a temporal unit groups and orders by its bucket"
+      (let [tok [:field 11 {:temporal-unit :month}]
+            {:keys [sparql vars]}
+            (compile-stage* {:source-table 100
+                             :aggregation  [[:count]]
+                             :breakout     [tok]
+                             :order-by     [[:asc tok]]})]
+        (is (= ["geboorte_datum_month" "ag_0"] vars))
+        (is (str/includes? sparql "BIND(STRDT(CONCAT(SUBSTR(STR(?geboorte_datum),1,7),\"-01\")"))
+        (is (str/includes? sparql "GROUP BY ?geboorte_datum_month"))
+        (is (str/includes? sparql "ORDER BY ASC(?geboorte_datum_month)"))))
+    (testing "every supported unit compiles to valid SPARQL"
+      (doseq [unit (keys @#'mbql/temporal-bucket-exprs)]
+        (testing unit
+          (compile-stage* {:source-table 100
+                           :aggregation  [[:count]]
+                           :breakout     [[:field 11 {:temporal-unit unit}]]}))))
+    (testing "a unit SPARQL cannot compute is rejected instead of grouping raw values"
+      (is (thrown-with-msg? clojure.lang.ExceptionInfo #"cannot group dates by week"
+                            (compile-stage* {:source-table 100
+                                             :aggregation  [[:count]]
+                                             :breakout     [[:field 11 {:temporal-unit :week}]]}))))))
 
 (deftest compile-base-stage-fk-join-test
   (with-fixture
-    (testing "an implicit FK join emits a pair of OPTIONAL triples"
+    (testing "an implicit FK join repeats the FK path in the joined column's OPTIONAL"
       (let [{:keys [sparql vars]}
             (compile-stage* {:source-table 100
                              :fields [[:field 1 nil]
@@ -446,7 +478,7 @@
         (is (str/includes? sparql
                            (str "OPTIONAL { ?subject <" base "geboorteplaats> ?Plaats_subject . }")))
         (is (str/includes? sparql
-                           (str "OPTIONAL { ?Plaats_subject <" base "label> ?Plaats__label . }")))))))
+                           (str "OPTIONAL { ?subject <" base "geboorteplaats> ?Plaats_subject . ?Plaats_subject <" base "label> ?Plaats__label . }")))))))
 
 (deftest compile-base-stage-implicit-join-projection-test
   (testing "Lib's result-metadata strips :lib/join-alias from implicit-joinable
@@ -521,10 +553,10 @@
                                  (str "OPTIONAL { ?subject <" base "provider> ?Provider_subject . }"))))
             (testing "Provider → Owner hop (the bug fix — explicit-join chained case)"
               (is (str/includes? sparql
-                                 (str "OPTIONAL { ?Provider_subject <" base "owner> ?Owner_subject . }"))))
+                                 (str "OPTIONAL { ?subject <" base "provider> ?Provider_subject . ?Provider_subject <" base "owner> ?Owner_subject . }"))))
             (testing "leaf property triple"
               (is (str/includes? sparql
-                                 (str "OPTIONAL { ?Owner_subject <" base "owner_name> ?Owner__owner_name . }"))))))))))
+                                 (str "OPTIONAL { ?subject <" base "provider> ?Provider_subject . ?Provider_subject <" base "owner> ?Owner_subject . ?Owner_subject <" base "owner_name> ?Owner__owner_name . }"))))))))))
 
 (deftest compile-base-stage-explicit-chained-join-without-table-id-test
   (testing "Same chained explicit join, but `field-id->metadata` returns NO `:table-id`
@@ -561,7 +593,7 @@
                                   :condition    [:= [:field 30 {:join-alias "Provider"}]
                                                  [:field 31 {:join-alias "Owner"}]]}]})]
             (is (str/includes? sparql
-                               (str "OPTIONAL { ?Provider_subject <" base "owner> ?Owner_subject . }"))
+                               (str "OPTIONAL { ?subject <" base "provider> ?Provider_subject . ?Provider_subject <" base "owner> ?Owner_subject . }"))
                 "Owner FK triple must be anchored on ?Provider_subject even without :table-id metadata")))))))
 
 (deftest compile-base-stage-chained-fk-join-test
@@ -589,10 +621,10 @@
                                  (str "OPTIONAL { ?subject <" base "provider> ?Provider_subject . }"))))
             (testing "Provider → Owner hop is anchored on ?Provider_subject (the bug fix)"
               (is (str/includes? sparql
-                                 (str "OPTIONAL { ?Provider_subject <" base "owner> ?Owner_subject . }"))))
+                                 (str "OPTIONAL { ?subject <" base "provider> ?Provider_subject . ?Provider_subject <" base "owner> ?Owner_subject . }"))))
             (testing "leaf property triple anchors on ?Owner_subject"
               (is (str/includes? sparql
-                                 (str "OPTIONAL { ?Owner_subject <" base "owner_name> ?Owner__owner_name . }"))))))))))
+                                 (str "OPTIONAL { ?subject <" base "provider> ?Provider_subject . ?Provider_subject <" base "owner> ?Owner_subject . ?Owner_subject <" base "owner_name> ?Owner__owner_name . }"))))))))))
 
 (deftest compile-derived-stage-aggregation-test
   (with-fixture
@@ -614,6 +646,37 @@
       (let [card {:source-table 100 :aggregation [[:count]] :breakout [[:field 2 nil]]}
             {:keys [vars]} (compile-stage* {:source-query card})]
         (is (= ["naam" "ag_0"] vars))))))
+
+(deftest compile-derived-stage-remap-test
+  (with-fixture
+    (testing "an outer-stage remap reads the label through a fresh var compared with ="
+      ;; A plain OPTIONAL off ?geboorteplaats would bind it, when a row has no FK,
+      ;; to every node carrying a label.
+      (let [{:keys [sparql]}
+            (compile-stage* {:source-query {:source-table 100
+                                            :fields       [[:field 1 nil] [:field 4 nil]]}
+                             :fields       [[:field "geboorteplaats" nil]
+                                            [:field 10 {:join-alias "Plaats"}]]
+                             :joins        [{:alias     "Plaats"
+                                             :condition [:= [:field "geboorteplaats" nil]
+                                                         [:field 1 {:join-alias "Plaats"}]]}]})]
+        (is (str/includes? sparql
+                           (str "OPTIONAL { ?geboorteplaats_node <" base "label> ?Plaats__label . "
+                                "FILTER(?geboorteplaats_node = ?geboorteplaats) }")))))))
+
+(deftest compile-derived-stage-over-temporal-bucket-test
+  (with-fixture
+    (testing "an outer stage finds a bucketed column by its raw name"
+      (let [card {:source-table 100
+                  :aggregation  [[:count]]
+                  :breakout     [[:field 11 {:temporal-unit :month}]]}
+            {:keys [sparql vars]}
+            (compile-stage* {:source-query card
+                             :aggregation  [[:sum [:field "count" nil]]]
+                             :breakout     [[:field "geboorte-datum" nil]]})]
+        (is (= "geboorte_datum_month" (first vars)))
+        (is (= 2 (count (re-seq #"GROUP BY \?geboorte_datum_month" sparql)))
+            "the outer stage groups by the bucket too")))))
 
 (deftest compile-derived-stage-outer-filter-test
   (with-fixture
@@ -686,6 +749,23 @@
         (is (= ["Place__label" "ag_0"] vars))
         (is (str/includes? sparql "FILTER (?Place__label = \"Leuven\")")
             "the Lib column name resolves to the joined SPARQL variable")))
+    (testing "columns match inner vars by name when an FK remap reorders the sub-SELECT"
+      ;; The FK remap puts the joined label first in the sub-SELECT, while Lib
+      ;; lists the FK, the count, then the label.
+      (let [card {:source-table 100
+                  :aggregation [[:count]]
+                  :breakout    [[:field 10 {:join-alias "Place"}] [:field 4 nil]]
+                  :joins       [{:alias "Place" :fk-field-id 4}]}
+            expected [{:name "geboorteplaats"}
+                      {:name "count"}
+                      {:name "label" :fk-field-id 4 :lib/desired-column-alias "Place__label"}]
+            {:keys [sparql vars]}
+            (compile-derived-stage*
+             {:source-query card
+              :filter [:> [:field "count" nil] 1]}
+             expected)]
+        (is (= ["geboorteplaats" "ag_0" "Place__label"] vars))
+        (is (str/includes? sparql "FILTER (?ag_0 > 1)"))))
     (testing "the same name-aliasing applies to order-by on a joined breakout column"
       (let [card {:source-table 100
                   :aggregation [[:count]]
@@ -709,13 +789,14 @@
           ctx {:field-id->var           {2 "naam" 3 "leeftijd"}
                :pair->target-var        {[10 "Plaats"] "Plaats__label"}
                :alias->intermediate-var {"Plaats" "Plaats_subject"}
+               :join-path               {"Plaats" [(str "?subject <" base "geboorteplaats> ?Plaats_subject .")]}
                :naming                  {:default-graph base :prefixes []}}]
       (testing "columns the compiler already projects reuse their variable"
         (is (= {:vars ["subject" "naam" "Plaats__label"] :triples []}
                (f [{:id 1} {:id 2} {:id 10 :lib/join-alias "Plaats"}] ctx))))
       (testing "a joined column the compiler missed is synthesized off the intermediate var"
         (is (= {:vars    ["subject" "Plaats__naam"]
-                :triples [(str "  OPTIONAL { ?Plaats_subject <" base "naam> ?Plaats__naam . }")]}
+                :triples [(str "  OPTIONAL { ?subject <" base "geboorteplaats> ?Plaats_subject . ?Plaats_subject <" base "naam> ?Plaats__naam . }")]}
                (f [{:id 1} {:id 2 :lib/join-alias "Plaats"}] ctx))))
       (testing "an unresolvable column still gets a (placeholder) variable"
         (is (= {:vars ["undefined_1"] :triples []}
@@ -740,7 +821,7 @@
         (testing "the missing column is synthesized off the join's intermediate var"
           (is (str/includes?
                sparql
-               (str "OPTIONAL { ?Plaats_subject <" base "leeftijd> ?Plaats__leeftijd . }"))))))))
+               (str "OPTIONAL { ?subject <" base "geboorteplaats> ?Plaats_subject . ?Plaats_subject <" base "leeftijd> ?Plaats__leeftijd . }"))))))))
 
 (deftest compile-base-stage-lib-driven-order-test
   (with-fixture

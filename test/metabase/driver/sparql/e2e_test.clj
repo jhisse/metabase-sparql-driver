@@ -143,6 +143,16 @@
         {:keys [rows]} (tu/run-query q)]
     (is (= #{["Alice" 1] ["Bob" 1]} (set rows)))))
 
+(deftest ^:integration temporal-breakout-test
+  (testing "grouping a date by year returns the start of each year"
+    (let [q    (tu/person-query)
+          born (tu/column q lib/breakoutable-columns "birthDate")
+          {:keys [rows]} (tu/run-query (-> q
+                                           (lib/breakout (lib/with-temporal-bucket born :year))
+                                           (lib/aggregate (lib/count))))]
+      (is (= #{["1994-01-01" 1] ["2001-01-01" 1]}
+             (set (map (fn [[d n]] [(str d) n]) rows)))))))
+
 (deftest ^:integration derived-stage-aggregation-filter-test
   ;; drill-through shape: an outer stage filtering the inner stage's
   ;; aggregation result by its Lib name (resolved via expected-name->var).

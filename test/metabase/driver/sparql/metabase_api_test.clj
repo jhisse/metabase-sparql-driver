@@ -99,6 +99,49 @@
                ["Bob" "https://example.org/globex" "Globex"]}
              (set rows))))))
 
+(deftest ^:integration missing-fk-display-value-test
+  ;; Bob has no `knows`: the remapped label must stay empty for him instead of
+  ;; matching every rdfs:label in the graph.
+  (let [person (get (tables :shacl) "Person")
+        knows  (get-in person [:fields "knows" :id])
+        label  (get-in person [:fields tu/rdfs-label :id])]
+    (testing "the default table view keeps one row per Person"
+      (is (= 2 (count (:rows (run-mbql :shacl {:source-table (:id person)}))))))
+    (testing "grouping by the label behind a missing FK"
+      (is (= #{[nil 25] ["Bob" 30]}
+             (set (:rows (run-mbql :shacl {:source-table (:id person)
+                                           :aggregation  [[:sum (field-ref person "age")]]
+                                           :breakout     [[:field label {:source-field knows}]]}))))))))
+
+(deftest ^:integration filter-on-aggregation-over-fk-breakout-test
+  (testing "an outer filter on the count resolves to the count, not to the FK column"
+    (let [company (get (tables :shacl) "Company")]
+      (is (= [["https://example.org/springfield" 2 "Springfield"]]
+             (:rows (run-mbql :shacl {:source-query {:source-table (:id company)
+                                                     :aggregation  [[:count]]
+                                                     :breakout     [(field-ref company "headquarters")]}
+                                      :filter       [:> [:field "count" {:base-type :type/Integer}] 1]})))))))
+
+(deftest ^:integration breakout-without-aggregation-test
+  (let [company (get (tables :shacl) "Company")]
+    (testing "a breakout alone returns distinct values (two companies share Springfield)"
+      (is (= 2 (count (:rows (run-mbql :shacl {:source-table (:id company)
+                                               :breakout     [(field-ref company "headquarters")]}))))))
+    (testing "a field's filter-value list has no duplicates"
+      (is (= [[false] [true]]
+             (:values (api :get (format "/api/field/%d/values"
+                                        (get-in company [:fields "listed" :id])))))))))
+
+(deftest ^:integration result-column-display-names-test
+  (testing "MBQL result columns keep Metabase's display names, not SPARQL var names"
+    (let [company (get (tables :shacl) "Company")
+          {:keys [data]} (api :post "/api/dataset"
+                              {:database (db-id :shacl)
+                               :type     :query
+                               :query    {:source-table (:id company)
+                                          :aggregation  [[:sum (field-ref company "revenue")]]}})]
+      (is (= ["Sum of Revenue"] (mapv :display_name (:cols data)))))))
+
 (deftest ^:integration native-query-through-api-test
   (let [{:keys [status error data]}
         (api :post "/api/dataset"

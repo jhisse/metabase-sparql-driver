@@ -232,6 +232,7 @@
 
 (def ^:private xsd-date     "<http://www.w3.org/2001/XMLSchema#date>")
 (def ^:private xsd-datetime "<http://www.w3.org/2001/XMLSchema#dateTime>")
+(def ^:private xsd-integer  "<http://www.w3.org/2001/XMLSchema#integer>")
 
 (def ^:private ^DateTimeFormatter xsd-datetime-format
   "xsd:dateTime lexical form. Seconds are always written: ISO_OFFSET_DATE_TIME
@@ -401,13 +402,37 @@
     (log/debugf "[mbql] Built %d var aliases" (count aliases))
     aliases))
 
+(defn- triple-pattern
+  "Render `?source <property> ?target .`."
+  [source-var property-uri target-var]
+  (format "?%s %s ?%s ." source-var (uri/iri-ref property-uri) target-var))
+
+(defn- emit-optional-group
+  "Render a SPARQL `OPTIONAL { <pattern> <pattern> … }` line."
+  [patterns]
+  (str "  OPTIONAL { " (str/join " " patterns) " }"))
+
 (defn- emit-optional-triple
   "Render a SPARQL `OPTIONAL { ?source <property> ?target . }` line.
    Single-arity defaults the source var to the synthetic subject (`?subject`)."
   ([property-uri target-var]
    (emit-optional-triple "subject" property-uri target-var))
   ([source-var property-uri target-var]
-   (format "  OPTIONAL { ?%s %s ?%s . }" source-var (uri/iri-ref property-uri) target-var)))
+   (emit-optional-group [(triple-pattern source-var property-uri target-var)])))
+
+(defn- emit-remap-optional
+  "Render the OPTIONAL that reads `property` off `fk-var`, a variable bound by a
+   sub-SELECT. `fk-var` is unbound on rows without the FK, and a plain
+   `OPTIONAL { ?fk-var <p> ?t }` (or one guarded by `BOUND(?fk-var)`) would then
+   bind it to every node with `<p>`. Matching a fresh var and comparing it with
+   `=` does not: the comparison errors on the unbound row, so the row is kept
+   without a value."
+  ;; The fresh var scans every `<p>` triple; fine for remaps, revisit
+  ;; if a derived stage ever remaps over a very large property.
+  [fk-var property-uri target-var]
+  (let [node (str fk-var "_node")]
+    (emit-optional-group [(triple-pattern node property-uri target-var)
+                          (format "FILTER(?%s = ?%s)" node fk-var)])))
 
 (defn- joined-var-name
   "Build a SPARQL var name for a joined column: `<alias>__<field-name>`,
@@ -529,17 +554,69 @@
        {:select (format "(%s AS ?%s)" expr out)
         :var    out}))))
 
+(def ^:private temporal-bucket-exprs
+  "SPARQL expression per breakout `:temporal-unit`, as a format string over the
+   value's variable (`%1$s`). Truncations rebuild the value from its lexical form,
+   extractions return integers. MONTH()/DAY() on an xsd:date is not in SPARQL 1.1
+   but Oxigraph, Jena and RDF4J accept it."
+  ;; Buckets follow each value's own lexical timezone, not the report
+  ;; timezone; convert first if mixed-timezone data needs report-time buckets.
+  (let [quarter-index (str xsd-integer "(FLOOR((MONTH(?%1$s)-1)/3))")]
+    {:year            (str "STRDT(CONCAT(SUBSTR(STR(?%1$s),1,4),\"-01-01\"), " xsd-date ")")
+     :quarter         (str "STRDT(CONCAT(SUBSTR(STR(?%1$s),1,5), SUBSTR(\"01040710\", "
+                           quarter-index "*2+1, 2), \"-01\"), " xsd-date ")")
+     :month           (str "STRDT(CONCAT(SUBSTR(STR(?%1$s),1,7),\"-01\"), " xsd-date ")")
+     :day             (str "STRDT(SUBSTR(STR(?%1$s),1,10), " xsd-date ")")
+     :hour            (str "STRDT(CONCAT(SUBSTR(STR(?%1$s),1,13),\":00:00\"), " xsd-datetime ")")
+     :minute          (str "STRDT(CONCAT(SUBSTR(STR(?%1$s),1,16),\":00\"), " xsd-datetime ")")
+     :quarter-of-year (str quarter-index "+1")
+     :month-of-year   "MONTH(?%1$s)"
+     :day-of-month    "DAY(?%1$s)"
+     :hour-of-day     "HOURS(?%1$s)"
+     :minute-of-hour  "MINUTES(?%1$s)"}))
+
+(defn- bucket-breakout
+  "Resolve breakout tokens to the variables to project and group by. A token with
+   a `:temporal-unit` groups by a new `?<var>_<unit>` bound to its bucket (see
+   [[temporal-bucket-exprs]]). Throws for a unit SPARQL cannot compute (week,
+   day-of-week, …) rather than grouping by the raw value.
+
+   Returns `{:vars […] :binds [\"  BIND(…)\" …] :token->var f :aliases {raw bucket}}`,
+   where `f` resolves a breakout token (e.g. in `:order-by`) to its bucket var and
+   any other token through `token->var`, and `:aliases` lets a later stage find a
+   bucket by the raw column name Lib still uses."
+  [breakout token->var]
+  (let [bucket-key (juxt field-token->id (comp :temporal-unit field-token->opts) field-token->join-alias)
+        buckets    (for [tok  breakout
+                         :let [raw  (token->var tok)
+                               unit (:temporal-unit (field-token->opts tok))]
+                         :when raw]
+                     (if (contains? #{nil :default} unit)
+                       {:tok tok :var raw}
+                       (let [expr (or (get temporal-bucket-exprs unit)
+                                      (throw (ex-info (format "The SPARQL driver cannot group dates by %s." (name unit))
+                                                      {:type  driver-api/qp.error-type.unsupported-feature
+                                                       :clause tok})))
+                             v    (str raw "_" (sanitize-var-name (name unit)))]
+                         {:tok tok :var v :bind (format "  BIND(%s AS ?%s)" (format expr raw) v)})))
+        by-key     (into {} (map (juxt (comp bucket-key :tok) :var)) buckets)]
+    {:vars       (vec (distinct (map :var buckets)))
+     :binds      (vec (distinct (keep :bind buckets)))
+     :token->var (fn [tok] (or (get by-key (bucket-key tok)) (token->var tok)))
+     :aliases    (into {} (for [{:keys [tok var bind]} buckets :when bind] [(token->var tok) var]))}))
+
 (defn- compile-agg-order-by
   "Compile `:order-by` for an aggregation query. Order terms may reference a
-   breakout field (`[:field …]`) or an aggregation by index (`[:aggregation N]`)."
-  [order-by field-id->var pair->target-var]
+   breakout field (`[:field …]`, resolved by `token->var`) or an aggregation by
+   index (`[:aggregation N]`)."
+  [order-by token->var]
   (when (seq order-by)
     (let [parts (for [[dir tok & _] order-by
                       :let [v (cond
                                 (and (vector? tok) (= :aggregation (first tok)))
                                 (str "ag_" (second tok))
                                 (and (vector? tok) (= :field (first tok)))
-                                (var-for-token tok field-id->var pair->target-var)
+                                (token->var tok)
                                 :else nil)]
                       :when v]
                   (str (str/upper-case (name dir)) "(?" v ")"))]
@@ -581,7 +658,7 @@
 
    Returns `{:vars [...] :triples [...]}`."
   [expected-cols {:keys [field-id->var pair->target-var alias->intermediate-var
-                         fk-fid->alias naming]}]
+                         fk-fid->alias join-path naming]}]
   (let [placeholder (atom 0)]
     (reduce
      (fn [acc col]
@@ -594,7 +671,8 @@
            existing
            (update acc :vars conj existing)
 
-           ;; Joined column the compiler missed: bind it off the join's intermediate var.
+           ;; Joined column the compiler missed: bind it off the join's intermediate var,
+           ;; behind the join's FK path (see compile-base-stage).
            (and fid alias (get alias->intermediate-var alias))
            (let [inter (get alias->intermediate-var alias)]
              (if (id-field? fid)
@@ -605,7 +683,9 @@
                  (-> acc
                      (update :vars conj v)
                      (update :triples conj
-                             (emit-optional-triple inter prop v))))))
+                             (emit-optional-group
+                              (conj (vec (join-path alias))
+                                    (triple-pattern inter prop v))))))))
 
            ;; Direct column the compiler missed: bind it off ?subject.
            (and fid (not alias) (not (id-field? fid)) (:name (field-id->metadata fid)))
@@ -631,19 +711,22 @@
   "Compile a base MBQL stage (one with `:source-table`) to a SPARQL query.
 
    Left joins (implicit ones added by `add-implicit-joins`, e.g. for FK-remap
-   dimensions, as well as explicit notebook joins) are emitted as a pair of
-   independent OPTIONALs:
+   dimensions, as well as explicit notebook joins) are emitted as OPTIONALs
+   that each repeat the join's FK path from `?subject`:
 
-     OPTIONAL { ?<src> <fk-prop> ?<alias>_subject . }
-     OPTIONAL { ?<alias>_subject <target-prop> ?<alias>__<field-name> . }
+     OPTIONAL { ?subject <fk-prop> ?<alias>_subject . }
+     OPTIONAL { ?subject <fk-prop> ?<alias>_subject .
+                ?<alias>_subject <target-prop> ?<alias>__<field-name> . }
 
-   `?<src>` is `?subject` for joins reached directly from the source table.
-   For chained implicit joins (e.g. Item → Provider → Owner), the FK field
-   lives on a previously joined table; `alias->source-var` resolves `?<src>`
-   to that prior join's intermediate var so the chain stays connected.
+   Without the path, a row whose FK is missing would leave `?<alias>_subject`
+   unbound, and the second OPTIONAL would bind it to every node carrying
+   `<target-prop>`. For chained joins (e.g. Item → Provider → Owner) the FK
+   field lives on a previously joined table; `alias->source-var` resolves each
+   hop's source to that prior join's intermediate var, and the path chains
+   the hops.
 
-   Aggregation queries (`:aggregation` present) project only breakout columns
-   and aggregate expressions, with a `GROUP BY` over the breakouts. `[:count]`
+   Aggregation and breakout-only queries project only breakout columns and
+   aggregate expressions, with a `GROUP BY` over the breakouts. `[:count]`
    compiles to `COUNT(DISTINCT ?subject)`.
 
    When `expected-cols` (Lib's authoritative column list) is supplied for a
@@ -651,7 +734,8 @@
    driver's column count and order always match what the `annotate` middleware
    expects — see [[reconcile-base-projection]].
 
-   Returns `{:sparql <query string> :vars <SELECT var names, in order>}`."
+   Returns `{:sparql <query string> :vars <SELECT var names, in order>
+              :aliases <raw column var → temporal bucket var>}`."
   [inner expected-cols]
   (let [limit         (:limit inner)
         table-id      (:source-table inner)
@@ -663,7 +747,9 @@
         joins         (:joins inner)
         aggregations  (:aggregation inner)
         breakout      (:breakout inner)
-        agg?          (boolean (seq aggregations))
+        ;; Grouped mode: a breakout without aggregations still groups (distinct
+        ;; values, e.g. the query behind a field's filter-value list).
+        agg?          (boolean (or (seq aggregations) (seq breakout)))
         ;; In aggregation mode raw :fields are not projected; the columns that
         ;; need WHERE triples are the breakout columns and the aggregated columns.
         output-tokens (if agg?
@@ -736,6 +822,20 @@
                                                   (condition->fk-field-id (:condition j) (:alias j)))]
                                   :when fk-id]
                               [fk-id (:alias j)]))
+        ;; FK triple patterns from ?subject down to `alias`'s intermediate var, one
+        ;; per hop. nil when a hop cannot be resolved (no FK property).
+        inter-var->alias (set/map-invert alias->intermediate-var)
+        join-path (fn join-path
+                    ([alias] (join-path alias #{}))
+                    ([alias seen]
+                     (let [src    (get alias->source-var alias "subject")
+                           fk     (get alias->fk-prop alias)
+                           inter  (get alias->intermediate-var alias)
+                           parent (get inter-var->alias src)]
+                       (when (and fk inter (not (seen alias)))
+                         (let [prefix (when parent (join-path parent (conj seen alias)))]
+                           (when (or (nil? parent) prefix)
+                             (conj (vec prefix) (triple-pattern src fk inter))))))))
         ;; Per joined-pair: the SPARQL var that carries the value. The joined entity's
         ;; own subject column IS the intermediate var (no extra triple needed); every
         ;; other joined column gets a unique `<alias>__<field-name>` var.
@@ -796,12 +896,9 @@
                              (ensure-triple-for-field prop var))
         ;; OPTIONAL triples introduced by left-joins.
         join-fk-triples (for [j joins
-                              :let [alias (:alias j)
-                                    fk-prop (get alias->fk-prop alias)
-                                    inter-var (get alias->intermediate-var alias)
-                                    src-var (get alias->source-var alias "subject")]
-                              :when (and fk-prop inter-var)]
-                          (emit-optional-triple src-var fk-prop inter-var))
+                              :let [path (join-path (:alias j))]
+                              :when path]
+                          (emit-optional-group path))
         ;; One triple per joined column. The joined entity's own subject column needs
         ;; no triple — it IS the intermediate var, already bound by the FK triple.
         join-target-triples (for [[fid alias] joined-pairs
@@ -809,9 +906,10 @@
                                   :let [nm (:name (field-id->metadata fid))
                                         prop (uri/absolute-uri nm naming)
                                         target-var (get pair->target-var [fid alias])
-                                        inter-var (get alias->intermediate-var alias)]
-                                  :when (and prop target-var inter-var)]
-                              (emit-optional-triple inter-var prop target-var))
+                                        inter-var (get alias->intermediate-var alias)
+                                        path (join-path alias)]
+                                  :when (and prop target-var path)]
+                              (emit-optional-group (conj path (triple-pattern inter-var prop target-var))))
         _ (log/debugf "[mbql] Triples: fields=%d extras=%d join-fk=%d join-targets=%d"
                       (count triples-for-fields) (count triples-for-extras)
                       (count join-fk-triples) (count join-target-triples))
@@ -838,8 +936,8 @@
         agg-projections (when agg?
                           (keep-indexed (fn [i a] (aggregation->projection a i token->var))
                                         aggregations))
-        breakout-vars   (when agg?
-                          (->> breakout (keep token->var) distinct vec))
+        bucketed        (bucket-breakout breakout token->var)
+        breakout-vars   (when agg? (:vars bucketed))
         ;; Non-aggregation SELECT var list: ?subject + direct fields + joined target vars.
         direct-select-vars (when-not agg?
                              (->> fields
@@ -866,6 +964,7 @@
                         :pair->target-var        pair->target-var
                         :alias->intermediate-var alias->intermediate-var
                         :fk-fid->alias           fk-fid->alias
+                        :join-path               join-path
                         :naming                  naming}))
         result-vars (cond
                       agg?       (vec (concat breakout-vars (keep :var agg-projections)))
@@ -879,7 +978,7 @@
         group-by-clause (when (and agg? (seq breakout-vars))
                           (str "GROUP BY " (str/join " " (map #(str "?" %) breakout-vars))))
         order-clause (if agg?
-                       (compile-agg-order-by order-by field-id->var pair->target-var)
+                       (compile-agg-order-by order-by (:token->var bucketed))
                        (compile-order-by order-by field-id->var pair->target-var))
         where-body  (->> (concat [(format "  ?subject a %s ." (uri/iri-ref class-uri))]
                                  triples-for-fields
@@ -887,6 +986,7 @@
                                  join-fk-triples
                                  join-target-triples
                                  (or (:triples reconciled) [])
+                                 (:binds bucketed)
                                  (or lang-filter-lines [])
                                  filters)
                          (str/join "\n"))
@@ -898,8 +998,9 @@
                          (when order-clause (str order-clause "\n"))
                          (when limit-part (str limit-part)))]
     (log/debugf "[sparql.mbql] Compiled base stage: %s" query)
-    {:sparql query
-     :vars   result-vars}))
+    {:sparql  query
+     :vars    result-vars
+     :aliases (:aliases bucketed)}))
 
 (defn- inner-var-for-ref
   "Determine the SPARQL variable a base/inner stage projects for `fk-ref` — a
@@ -932,7 +1033,7 @@
    driver's column count and order always match what the `annotate` middleware
    expects.
 
-   Returns `{:sparql … :vars …}`."
+   Returns `{:sparql … :vars … :aliases …}` (see [[compile-base-stage]])."
   [stage expected-cols]
   (let [naming        (database-naming-context)
         inner         (compile-stage (:source-query stage))
@@ -948,7 +1049,7 @@
                                    prop   (when nm (uri/absolute-uri nm naming))
                                    rvar   (joined-var-name alias (or nm (str "f_" tid)))]
                             :when (and fk-var prop)]
-                        {:optional (emit-optional-triple fk-var prop rvar)
+                        {:optional (emit-remap-optional fk-var prop rvar)
                          :var      rvar
                          :tid      tid
                          :alias    alias})
@@ -960,30 +1061,35 @@
         ;; but a later stage references them by Lib's name (`count`, `sum`, …), so we
         ;; add those aliases (drilling on an aggregation value relies on this).
         field-id->var    (merge (into {} (for [v passthrough-vars] [v (sanitize-var-name v)]))
-                                (aggregation-name->var (:aggregation (:source-query stage))))
+                                (aggregation-name->var (:aggregation (:source-query stage)))
+                                ;; a temporal bucket keeps its raw column name in Lib
+                                (:aliases inner))
         pair->target-var (into {} (for [{:keys [tid alias var]} remap-entries]
                                     [[tid alias] var]))
         token->var       (fn [tok] (var-for-token tok field-id->var pair->target-var))
         aggregations  (:aggregation stage)
         breakout      (:breakout stage)
-        agg?          (boolean (seq aggregations))
+        ;; Grouped mode: a breakout without aggregations still groups (distinct
+        ;; values, e.g. the query behind a field's filter-value list).
+        agg?          (boolean (or (seq aggregations) (seq breakout)))
         filter-clause (:filter stage)
         order-by      (:order-by stage)
         limit         (:limit stage)
         agg-projections (when agg?
                           (vec (keep-indexed (fn [i a] (aggregation->projection a i token->var true))
                                              aggregations)))
-        breakout-vars   (when agg?
-                          (->> breakout (keep token->var) distinct vec))
+        bucketed        (bucket-breakout breakout token->var)
+        breakout-vars   (when agg? (:vars bucketed))
         ;; Non-agg explicit projection: resolve every :fields token; fall back to
         ;; passthrough if any token cannot be resolved.
         projected-vars  (when (and (not agg?) (seq (:fields stage)))
                           (let [vs (map token->var (:fields stage))]
                             (when (every? some? vs)
                               (vec (distinct vs)))))
-        ;; When Lib's expected columns are known, reconcile the SELECT against them:
-        ;; remap columns resolve via `pair->target-var` (or are synthesized as an extra
-        ;; OPTIONAL), every other column consumes the next inner sub-SELECT var in order.
+        ;; When Lib's expected columns are known, reconcile the SELECT against them.
+        ;; Remap columns resolve via `pair->target-var` (or an extra OPTIONAL); the rest
+        ;; match inner vars by desired alias or Lib name (`count` → `ag_0`) before
+        ;; position, since an FK remap reorders the sub-SELECT.
         reconciled    (when (and expected-cols (not agg?))
                         (let [inner-vars  (atom (:vars inner))
                               placeholder (atom 0)]
@@ -1004,11 +1110,16 @@
                                    (-> acc
                                        (update :vars conj rvar)
                                        (update :optionals conj
-                                               (emit-optional-triple fk-var prop rvar))))
+                                               (emit-remap-optional fk-var prop rvar))))
 
                                  (seq @inner-vars)
-                                 (let [v (first @inner-vars)]
-                                   (swap! inner-vars rest)
+                                 (let [unused (set @inner-vars)
+                                       v      (or (some unused
+                                                        [(some-> (:lib/desired-column-alias col) sanitize-var-name)
+                                                         (when-not (:fk-field-id col)
+                                                           (get field-id->var (:name col)))])
+                                                  (first @inner-vars))]
+                                   (swap! inner-vars #(remove #{v} %))
                                    (update acc :vars conj v))
 
                                  :else
@@ -1042,7 +1153,7 @@
         group-by-clause (when (and agg? (seq breakout-vars))
                           (str "GROUP BY " (str/join " " (map #(str "?" %) breakout-vars))))
         order-clause  (if agg?
-                        (compile-agg-order-by order-by outer-field-id->var pair->target-var)
+                        (compile-agg-order-by order-by (:token->var bucketed))
                         (compile-order-by order-by outer-field-id->var pair->target-var))
         filters       (when filter-clause
                         (or (compile-basic-filter filter-clause outer-field-id->var pair->target-var) []))
@@ -1053,6 +1164,8 @@
                              (str (str/join "\n" (map :optional remap-entries)) "\n"))
                            (when (seq (:optionals reconciled))
                              (str (str/join "\n" (:optionals reconciled)) "\n"))
+                           (when (seq (:binds bucketed))
+                             (str (str/join "\n" (:binds bucketed)) "\n"))
                            (when (seq filters)
                              (str (str/join "\n" filters) "\n"))
                            "}\n"
@@ -1060,8 +1173,9 @@
                            (when order-clause (str order-clause "\n"))
                            (when (number? limit) (str "LIMIT " limit)))]
     (log/debugf "[sparql.mbql] Compiled derived stage: %s" query)
-    {:sparql query
-     :vars   result-vars}))
+    {:sparql  query
+     :vars    result-vars
+     :aliases (:aliases bucketed)}))
 
 (defn- compile-stage
   "Compile one MBQL stage, recursing through `:source-query` wrappers.

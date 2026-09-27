@@ -79,7 +79,10 @@
          {:native {:query "SELECT ?x WHERE { ?s ?p ?x }"}} nil
          (fn [metadata rows] (reset! responded {:metadata metadata :rows (mapv vec rows)})))
         (is (some? @responded))
-        (is (= [["1"]] (:rows @responded)))))))
+        (is (= [["1"]] (:rows @responded)))
+        (testing "columns carry no display name, so Metabase's own names (e.g. \"Count\") win"
+          (is (= [{:name "x" :base_type :type/Text}]
+                 (vec (:cols (:metadata @responded))))))))))
 
 (def ^:private ok-response {:status 200 :body "{\"boolean\":true}"})
 

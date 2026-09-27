@@ -20,9 +20,11 @@
   (let [vars (get-in result [:head :vars])
         bindings (get-in result [:results :bindings])
         col-types (conversion/determine-column-types vars bindings)
+        ;; No :display_name: Metabase lets the driver's column keys override Lib's,
+        ;; so sending the SPARQL var would label MBQL columns `ag_0`. Native
+        ;; queries fall back to :name.
         metadata {:cols (map (fn [var-name]
                                {:name var-name
-                                :display_name var-name
                                 :base_type (get col-types var-name :type/Text)})
                              vars)}
         rows (map (fn [binding]
