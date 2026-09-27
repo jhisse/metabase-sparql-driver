@@ -16,9 +16,9 @@ Turn any SPARQL endpoint into Metabase charts, maps and dashboards.
 
 ## :mag: Overview
 
-This driver enables Metabase to connect to SPARQL endpoints using HTTP requests to query RDF data. It supports both secure and insecure connections with optional default graph specification.
+This driver brings knowledge graphs and linked data into Metabase, the open-source BI tool. Point it at any SPARQL 1.1 endpoint, such as Wikidata, DBpedia or your own triplestore, and build charts, maps and dashboards on top of RDF data.
 
-This driver represents RDF classes as tables and properties as columns, allowing you to use Metabase's visual query builder to create SPARQL queries intuitively. Discovering the most frequent classes and properties can be computationally expensive on large datasets. You can disable this metadata synchronization feature in the driver's advanced configuration settings.
+RDF classes become tables and properties become columns, so people who don't know SPARQL can explore the data with Metabase's visual query builder. People who do can write native SPARQL, with filter widgets. When you control the ontology, a SHACL document can define the schema instead of sampling. On large endpoints, where sampling classes and properties is expensive, you can turn it off in the advanced settings.
 
 > [!TIP]
 > If this repository is useful to you, please consider starring it ⭐.
