@@ -1068,11 +1068,16 @@
                                                      (str (some-> (pair->hop k) :name (str "__"))
                                                           (or (:name (field-id->metadata fid))
                                                               (str "f_" fid)))))]))
-        ;; Metabase adds no join for a `:source-field` that is not a FK (auto sync
-        ;; has none), so nothing would reach the column's entity.
+        ;; A `:source-field` outside an implicit join must be a FK: Metabase adds no
+        ;; join for one that is not (auto sync has none), and inside an explicit join
+        ;; the display value hops through it.
         _ (when-let [sf (->> (tree-seq coll? seq (select-keys triple-inner [:fields :order-by :filter :expressions]))
-                             (some #(and (vector? %) (= :field (first %)) (not (field-token->join-alias %))
-                                         (:source-field (field-token->opts %)))))]
+                             (some #(when (and (vector? %) (= :field (first %)))
+                                      (let [{sf :source-field alias :join-alias} (field-token->opts %)]
+                                        (when (and sf (not (implicit-aliases alias))
+                                                   (or (nil? alias)
+                                                       (not= :type/FK (:semantic-type (field-id->metadata sf)))))
+                                          sf)))))]
             (throw (ex-info (format "The SPARQL driver cannot follow %s: it is not a foreign key."
                                     (let [meta (field-id->metadata sf)] (or (:display-name meta) (:name meta) sf)))
                             {:type driver-api/qp.error-type.unsupported-feature})))

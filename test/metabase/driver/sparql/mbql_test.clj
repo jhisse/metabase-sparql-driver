@@ -591,7 +591,13 @@
           (testing "a column reached through a field that is not a FK fails clearly"
             (is (thrown-with-msg? clojure.lang.ExceptionInfo #"cannot follow werkgever: it is not a foreign key"
                                   (compile-stage* {:source-table 100
-                                                   :fields [[:field 1 nil] [:field 10 {:source-field 4}]]})))))))))
+                                                   :fields [[:field 1 nil] [:field 10 {:source-field 4}]]})))
+            (testing ", also inside an explicit join"
+              (is (thrown-with-msg? clojure.lang.ExceptionInfo #"cannot follow notitie: it is not a foreign key"
+                                    (compile-stage* {:source-table 100
+                                                     :fields [[:field 1 nil] [:field 30 {:join-alias "C" :source-field 23}]]
+                                                     :joins  [{:alias     "C"
+                                                               :condition [:= [:field 4 nil] [:field 1 {:join-alias "C"}]]}]}))))))))))
 
 (deftest compile-base-stage-explicit-self-join-test
   (testing "a self-join on a FK: the joined label and that FK's display value inside the join stay apart"
