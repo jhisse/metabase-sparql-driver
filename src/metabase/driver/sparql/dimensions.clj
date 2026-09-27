@@ -27,11 +27,12 @@
    [toucan2.core :as t2]))
 
 (defn- field-for
-  "Return the active Field `{:id :name :table_id}` named `field-name` in the
-   active table `table-name` of database `db-id` (both short names), or nil."
+  "Return the active Field `{:id :name :display_name :table_id}` named
+   `field-name` in the active table `table-name` of database `db-id` (both
+   short names), or nil."
   [db-id table-name field-name]
-  (t2/select-one [:model/Field :id :name :table_id]
-                 {:select    [:f.id :f.name :f.table_id]
+  (t2/select-one [:model/Field :id :name :display_name :table_id]
+                 {:select    [:f.id :f.name :f.display_name :f.table_id]
                   :from      [[:metabase_field :f]]
                   :left-join [[:metabase_table :t] [:= :t.id :f.table_id]]
                   :where     [:and
@@ -97,7 +98,10 @@
 
           :else
           (try
-            (upsert-dimension! (:id src-field) src-field-name (:id tgt-field))
+            ;; Metabase heads the remapped column with the Dimension's name,
+            ;; so it takes the FK field's display name, like a remap set in
+            ;; Table Metadata.
+            (upsert-dimension! (:id src-field) (:display_name src-field) (:id tgt-field))
             (catch Exception t
               (log/warnf t "[sparql.dimensions] Failed to upsert dimension for %s.%s"
                          src-table-name src-field-name))))))))
@@ -135,15 +139,16 @@
 
 (defn- sync-end!
   "Run the post-sync steps for the database `database-id` when it is a SPARQL
-   database. Each step has its own try, so a failed Dimension sync does not
-   skip the display-name fix."
+   database. Display names run first, so a Dimension takes the readable name
+   of a full-URI FK field. Each step has its own try, so one failing does not
+   skip the other."
   [database-id]
   (when-let [database (and database-id
                            (t2/select-one [:model/Database :id :engine :details]
                                           :id database-id))]
     (when (= :sparql (keyword (:engine database)))
-      (doseq [[step-name step] [["display-value dimensions" sync-display-dimensions!]
-                                ["display names" sync-display-names!]]]
+      (doseq [[step-name step] [["display names" sync-display-names!]
+                                ["display-value dimensions" sync-display-dimensions!]]]
         (try
           (step database)
           (catch Exception t

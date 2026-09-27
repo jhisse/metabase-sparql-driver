@@ -376,7 +376,7 @@ dbo:PersonShape a sh:NodeShape ;
                 metabase:displayValueProperty rdfs:label ] .   # ← points at Place.label
 ```
 
-Read the FK property out loud: *"`birthPlace` is a foreign key to `Place`. When you display a value, show `rdfs:label`."* The driver writes a `Dimension` row at sync time so Metabase renders `?birthPlace` as the joined `?Place__via__birthPlace__label` value, no manual click in the column-settings panel.
+Read the FK property out loud: *"`birthPlace` is a foreign key to `Place`. When you display a value, show `rdfs:label`."* The driver writes a `Dimension` row at sync time so Metabase renders `?birthPlace` as the joined `?Place__via__birthPlace__label` value, no manual click in the column-settings panel. The displayed column is headed with the FK column's display name, so a rename in **Admin → Table Metadata** shows up after the next sync.
 
 ##### What can go in `metabase:displayValueProperty`?
 
