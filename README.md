@@ -168,9 +168,9 @@ Native SPARQL questions can use Metabase's `{{tag}}` template parameters. The dr
 | Date range                                | `"2024-01-01/2024-01-31"` (quoted string) |
 | Multi-value — `[A B C]`                   | `"A", "B", "C"` (each value rendered as above) — wrap with `IN(...)` / `VALUES` |
 | No value, inside `[[ … ]]`                | the whole `[[ … ]]` clause is dropped |
-| No value, anywhere else                   | the query fails: "missing required parameters" |
+| No value, anywhere else                   | `{{tag}}` left as written + warning logged (so a tag in a `#` comment is harmless) |
 
-Whitespace inside `{{ tag }}` is tolerated. Embedded `"`, `\`, newlines, tabs, and `$` in values are escaped safely; characters that cannot appear inside `<...>` are percent-encoded in IRIs. **Field Filters**, **Referenced Card Queries**, **Referenced Query Snippets**, and **Referenced Tables** are SQL-shaped template tag types and are not rendered to SPARQL — a question that uses one fails with an error naming the unsupported variable type.
+Whitespace inside `{{ tag }}` is tolerated. In a question that has variables, `{{` always starts a tag, so write nested groups with a space: `{ { … } UNION { … } }`. Embedded `"`, `\`, newlines, tabs, and `$` in values are escaped safely; characters that cannot appear inside `<...>` are percent-encoded in IRIs. **Field Filters**, **Referenced Card Queries**, **Referenced Query Snippets**, and **Referenced Tables** are SQL-shaped template tag types and are not rendered to SPARQL — a question that uses one fails with an error naming the unsupported variable type.
 
 Example:
 

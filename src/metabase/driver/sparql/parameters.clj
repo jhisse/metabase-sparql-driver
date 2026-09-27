@@ -11,7 +11,8 @@
      - sequential collections → comma-separated SPARQL terms (only valid inside
        `IN(...)` / `VALUES`; template authors must wrap accordingly)
      - `[[ … ]]` clauses → dropped when one of their parameters has no value;
-       a parameter without a value anywhere else fails the query"
+       anywhere else a `{{…}}` without a value stays as written, which keeps a
+       commented-out tag (`# … {{x}}`) intact"
   (:require
    [clojure.string :as str]
    [metabase.driver-api.core :as driver-api]
@@ -85,8 +86,8 @@
 (defn- substitute
   "Render parsed query tokens (strings, `Param`s, `Optional`s) as
    `[fragments missing]`: the query fragments, and the names of parameters
-   without a value. An `[[ … ]]` clause is dropped whole when any of its
-   parameters is missing."
+   without a value, which stay as written. An `[[ … ]]` clause is dropped whole
+   when any of its parameters is missing."
   [param->value tokens]
   (reduce
    (fn [[acc missing] token]
@@ -94,7 +95,7 @@
        (string? token)         [(conj acc token) missing]
        (params/Param? token)   (if-let [term (->sparql-term (get param->value (:k token)))]
                                  [(conj acc term) missing]
-                                 [acc (conj missing (:k token))])
+                                 [(conj acc (str "{{" (:k token) "}}")) (conj missing (:k token))])
        (params/Optional? token) (let [[opt opt-missing] (substitute param->value (:args token))]
                                   [(cond-> acc (empty? opt-missing) (into opt)) missing])
        :else                   (throw (ex-info (str "The SPARQL driver cannot substitute " (pr-str token))
@@ -105,18 +106,15 @@
 (defn substitute-native-parameters
   "Substitute `{{tag}}` placeholders in `inner-query`'s `:query` string using
    the parameters / template-tags in `inner-query`, and drop `[[ … ]]` clauses
-   whose parameters have no value. Returns the updated inner-query map.
-
-   A parameter without a value outside `[[ … ]]` fails the query, as in
-   Metabase's SQL drivers."
+   whose parameters have no value. Returns the updated inner-query map."
   [_driver inner-query]
   #_{:clj-kondo/ignore [:unresolved-var]}
   (let [param->value      (params.values/query->params-map inner-query)
-        ;; false: SPARQL has no `--` comments to skip.
+        ;; false: SPARQL comments are `#`, which the parser does not know;
+        ;; a tag in one is left as written when it has no value.
         [parts missing]   (substitute param->value (params.parse/parse (:query inner-query) false))]
     (when (seq missing)
-      (throw (ex-info (str "Cannot run query: missing required parameters: " (str/join ", " (distinct missing)))
-                      {:type driver-api/qp.error-type.missing-required-parameter})))
+      (log/warnf "[sparql.params] No value for %s; left as written" (vec (distinct missing))))
     (let [substituted (str/join parts)]
       (log/debugf "[sparql.params] Substituted query: %s" substituted)
       (assoc inner-query :query substituted))))

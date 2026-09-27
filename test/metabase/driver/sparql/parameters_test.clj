@@ -2,7 +2,8 @@
   "Unit tests for SPARQL parameter substitution"
   (:require [clojure.test :refer :all]
             [metabase.driver.common.parameters :as params]
-            [metabase.driver.sparql.parameters :as parameters]))
+            [metabase.driver.sparql.parameters :as parameters]
+            [metabase.driver.sparql.test-util :as tu]))
 
 (defn- subst [inner-query]
   (:query (parameters/substitute-native-parameters :sparql inner-query)))
@@ -66,12 +67,17 @@
                                     :target [:variable [:template-tag "name"]]
                                     :value "Alice"}]})))))
 
-(deftest missing-value-fails-the-query
-  (testing "A tag with no value outside `[[ ]]` is a clear error, not a broken query"
-    (is (thrown-with-msg? clojure.lang.ExceptionInfo #"missing required parameters: name"
-                          (subst {:query         "SELECT * WHERE { ?s rdfs:label {{name}} }"
-                                  :template-tags {"name" {:name "name" :display-name "Name" :type :text}}
-                                  :parameters    []})))))
+(deftest valueless-tag-stays-as-written
+  (let [tags {"x" {:name "x" :display-name "X" :type :text}}]
+    (testing "a tag in a `#` comment does not break the query"
+      (let [q "SELECT ?s WHERE { ?s ?p ?o\n# FILTER(?s = {{x}})\n}"]
+        (is (= q (subst {:query q :template-tags tags :parameters []})))))
+    (testing "a nested group written `{{ … }}` is not a tag"
+      (let [q "SELECT ?s WHERE {{ ?s a <https://example.org/A> } UNION { ?s a <https://example.org/B> }}"
+            out (subst {:query q :template-tags tags :parameters []})]
+        (is (= "SELECT ?s WHERE {{?s a <https://example.org/A> } UNION { ?s a <https://example.org/B>}}" out)
+            "the parser trims the inner edges, which SPARQL ignores")
+        (is (nil? (tu/sparql-syntax-error out)) out)))))
 
 (deftest optional-clause
   (let [q    "SELECT * WHERE { ?s rdfs:label ?l [[FILTER(?l = {{name}})]] }"
