@@ -20,6 +20,24 @@ Thanks for your interest in improving the SPARQL driver. To keep the project rev
 
 If your change affects user-visible behavior (a connection property, a type mapping, a supported feature, SHACL handling), update the matching README section and the docstrings that describe it in the same PR. Outdated docs count as a bug.
 
+## Code style
+
+### Docstrings
+
+- Every public var has a docstring. Private functions have one unless the name already says everything.
+- Write prose. Don't use `Parameters:`, `Returns:` or `Usage:` sections. Older docstrings in that style are rewritten when their function changes.
+- The first sentence says what the function returns or does. Start with a verb ("Render …", "Resolve …"), or with "True when …" for a predicate.
+- Put argument names and code in backticks (`class-uri`) and refer to other vars as `[[name]]`. Describe the shape of the return value inline (`{:vars [...] :triples [...]}`).
+- After that, write only what the code does not show: why it works this way, edge cases, what happens on failure (returns nil or throws), and SPARQL or Metabase constraints.
+- Don't list callers and don't repeat the body. Both go stale.
+- Known limitations and upgrade paths go in plain `;;` comments next to the code, not in the docstring.
+
+### Names
+
+- Top-level `def`s are `^:private`. Anything shared across namespaces is a function.
+- IRIs and datatype URIs are named constants (`xsd-date`, `sh`), never inline strings.
+- Conversions are named `a->b`, predicates end in `?`, and functions with side effects end in `!`.
+
 ## Before opening a PR
 
 Run the full checklist (see also the PR template):
