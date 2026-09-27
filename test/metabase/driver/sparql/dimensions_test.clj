@@ -4,6 +4,7 @@
    writes) are stubbed, so no Metabase application database is needed."
   (:require [clojure.test :refer :all]
             [metabase.driver.sparql.dimensions :as dimensions]
+            [metabase.models.humanization :as humanization]
             [toucan2.core :as t2]))
 
 (def ^:private graph "https://example.org/")
@@ -77,5 +78,8 @@
       (is (= "Label" (readable label "Http://www.w3.org/2000/01/rdf Schema#label"))))
     (testing "a display name an admin changed is kept"
       (is (nil? (readable label "Name"))))
+    (testing "no write when the local name is the whole URI"
+      (let [urn "urn:isbn:123"]
+        (is (nil? (readable urn (humanization/name->human-readable-name urn))))))
     (testing "a short field name is left to sync"
       (is (nil? (readable "foundedOn" "Founded On"))))))

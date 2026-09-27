@@ -114,12 +114,15 @@
 (defn- readable-display-name
   "The display name for a field named by a full URI (a property outside the
    Default Graph and the namespace prefixes, e.g. rdfs:label): its humanized
-   local name (\"Label\"). nil for other fields, and for a field whose display
-   name is no longer sync's default, i.e. one an admin renamed."
+   local name (\"Label\"). nil for other fields, for a field whose display
+   name is no longer sync's default (one an admin renamed), and when nothing
+   would change (a URI without a `/` or `#` local name)."
   [{:keys [name display_name]}]
   (when (and (uri/has-scheme? name)
              (= display_name (humanization/name->human-readable-name name)))
-    (humanization/name->human-readable-name (uri/local-name name))))
+    (let [readable (humanization/name->human-readable-name (uri/local-name name))]
+      (when (not= readable display_name)
+        readable))))
 
 (defn sync-display-names!
   "Give fields named by a full URI a readable display name. Sync ignores a
