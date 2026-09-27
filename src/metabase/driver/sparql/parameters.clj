@@ -21,23 +21,28 @@
    [metabase.driver.sparql.uri :as uri]
    [metabase.util.log :as log]))
 
-(defn- unsupported-record?
-  "True for parameter value records we cannot meaningfully render in SPARQL:
-   FieldFilter (SQL-shaped BETWEEN/IN clauses), referenced cards, snippets, and
-   referenced tables. Predicate fns live in `metabase.driver.common.parameters`
-   itself precisely so callers don't need to import each record class."
+(defn- unsupported-kind
+  "The name of a parameter value record we cannot meaningfully render in SPARQL,
+   or nil: Field Filters (SQL-shaped BETWEEN/IN clauses), referenced cards,
+   snippets, and referenced tables. Predicate fns live in
+   `metabase.driver.common.parameters` itself precisely so callers don't need
+   to import each record class."
   [v]
-  (or (params/FieldFilter? v)
-      (params/ReferencedCardQuery? v)
-      (params/ReferencedQuerySnippet? v)
-      (params/ReferencedTableQuery? v)))
+  (cond
+    (params/FieldFilter? v)            "Field Filter"
+    (params/ReferencedCardQuery? v)    "saved question"
+    (params/ReferencedQuerySnippet? v) "snippet"
+    (params/ReferencedTableQuery? v)   "table"))
 
 (defn- record-value
   "Pull the underlying scalar(s) out of a Metabase parameter value record.
    Returns the value unchanged when `v` isn't a record we recognize."
   [v]
   (cond
-    (unsupported-record? v)              :unsupported
+    (unsupported-kind v)
+    (throw (ex-info (format "The SPARQL driver does not support %s variables; use a Text, Number or Date variable."
+                            (unsupported-kind v))
+                    {:type driver-api/qp.error-type.unsupported-feature}))
     ;; DateRange / DateTimeRange — render as ISO "start/end".
     (or (instance? metabase.driver.common.parameters.DateRange v)
         (instance? metabase.driver.common.parameters.DateTimeRange v))
@@ -61,14 +66,12 @@
 
 (defn- ->sparql-term
   "Render a single parameter value as a SPARQL term. Returns nil when the value
-   is `no-value` / nil / unsupported, which callers treat as a missing value."
+   is `no-value` / nil, which callers treat as a missing value."
   [v]
   (let [v (record-value v)]
     (cond
       (instance? metabase.driver.common.parameters.Date v) (date-literal (:s v))
       (or (nil? v) (= params/no-value v)) nil
-      (= :unsupported v)    (do (log/warnf "[sparql.params] Unsupported parameter type")
-                                nil)
       (sequential? v)       (let [terms (keep ->sparql-term v)]
                               (when (seq terms)
                                 (str/join ", " terms)))

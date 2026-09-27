@@ -1,6 +1,7 @@
 (ns metabase.driver.sparql.parameters-test
   "Unit tests for SPARQL parameter substitution"
   (:require [clojure.test :refer :all]
+            [metabase.driver.common.parameters :as params]
             [metabase.driver.sparql.parameters :as parameters]))
 
 (defn- subst [inner-query]
@@ -123,3 +124,8 @@
     (testing "a date with a time is an xsd:dateTime, seconds added"
       (is (= "SELECT * WHERE { ?s ex:d ?d FILTER(?d > \"2005-01-01T10:30:00\"^^<http://www.w3.org/2001/XMLSchema#dateTime>) }"
              (date "2005-01-01T10:30"))))))
+
+(deftest field-filter-is-a-clear-error
+  (testing "a Field Filter fails with a clear message instead of a generic endpoint 400"
+    (is (thrown-with-msg? clojure.lang.ExceptionInfo #"does not support Field Filter variables"
+                          (#'parameters/->sparql-term (params/map->FieldFilter {:field {} :value "x"}))))))
