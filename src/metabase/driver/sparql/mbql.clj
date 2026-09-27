@@ -597,11 +597,22 @@
 (defn- compile-expressions
   "Compile a stage's `:expressions` map to SPARQL `BIND(… AS ?name)` lines.
    `token->var` resolves field/expression tokens to their SPARQL variable.
-   Returns a vector of lines (one BIND per expression), in name order."
+   Returns a vector of lines (one BIND per expression). An expression that
+   references another comes after it: the legacy `:expressions` map loses
+   Lib's order past 8 entries, and a BIND cannot read a variable bound later."
   [expressions token->var]
-  (vec
-   (for [[ename clause] (sort-by key expressions)]
-     (str "  BIND(" (compile-expression clause token->var) " AS ?" (sanitize-var-name ename) ")"))))
+  (loop [todo (into (sorted-map) expressions) done #{} lines []]
+    (if (empty? todo)
+      lines
+      (let [ready? (fn [[_ clause]]
+                     (every? done (keep expression-token->name (collect-expression-tokens {nil clause}))))
+            [ename clause] (or (first (filter ready? todo))
+                               (throw (ex-info "Custom columns reference each other in a cycle"
+                                               {:expressions (keys todo)})))]
+        (recur (dissoc todo ename)
+               (conj done ename)
+               (conj lines (str "  BIND(" (compile-expression clause token->var)
+                                " AS ?" (sanitize-var-name ename) ")")))))))
 
 (defn- compile-order-by
   "Compile :order-by to ORDER BY."

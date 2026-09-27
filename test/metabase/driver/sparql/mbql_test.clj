@@ -846,7 +846,18 @@
                              :filter [:> [:expression "len"] 3]
                              :order-by [[:desc [:expression "len"]]]})]
         (is (str/includes? sparql "FILTER (?len > 3)"))
-        (is (str/includes? sparql "ORDER BY DESC(?len)"))))))
+        (is (str/includes? sparql "ORDER BY DESC(?len)"))))
+    (testing "an expression is bound after the expressions it references"
+      ;; a → b → … → i, so name order is the reverse of dependency order
+      (let [names (map str "abcdefghi")
+            exprs (into {"i" [:length [:field 2 nil]]}
+                        (map (fn [n nxt] [n [:* [:expression nxt] 2]]) names (rest names)))
+            {:keys [sparql]}
+            (compile-stage* {:source-table 100
+                             :fields (mapv #(vector :expression %) names)
+                             :expressions exprs})
+            bind-order (map second (re-seq #"BIND\(.* AS \?(\w+)\)" sparql))]
+        (is (= (reverse names) bind-order))))))
 
 ;; ---------------------------------------------------------------------------
 ;; Lib-driven projection (the column-count-mismatch fix)
