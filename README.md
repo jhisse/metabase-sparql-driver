@@ -112,6 +112,46 @@ Aggregate in SPARQL and pick a visualization: here, books by literary genre, sta
   <img alt="Stacked bar chart of DBpedia books by literary genre and country" src="./images/dbpedia/chart-light.webp">
 </picture>
 
+## :microscope: A tour with Cellosaurus
+
+Life-science data from the [SIB Swiss Institute of Bioinformatics](https://sib-swiss.github.io/sparql-examples/), explored with the query builder. A SHACL document describes the schema, so there is no SPARQL to write.
+
+| Setting                | Value                                                                                  |
+|:-----------------------|:---------------------------------------------------------------------------------------|
+| SPARQL Endpoint        | `https://sparql.cellosaurus.org/sparql`                                                |
+| Default Graph URI      | *(empty)*                                                                              |
+| Namespace Prefixes     | `cello=https://purl.expasy.org/cellosaurus/rdf/ontology/`                              |
+| Metadata Sync Strategy | `shacl`                                                                                |
+| SHACL URL              | `https://jhisse.github.io/metabase-sparql-driver/examples/cellosaurus/cell-lines.ttl` |
+
+### 1. Describe the schema in SHACL
+
+[`cell-lines.ttl`](docs/examples/cellosaurus/cell-lines.ttl) declares three tables: cancer cell lines, diseases and sexes. The donor's disease and sex are foreign keys, and `metabase:displayValueProperty rdfs:label` shows their labels instead of URIs. Sync reads the shapes and sends no sampling query to the endpoint. Tables and columns sync with prefixed names (`cello__CancerCellLine`, `cello__recommendedName`…), which you can rename in **Admin → Table Metadata**.
+
+### 2. Filter in the query builder
+
+Open the cancer cell lines table and filter on **Disease → Label** is `Melanoma`. The driver compiles the filter to SPARQL, and the **Sex** column shows `Female` rather than the IRI `cello:Female`.
+
+![Query builder table of melanoma cell lines with name, accession, sex, age and date](./images/cellosaurus/melanoma-table.webp)
+
+### 3. Follow two foreign keys in a Sankey
+
+Count rows by **Sex → Label** and **Disease → Label**, keep six common cancers and the donors of known sex, and pick the Sankey visualization. Both labels come through the SHACL foreign keys, so the flows read "Male → Colon carcinoma" instead of two IRIs.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="./images/cellosaurus/sankey-dark.webp">
+  <img alt="Sankey diagram of cancer cell lines flowing from donor sex to disease" src="./images/cellosaurus/sankey-light.webp">
+</picture>
+
+### 4. Group by year in a waterfall
+
+Count rows by **Created** grouped by year and pick the Waterfall visualization: each step is the cell lines Cellosaurus added that year, and the last bar is the total. The driver groups the `xsd:date` values by year in SPARQL.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="./images/cellosaurus/waterfall-dark.webp">
+  <img alt="Waterfall chart of cancer cell lines added to Cellosaurus each year, from 2012 to 2026" src="./images/cellosaurus/waterfall-light.webp">
+</picture>
+
 ## :arrows_counterclockwise: Automatic Type Conversion
 
 Query-time mapping (every strategy). SHACL sync reads `sh:datatype` instead — see [SHACL → Metabase mapping](#shacl--metabase-mapping).
