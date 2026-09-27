@@ -226,6 +226,17 @@ jobs:
         with:
           submodules: 'recursive'
 
+      - name: Check tag matches plugin version
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          # A pre-release tag (v0.0.14-rc.1) matches the version it precedes.
+          version=$(sed -n 's/^  version: *//p' resources/metabase-plugin.yaml | head -1)
+          if [ "v$version" != "${TAG%%-*}" ]; then
+            echo "::error::Tag $TAG does not match version $version in resources/metabase-plugin.yaml"
+            exit 1
+          fi
+
       - name: Download driver artifact
         uses: actions/download-artifact@v8
         with:
@@ -237,7 +248,10 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ github.ref_name }}
         run: |
-          gh release create $TAG \
+          # A tag with a suffix (v0.0.14-rc.1) is a pre-release.
+          PRE=
+          case "$TAG" in *-*) PRE=--prerelease ;; esac
+          gh release create $TAG $PRE \
             --title="Metabase SPARQL Driver ${TAG#v}" \
             --generate-notes \
             'target/sparql.metabase-driver.jar#sparql.metabase-driver.jar'
@@ -271,8 +285,9 @@ jobs:
         with:
           context: .
           push: true
+          # :latest only moves on a stable tag, never on a pre-release.
           tags: |
-            ghcr.io/${{ github.repository }}:latest
+            ${{ !contains(github.ref_name, '-') && format('ghcr.io/{0}:latest', github.repository) || '' }}
             ghcr.io/${{ github.repository }}:${{ github.ref_name }}
           labels: |
             org.opencontainers.image.source=https://github.com/${{ github.repository }}
