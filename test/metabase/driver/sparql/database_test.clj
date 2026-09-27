@@ -299,6 +299,14 @@
         (is (= [["https://example.org/shapes.ttl" "nl"
                  {:connect-timeout-ms 5000 :socket-timeout-ms 60000 :max-bytes 2097152}]]
                @calls))))
+    (testing "shacl-shapes: no fetch outside the shacl strategy, even with a SHACL URL set"
+      (let [fetched? (atom false)]
+        (with-redefs [shacl/metadata (fn [& _] (reset! fetched? true) shapes)]
+          (is (nil? (database/shacl-shapes (shacl-db :metadata-sync-strategy "auto"))))
+          (is (false? @fetched?)))))
+    (testing "shacl-shapes: an overflowing size setting is logged and yields nil"
+      (with-redefs [shacl/metadata (fn [& _] shapes)]
+        (is (nil? (database/shacl-shapes (shacl-db :shacl-max-size-mb "10000000000000"))))))
     (testing "a failed SHACL fetch degrades to an empty schema instead of failing the sync"
       (with-redefs [shacl/metadata (fn [& _] (throw (ex-info "Failed to fetch" {:status 500})))]
         (is (= {:tables #{}} (database/describe-database :sparql (shacl-db))))

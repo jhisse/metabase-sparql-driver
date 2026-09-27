@@ -235,16 +235,18 @@
 
 (defn shacl-shapes
   "Return the SHACL shapes of `database` (cached by [[shacl/metadata]]), or
-   nil when no SHACL URL is configured or the document cannot be fetched or
-   parsed (the error is logged). The language for `sh:name`/`sh:description`
-   and the HTTP timeouts and size cap come from the connection details."
+   nil when the sync strategy is not `shacl`, no SHACL URL is configured, or
+   the document cannot be fetched or parsed (the error is logged). The
+   language for `sh:name`/`sh:description` and the HTTP timeouts and size cap
+   come from the connection details."
   [database]
-  (when-let [url (-> database :details :shacl-url)]
-    (let [details (:details database)
-          lang    (or (:default-language details) "")
-          opts    (shacl-fetch-opts details)]
+  (let [details (:details database)
+        url     (:shacl-url details)]
+    (when (and url (= :shacl (keyword (get details :metadata-sync-strategy "auto"))))
       (try
-        (shacl/metadata url lang opts)
+        (shacl/metadata url
+                        (or (:default-language details) "")
+                        (shacl-fetch-opts details))
         (catch Exception t
           (log/errorf t "[shacl] Failed to load SHACL document at %s" url)
           nil)))))
@@ -257,26 +259,23 @@
    `:hide-foreign-uris`, an FK is dropped when its class, property or target
    class is foreign."
   [database]
-  (if-not (= :shacl (keyword (get-in database [:details :metadata-sync-strategy] "auto")))
-    []
-    (let [naming        (uri/naming-context (:details database))
-          hide-foreign? (boolean (-> database :details :hide-foreign-uris))
-          shapes        (shacl-shapes database)]
-      (for [shape shapes
-            prop  (:properties shape)
-            :let  [fk-class (:fk-target-class prop)
-                   prop-uri (:property-uri prop)]
-            :when fk-class
-            :when (not (and hide-foreign?
-                            (or (uri/foreign-uri? fk-class naming)
-                                (uri/foreign-uri? prop-uri naming)
-                                (uri/foreign-uri? (:class-uri shape) naming))))]
-        {:fk-table-name   (uri/shorten-uri (:class-uri shape) naming)
-         :fk-table-schema nil
-         :fk-column-name  (uri/shorten-uri prop-uri naming)
-         :pk-table-name   (uri/shorten-uri fk-class naming)
-         :pk-table-schema nil
-         :pk-column-name  "subject"}))))
+  (let [naming        (uri/naming-context (:details database))
+        hide-foreign? (boolean (-> database :details :hide-foreign-uris))]
+    (for [shape (shacl-shapes database)
+          prop  (:properties shape)
+          :let  [fk-class (:fk-target-class prop)
+                 prop-uri (:property-uri prop)]
+          :when fk-class
+          :when (not (and hide-foreign?
+                          (or (uri/foreign-uri? fk-class naming)
+                              (uri/foreign-uri? prop-uri naming)
+                              (uri/foreign-uri? (:class-uri shape) naming))))]
+      {:fk-table-name   (uri/shorten-uri (:class-uri shape) naming)
+       :fk-table-schema nil
+       :fk-column-name  (uri/shorten-uri prop-uri naming)
+       :pk-table-name   (uri/shorten-uri fk-class naming)
+       :pk-table-schema nil
+       :pk-column-name  "subject"})))
 
 (defn- describe-database-shacl
   [database]

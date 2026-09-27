@@ -67,8 +67,8 @@
 (defn sync-display-dimensions!
   "Upsert a `Dimension` row for every SHACL property of `database` that
    declares `metabase:displayValueProperty` and points at an `sh:class`
-   target. No-op when no SHACL URL is configured or the document cannot be
-   loaded. Fields not synced yet are skipped at debug level (the next sync
+   target. No-op outside the `shacl` sync strategy, or when the document
+   cannot be loaded. Fields not synced yet are skipped at debug level (the next sync
    resolves them); a failed upsert is logged and skipped."
   [database]
   (let [db-id  (:id database)
