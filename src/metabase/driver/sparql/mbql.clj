@@ -1048,8 +1048,9 @@
                     (if (and sf (not (implicit-aliases alias))) [fid alias sf] [fid alias]))
         pair->hop (into {}
                         (for [[_ alias sf :as pair] joined-pairs
+                              :when (and sf (not (implicit-aliases alias)))
                               :let [k (pair-key pair)
-                                    nm (when (= 3 (count k)) (:name (field-id->metadata sf)))]
+                                    nm (:name (field-id->metadata sf))]
                               :when nm]
                           [k {:name nm
                               :prop (uri/absolute-uri nm naming)
@@ -1076,14 +1077,8 @@
                                     (let [meta (field-id->metadata sf)] (or (:display-name meta) (:name meta) sf)))
                             {:type driver-api/qp.error-type.unsupported-feature})))
         ;; Field-ids read off the row itself (a field can also be reached through a
-        ;; join, e.g. a self-referencing FK's display value). Field tokens whose parent
-        ;; `:table-id` isn't the base table are excluded: they belong to a joined entity
-        ;; and would otherwise emit a bogus `?subject <foreign-prop> ?var` triple. The
-        ;; tolerated nil case keeps the test fixtures (no `:table-id`) working.
-        field-ids     (->> (collect-field-ids triple-inner)
-                           (remove (fn [fid]
-                                     (when-let [tid (some-> fid field-id->metadata :table-id)]
-                                       (not= tid table-id)))))
+        ;; join, e.g. a self-referencing FK's display value).
+        field-ids     (collect-field-ids triple-inner)
         field-id->prop (into {}
                              (for [fid field-ids
                                    :let [nm (:name (field-id->metadata fid))]
