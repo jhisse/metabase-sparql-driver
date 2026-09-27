@@ -3,6 +3,7 @@
    The SHACL fetch and every app-DB access (field lookup, toucan2 reads and
    writes) are stubbed, so no Metabase application database is needed."
   (:require [clojure.test :refer :all]
+            [metabase.driver.sparql.database :as database]
             [metabase.driver.sparql.dimensions :as dimensions]
             [metabase.models.humanization :as humanization]
             [toucan2.core :as t2]))
@@ -32,7 +33,7 @@
 
 (deftest sync-display-dimensions-test
   (let [upserts (atom [])]
-    (with-redefs-fn {#'dimensions/shacl-shapes      (constantly shapes)
+    (with-redefs-fn {#'database/shacl-shapes        (constantly shapes)
                      #'dimensions/field-for         (fn [db-id table field]
                                                       (is (= 1 db-id))
                                                       (synced-fields [table field]))
@@ -45,7 +46,7 @@
 
 (deftest sync-display-dimensions-survives-upsert-failure-test
   (testing "a failing upsert is logged and does not abort the sync hook"
-    (with-redefs-fn {#'dimensions/shacl-shapes      (constantly shapes)
+    (with-redefs-fn {#'database/shacl-shapes        (constantly shapes)
                      #'dimensions/field-for         (fn [_ table field] (synced-fields [table field]))
                      #'dimensions/upsert-dimension! (fn [& _] (throw (ex-info "db down" {})))}
       (fn []

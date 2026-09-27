@@ -233,7 +233,7 @@
    :socket-timeout-ms  (some-> (:shacl-socket-timeout details) ->long (* 1000))
    :max-bytes          (some-> (:shacl-max-size-mb details) ->long (* 1024 1024))})
 
-(defn- shacl-shapes
+(defn shacl-shapes
   "Return the SHACL shapes of `database` (cached by [[shacl/metadata]]), or
    nil when no SHACL URL is configured or the document cannot be fetched or
    parsed (the error is logged). The language for `sh:name`/`sh:description`

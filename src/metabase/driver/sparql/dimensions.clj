@@ -18,26 +18,13 @@
    the `:model/Dimension` / `:model/Field` / `:model/Database` toucan models,
    and the raw `metabase_field` / `metabase_table` tables)."
   (:require
-   [metabase.driver.sparql.shacl :as shacl]
+   [metabase.driver.sparql.database :as database]
    [metabase.driver.sparql.uri :as uri]
    [metabase.events.core :as events]
    [metabase.models.humanization :as humanization]
    [metabase.util.log :as log]
    [methodical.core :as methodical]
    [toucan2.core :as t2]))
-
-(defn- shacl-shapes
-  "Return the SHACL shapes of `database`, or nil when no SHACL URL is
-   configured or the document cannot be loaded (logged as a warning)."
-  [database]
-  (when-let [url (-> database :details :shacl-url)]
-    (try
-      (shacl/metadata url
-                      (or (-> database :details :default-language) "")
-                      {})
-      (catch Exception t
-        (log/warnf t "[sparql.dimensions] Failed to load SHACL document at %s" url)
-        nil))))
 
 (defn- field-for
   "Return the active Field `{:id :name :table_id}` named `field-name` in the
@@ -86,7 +73,7 @@
   [database]
   (let [db-id  (:id database)
         naming (uri/naming-context (:details database))
-        shapes (shacl-shapes database)]
+        shapes (database/shacl-shapes database)]
     (doseq [shape shapes
             prop  (:properties shape)
             :let  [display-uri (:display-value-property prop)
