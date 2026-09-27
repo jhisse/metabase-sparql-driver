@@ -80,15 +80,18 @@
         (is (nil? (tu/sparql-syntax-error out)) out)))))
 
 (deftest optional-clause
-  (let [q    "SELECT * WHERE { ?s rdfs:label ?l [[FILTER(?l = {{name}})]] }"
-        tags {"name" {:name "name" :display-name "Name" :type :text}}]
+  (let [label "<http://www.w3.org/2000/01/rdf-schema#label>"
+        q     (str "SELECT * WHERE { ?s " label " ?l [[FILTER(?l = {{name}})]] }")
+        tags  {"name" {:name "name" :display-name "Name" :type :text}}]
     (testing "dropped when its parameter has no value"
-      (is (= "SELECT * WHERE { ?s rdfs:label ?l  }"
-             (subst {:query q :template-tags tags :parameters []}))))
+      (let [out (subst {:query q :template-tags tags :parameters []})]
+        (is (= (str "SELECT * WHERE { ?s " label " ?l  }") out))
+        (is (nil? (tu/sparql-syntax-error out)) out)))
     (testing "kept, brackets removed, when it has a value"
-      (is (= "SELECT * WHERE { ?s rdfs:label ?l FILTER(?l = \"Alice\") }"
-             (subst {:query q :template-tags tags
-                     :parameters [{:type "category" :target [:variable [:template-tag "name"]] :value "Alice"}]}))))))
+      (let [out (subst {:query q :template-tags tags
+                        :parameters [{:type "category" :target [:variable [:template-tag "name"]] :value "Alice"}]})]
+        (is (= (str "SELECT * WHERE { ?s " label " ?l FILTER(?l = \"Alice\") }") out))
+        (is (nil? (tu/sparql-syntax-error out)) out)))))
 
 (deftest multi-value-renders-as-comma-list
   (testing "A vector of values renders as a comma-separated SPARQL term list"
@@ -119,17 +122,19 @@
 
 (deftest date-parameter-is-typed
   (letfn [(date [value]
-            (subst {:query         "SELECT * WHERE { ?s ex:d ?d FILTER(?d > {{d}}) }"
+            (subst {:query         "SELECT * WHERE { ?s <https://example.org/d> ?d FILTER(?d > {{d}}) }"
                     :template-tags {"d" {:name "d" :display-name "D" :type :date}}
                     :parameters    [{:type   "date/single"
                                      :target [:variable [:template-tag "d"]]
                                      :value  value}]}))]
     (testing "a date compares as xsd:date, not as a plain string"
-      (is (= "SELECT * WHERE { ?s ex:d ?d FILTER(?d > \"2005-01-01\"^^<http://www.w3.org/2001/XMLSchema#date>) }"
-             (date "2005-01-01"))))
+      (let [out (date "2005-01-01")]
+        (is (= "SELECT * WHERE { ?s <https://example.org/d> ?d FILTER(?d > \"2005-01-01\"^^<http://www.w3.org/2001/XMLSchema#date>) }" out))
+        (is (nil? (tu/sparql-syntax-error out)) out)))
     (testing "a date with a time is an xsd:dateTime, seconds added"
-      (is (= "SELECT * WHERE { ?s ex:d ?d FILTER(?d > \"2005-01-01T10:30:00\"^^<http://www.w3.org/2001/XMLSchema#dateTime>) }"
-             (date "2005-01-01T10:30"))))))
+      (let [out (date "2005-01-01T10:30")]
+        (is (= "SELECT * WHERE { ?s <https://example.org/d> ?d FILTER(?d > \"2005-01-01T10:30:00\"^^<http://www.w3.org/2001/XMLSchema#dateTime>) }" out))
+        (is (nil? (tu/sparql-syntax-error out)) out)))))
 
 (deftest field-filter-is-a-clear-error
   (testing "a Field Filter fails with a clear message instead of a generic endpoint 400"
