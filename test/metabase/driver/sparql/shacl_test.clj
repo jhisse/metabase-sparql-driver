@@ -173,9 +173,16 @@
   (testing "non-XSD datatypes are not resolved here"
     (is (nil? (xsd-base-type "http://www.w3.org/1999/02/22-rdf-syntax-ns#langString")))))
 
+(defn- stream
+  "An InputStream over the UTF-8 bytes of `s`, as clj-http returns with `:as :stream`."
+  [^String s]
+  (java.io.ByteArrayInputStream. (.getBytes s "UTF-8")))
+
 (deftest fetch-shacl-test
   (let [req (atom nil)
-        respond-with (fn [resp] (fn [url opts] (reset! req {:url url :opts opts}) resp))]
+        respond-with (fn [resp] (fn [url opts]
+                                  (reset! req {:url url :opts opts})
+                                  (update resp :body #(if (string? %) (stream %) %))))]
     (testing "a 200 returns the body and asks for Turtle with the default limits"
       (with-redefs [http/get (respond-with {:status 200 :body "ttl"})]
         (is (= "ttl" (shacl/fetch-shacl "https://example.org/shapes.ttl")))
@@ -205,7 +212,30 @@
         (is (= "ééé" (shacl/fetch-shacl "https://example.org/x.ttl" {:max-bytes 6})))
         (let [e (is (thrown? clojure.lang.ExceptionInfo
                              (shacl/fetch-shacl "https://example.org/x.ttl" {:max-bytes 5})))]
-          (is (= 6 (:bytes (ex-data e)))))))))
+          (is (= 6 (:bytes (ex-data e)))))))
+    (testing "a Content-Length over the cap is rejected before reading the body"
+      (let [unread (proxy [java.io.InputStream] []
+                     (read [& _] (throw (AssertionError. "body was read"))))]
+        (with-redefs [http/get (respond-with {:status 200 :headers {"content-length" "200000000"} :body unread})]
+          (let [e (is (thrown? clojure.lang.ExceptionInfo
+                               (shacl/fetch-shacl "https://example.org/x.ttl" {:max-bytes 1000})))]
+            (is (= 200000000 (:bytes (ex-data e))))))))
+    (testing "an abandoned body aborts the request, since clj-http's close would download the rest"
+      (let [aborted? (atom false)
+            request  (proxy [org.apache.http.client.methods.HttpGet] []
+                       (abort [] (reset! aborted? true)))]
+        (with-redefs [http/get (respond-with {:status 200 :body "éé" :request {:http-req request}})]
+          (is (thrown? clojure.lang.ExceptionInfo (shacl/fetch-shacl "https://example.org/x.ttl" {:max-bytes 3})))
+          (is (true? @aborted?))
+          (is (true? (get-in @req [:opts :save-request])) "the request object is only kept when asked for"))))
+    (testing "a body trickling in past the read timeout is abandoned, not read to the end"
+      (let [trickle (proxy [java.io.InputStream] []
+                      (read [& [^bytes buf]]
+                        (Thread/sleep 20)
+                        (if buf (do (aset-byte buf 0 35) 1) 35)))]
+        (with-redefs [http/get (respond-with {:status 200 :body trickle})]
+          (is (thrown-with-msg? clojure.lang.ExceptionInfo #"took too long"
+                                (shacl/fetch-shacl "https://example.org/x.ttl" {:socket-timeout-ms 50}))))))))
 
 (deftest metadata-cache-test
   (let [url     "https://example.org/cache-test.ttl"
