@@ -573,7 +573,13 @@
           ;; non-matching row gets null from the REGEX guard instead. "s" lets
           ;; `.` cross newlines.
           (let [[txt pat] args
-                pat-str (if (string? pat) pat (second pat))]
+                pat-str (cond
+                          (string? pat) pat
+                          (and (vector? pat) (= :value (first pat)) (string? (second pat))) (second pat)
+                          :else (throw (ex-info (str "regexextract needs a literal pattern; the SPARQL driver "
+                                                     "cannot use a column or expression as the regex.")
+                                                {:type driver-api/qp.error-type.unsupported-feature
+                                                 :clause clause})))]
             (format "IF(REGEX(%s, %s, \"s\"), REPLACE(%s, %s, \"$1\", \"s\"), %s)"
                     (s txt) (uri/string-literal pat-str)
                     (s txt) (uri/string-literal (str "^.*?(" pat-str ").*$"))

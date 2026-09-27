@@ -457,7 +457,7 @@ The driver compiles a useful subset of Metabase **custom expressions** ("Custom 
 |:---------|:----------|:------------|
 | Arithmetic | `+` `-` `*` `/`, `abs`, `ceil`, `floor`, `round` | infix / `ABS` `CEIL` `FLOOR` `ROUND` |
 | Text | `concat`, `substring`, `length`, `lower`, `upper`, `trim`, `ltrim`, `rtrim`, `replace` | `CONCAT`, `SUBSTR`, `STRLEN`, `LCASE`, `UCASE`, `REPLACE` |
-| Regex | `regexextract` | first match via `REPLACE`; null when the pattern does not match |
+| Regex | `regexextract` (literal pattern only) | first match via `REPLACE`; null when the pattern does not match |
 | Conditional | `coalesce`, `case` | `COALESCE`, nested `IF`; `case` conditions accept the same operators as filters |
 | Casts | `float`, `integer`, `text` | `xsd:double`, `xsd:integer`, `STR` |
 

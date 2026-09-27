@@ -357,6 +357,9 @@
       (is (= (str "IF(REGEX(STR(?a), \"[-0-9.]+\", \"s\"), "
                   "REPLACE(STR(?a), \"^.*?([-0-9.]+).*$\", \"$1\", \"s\"), (1/0))")
              (f [:regex-match-first [:field "a" nil] "[-0-9.]+"]))))
+    (testing "a regexextract pattern taken from a column fails clearly"
+      (is (thrown-with-msg? clojure.lang.ExceptionInfo #"regexextract needs a literal pattern"
+                            (f [:regex-match-first [:field "a" nil] [:field "b" nil]]))))
     (testing "a missing value and a case without default are null, not \"\""
       (is (= "COALESCE(?a, (1/0))" (f [:coalesce [:field "a" nil] nil])))
       (is (= "IF((?a > 5), \"big\", (1/0))"
