@@ -6,6 +6,7 @@
             [metabase.util.json :as json]
             [metabase.driver-api.core :as driver-api]
             [metabase.driver.sparql.auth :as auth]
+            [metabase.driver.sparql.uri :as uri]
             [metabase.driver.sparql.query-processor :as query-processor]))
 
 (def ^:private user-agent
@@ -98,7 +99,7 @@
           response (http/post endpoint http-options)
           end-time (System/currentTimeMillis)
           execution-time (- end-time start-time)]
-      (log/debugf "Endpoint: %s" endpoint)
+      (log/debugf "Endpoint: %s" (uri/redact-userinfo endpoint))
       (log/debugf "Ignore SSL validation: %s" (get options :insecure?))
       (log/debugf "SPARQL query: %s" query)
       (log/debugf "SPARQL query execution return status: %s" (:status response))
@@ -118,7 +119,8 @@
   of returning an empty result: a rejected query (e.g. a SPARQL parse error)
   as `invalid-query`, endpoint and transport problems as `db`."
   [native-query _context respond]
-  (log/info "Executing SPARQL query:" (pr-str (select-keys native-query [:native])))
+  ;; The query itself is logged at debug level: it holds filter values.
+  (log/info "Executing SPARQL query")
   (let [database (driver-api/database (driver-api/metadata-provider))
         details  (:details database)
         ;; Always use the admin-configured endpoint. A native query must not be

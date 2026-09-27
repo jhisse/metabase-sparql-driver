@@ -15,6 +15,7 @@
             [metabase.driver.sparql.mbql :as mbql]
             [metabase.driver.sparql.features :as features]
             [metabase.driver.sparql.error :as error]
+            [metabase.driver.sparql.uri :as uri]
             [metabase.util.log :as log]))
 
 ;; Register the SPARQL driver in Metabase's driver system
@@ -110,7 +111,7 @@
 ;; Implements can-connect? multimethod to test SPARQL endpoint connectivity.
 (defmethod driver/can-connect? :sparql
   [_driver details]
-  (log/debugf "[can-connect?] - Testing connection for endpoint: %s" (:endpoint details))
+  (log/debugf "[can-connect?] - Testing connection for endpoint: %s" (uri/redact-userinfo (:endpoint details)))
   (connection/can-connect? (:endpoint details)
                            {:default-graph (:default-graph details)
                             :insecure?     (:use-insecure details)

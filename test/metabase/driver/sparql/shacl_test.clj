@@ -190,6 +190,11 @@
       (with-redefs [http/get (respond-with {:status 404 :body "not found"})]
         (let [e (is (thrown? clojure.lang.ExceptionInfo (shacl/fetch-shacl "https://example.org/x.ttl")))]
           (is (= 404 (:status (ex-data e)))))))
+    (testing "credentials in the URL stay out of the error"
+      (with-redefs [http/get (respond-with {:status 404 :body "not found"})]
+        (let [e (is (thrown? clojure.lang.ExceptionInfo (shacl/fetch-shacl "https://u:secret@example.org/x.ttl")))]
+          (is (not (re-find #"secret" (ex-message e))))
+          (is (= "https://example.org/x.ttl" (:url (ex-data e)))))))
     (testing "a body over the size cap is rejected (counted in UTF-8 bytes, not chars)"
       (with-redefs [http/get (respond-with {:status 200 :body "ééé"})]
         (is (= "ééé" (shacl/fetch-shacl "https://example.org/x.ttl" {:max-bytes 6})))

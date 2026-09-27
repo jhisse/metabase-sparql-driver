@@ -17,6 +17,7 @@
    fetches once."
   (:require [clj-http.client :as http]
             [clojure.string :as str]
+            [metabase.driver.sparql.uri :as uri]
             [metabase.util.log :as log])
   (:import (java.io StringReader)
            (org.eclipse.rdf4j.model BNode IRI Literal Resource Statement Value)
@@ -90,8 +91,9 @@
   ([url {:keys [connect-timeout-ms socket-timeout-ms max-bytes]}]
    (let [connect-ms (or connect-timeout-ms default-connect-timeout-ms)
          socket-ms  (or socket-timeout-ms default-socket-timeout-ms)
-         max-bytes  (or max-bytes default-max-bytes)]
-     (log/infof "[shacl] Fetching SHACL document from %s" url)
+         max-bytes  (or max-bytes default-max-bytes)
+         shown-url  (uri/redact-userinfo url)]
+     (log/infof "[shacl] Fetching SHACL document from %s" shown-url)
      (let [resp (http/get url {:headers            {"Accept" "text/turtle"}
                                :throw-exceptions   false
                                :connection-timeout connect-ms
@@ -102,12 +104,12 @@
                bytes (alength (.getBytes ^String body "UTF-8"))]
            (when (> bytes max-bytes)
              (throw (ex-info (format "SHACL document from %s is %d bytes, exceeding the %d-byte limit"
-                                     url bytes max-bytes)
-                             {:url url :bytes bytes :max-bytes max-bytes})))
+                                     shown-url bytes max-bytes)
+                             {:url shown-url :bytes bytes :max-bytes max-bytes})))
            body)
          (throw (ex-info (format "Failed to fetch SHACL document from %s (status %s)"
-                                 url (:status resp))
-                         {:url url :status (:status resp)})))))))
+                                 shown-url (:status resp))
+                         {:url shown-url :status (:status resp)})))))))
 
 (def ^:private no-contexts
   "Empty array for the trailing `Resource...` varargs on `Rio/parse`. Clojure's

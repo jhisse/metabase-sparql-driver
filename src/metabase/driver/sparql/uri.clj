@@ -1,7 +1,8 @@
 (ns metabase.driver.sparql.uri
   "Shorten IRIs to Metabase table and field names and expand them back (via
    the Default Graph and the `namespace-prefixes` setting), and render values
-   as escaped SPARQL string literals and IRIREFs."
+   as escaped SPARQL string literals and IRIREFs, and strip credentials from
+   URLs before they are logged."
   (:require [clojure.string :as str]
             [metabase.util.log :as log]))
 
@@ -289,3 +290,10 @@
                              #"[\x00-\x20<>\"{}|^`\\]"
                              (fn [m] (format "%%%02X" (int (first m)))))]
     (str "<" encoded ">")))
+
+(defn redact-userinfo
+  "Remove the `user:password@` part from `url`, so it can be logged or shown.
+   The password may itself contain `@`, so everything up to the last `@` of
+   the authority goes."
+  [url]
+  (some-> url str (str/replace #"^([^:/?#]+://)[^/?#]*@" "$1")))

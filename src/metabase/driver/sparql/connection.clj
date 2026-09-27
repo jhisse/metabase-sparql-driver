@@ -4,7 +4,8 @@
   (:require [metabase.util.log :as log]
             [metabase.driver.sparql.auth :as auth]
             [metabase.driver.sparql.execute :as execute]
-            [metabase.driver.sparql.templates :as templates]))
+            [metabase.driver.sparql.templates :as templates]
+            [metabase.driver.sparql.uri :as uri]))
 
 (defn can-connect?
   "Return true when `endpoint` answers the connection test query, or throw
@@ -13,7 +14,7 @@
    `options` takes `:default-graph`, `:insecure?` and `:auth` (from
    `[[auth/http-options]]`)."
   [endpoint options]
-  (log/info "Trying to connect to SPARQL endpoint:" endpoint)
+  (log/info "Trying to connect to SPARQL endpoint:" (uri/redact-userinfo endpoint))
   (let [[success result] (execute/execute-sparql-query endpoint (templates/connection-test-query) options)]
     (if success
       true
