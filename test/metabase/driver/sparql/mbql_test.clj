@@ -355,11 +355,11 @@
       (is (= "REPLACE(STR(?a), \"^\\\\s+|\\\\s+$\", \"\")" (f [:trim [:field "a" nil]]))))
     (testing "regexextract compiles to a first-match REPLACE"
       (is (= (str "IF(REGEX(STR(?a), \"[-0-9.]+\", \"s\"), "
-                  "REPLACE(STR(?a), \"^.*?([-0-9.]+).*$\", \"$1\", \"s\"), ?__null)")
+                  "REPLACE(STR(?a), \"^.*?([-0-9.]+).*$\", \"$1\", \"s\"), (1/0))")
              (f [:regex-match-first [:field "a" nil] "[-0-9.]+"]))))
     (testing "a missing value and a case without default are null, not \"\""
-      (is (= "COALESCE(?a, ?__null)" (f [:coalesce [:field "a" nil] nil])))
-      (is (= "IF((?a > 5), \"big\", ?__null)"
+      (is (= "COALESCE(?a, (1/0))" (f [:coalesce [:field "a" nil] nil])))
+      (is (= "IF((?a > 5), \"big\", (1/0))"
              (f [:case [[[:> [:field "a" nil] 5] "big"]]]))))
     (testing "substring is 1-based SUBSTR"
       (is (= "SUBSTR(STR(?a), 2, 3)" (f [:substring [:field "a" nil] 2 3])))

@@ -476,11 +476,11 @@
 ;; ---------------------------------------------------------------------------
 
 (def ^:private null-term
-  "SPARQL has no null literal. Evaluating a variable nothing binds is an error,
-   which leaves a BIND unbound, makes IF unbound and is skipped by COALESCE:
-   the same result a SQL NULL gives."
-  ;; Collides only with a property whose local name is `__null`.
-  "?__null")
+  "SPARQL has no null literal. Integer division by zero is an evaluation
+   error, which leaves a BIND unbound, makes IF unbound and is skipped by
+   COALESCE: the same result a SQL NULL gives. Unlike a spare variable, no
+   column can bind it."
+  "(1/0)")
 
 (defn- regex-escape
   "Escape regex metacharacters so `s` matches literally inside a SPARQL REPLACE pattern."
