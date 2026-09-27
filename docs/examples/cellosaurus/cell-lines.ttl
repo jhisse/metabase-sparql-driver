@@ -1,0 +1,31 @@
+@prefix sh:       <http://www.w3.org/ns/shacl#> .
+@prefix xsd:      <http://www.w3.org/2001/XMLSchema#> .
+@prefix rdfs:     <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix metabase: <https://data.metabase.com/> .
+@prefix cello:    <https://purl.expasy.org/cellosaurus/rdf/ontology/> .
+@prefix ex:       <https://example.org/cellosaurus-shapes#> .
+
+# A small slice of Cellosaurus (https://sparql.cellosaurus.org/sparql): cancer
+# cell lines, the disease and sex of the donor they come from.
+
+ex:SexShape a sh:NodeShape ;
+  sh:targetClass cello:Sex ;
+  sh:property [ sh:path rdfs:label ; sh:datatype xsd:string ; sh:order 1 ] .
+
+ex:DiseaseShape a sh:NodeShape ;
+  sh:targetClass cello:Disease ;
+  sh:property [ sh:path rdfs:label ; sh:datatype xsd:string ; sh:order 1 ] .
+
+ex:CancerCellLineShape a sh:NodeShape ;
+  sh:targetClass cello:CancerCellLine ;
+  sh:property [ sh:path cello:recommendedName ; sh:datatype xsd:string ; sh:minCount 1 ; sh:order 1 ;
+                sh:description "Recommended name of the cell line" ] ;
+  sh:property [ sh:path cello:primaryAccession ; sh:datatype xsd:string ; sh:order 2 ;
+                sh:description "Cellosaurus accession (CVCL_…)" ] ;
+  sh:property [ sh:path cello:derivedFromIndividualWithDisease ; sh:class cello:Disease ; sh:order 3 ;
+                metabase:displayValueProperty rdfs:label ] ;
+  sh:property [ sh:path cello:derivedFromIndividualWithSex ; sh:class cello:Sex ; sh:order 4 ;
+                metabase:displayValueProperty rdfs:label ] ;
+  sh:property [ sh:path cello:derivedFromIndividualAtAge ; sh:datatype xsd:string ; sh:order 5 ] ;
+  sh:property [ sh:path cello:created ; sh:datatype xsd:date ; sh:order 6 ;
+                sh:description "Date the entry was added to Cellosaurus" ] .
