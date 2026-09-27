@@ -427,7 +427,7 @@
    bind it to every node with `<p>`. Matching a fresh var and comparing it with
    `=` does not: the comparison errors on the unbound row, so the row is kept
    without a value."
-  ;; ponytail: the fresh var scans every `<p>` triple; fine for remaps, revisit
+  ;; The fresh var scans every `<p>` triple; fine for remaps, revisit
   ;; if a derived stage ever remaps over a very large property.
   [fk-var property-uri target-var]
   (let [node (str fk-var "_node")]
@@ -559,7 +559,7 @@
    value's variable (`%1$s`). Truncations rebuild the value from its lexical form,
    extractions return integers. MONTH()/DAY() on an xsd:date is not in SPARQL 1.1
    but Oxigraph, Jena and RDF4J accept it."
-  ;; ponytail: buckets follow each value's own lexical timezone, not the report
+  ;; Buckets follow each value's own lexical timezone, not the report
   ;; timezone; convert first if mixed-timezone data needs report-time buckets.
   (let [quarter-index (str xsd-integer "(FLOOR((MONTH(?%1$s)-1)/3))")]
     {:year            (str "STRDT(CONCAT(SUBSTR(STR(?%1$s),1,4),\"-01-01\"), " xsd-date ")")
