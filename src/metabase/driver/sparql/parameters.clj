@@ -58,9 +58,9 @@
 (defn- date-literal
   "A Date parameter's `s` as a typed literal: a plain string never compares
    equal to, or orders against, an xsd:date value. xsd:dateTime needs seconds,
-   which a `…THH:mm` value lacks."
+   which a `…THH:mm` value (with or without a timezone) lacks."
   [s]
-  (str (uri/string-literal (cond-> s (re-find #"T\d{2}:\d{2}$" s) (str ":00")))
+  (str (uri/string-literal (str/replace s #"(T\d{2}:\d{2})(?=Z|[+-]\d|$)" "$1:00"))
        "^^<http://www.w3.org/2001/XMLSchema#" (if (str/includes? s "T") "dateTime" "date") ">"))
 
 (declare ->sparql-term)

@@ -1,6 +1,7 @@
 (ns metabase.driver.sparql.parameters-test
   "Unit tests for SPARQL parameter substitution"
-  (:require [clojure.test :refer :all]
+  (:require [clojure.string :as str]
+            [clojure.test :refer :all]
             [metabase.driver.common.parameters :as params]
             [metabase.driver.sparql.parameters :as parameters]
             [metabase.driver.sparql.test-util :as tu]))
@@ -134,7 +135,11 @@
     (testing "a date with a time is an xsd:dateTime, seconds added"
       (let [out (date "2005-01-01T10:30")]
         (is (= "SELECT * WHERE { ?s <https://example.org/d> ?d FILTER(?d > \"2005-01-01T10:30:00\"^^<http://www.w3.org/2001/XMLSchema#dateTime>) }" out))
-        (is (nil? (tu/sparql-syntax-error out)) out)))))
+        (is (nil? (tu/sparql-syntax-error out)) out)))
+    (testing "seconds go before a timezone, not after it"
+      (is (str/includes? (date "2005-01-01T10:30Z") "\"2005-01-01T10:30:00Z\"^^"))
+      (is (str/includes? (date "2005-01-01T10:30+02:00") "\"2005-01-01T10:30:00+02:00\"^^"))
+      (is (str/includes? (date "2005-01-01T10:30:15Z") "\"2005-01-01T10:30:15Z\"^^")))))
 
 (deftest field-filter-is-a-clear-error
   (testing "a Field Filter fails with a clear message instead of a generic endpoint 400"
