@@ -312,15 +312,16 @@
         (with-redefs [shacl/metadata (fn [& _] (reset! fetched? true) shapes)]
           (is (nil? (database/shacl-shapes (shacl-db :shacl-url "  "))))
           (is (false? @fetched?)))))
-    (testing "out-of-range limits fall back to the SHACL fetch defaults and still load the shapes"
+    (testing "malformed or out-of-range limits fall back to the SHACL fetch defaults and still load the shapes"
       (let [calls (atom [])]
         (with-redefs [shacl/metadata (fn [_ _ opts] (swap! calls conj opts) shapes)]
           (doseq [[connect socket size] [["0" "-5" "0"]
-                                         ["3000000" "9999999999999999999" "10000000000000"]]]
+                                         ["3000000" "9999999999999999999" "10000000000000"]
+                                         ["" "abc" "1.5"]]]
             (is (= shapes (database/shacl-shapes (shacl-db :shacl-connect-timeout connect
                                                            :shacl-socket-timeout socket
                                                            :shacl-max-size-mb size)))))
-          (is (= (repeat 2 {:connect-timeout-ms nil :socket-timeout-ms nil :max-bytes nil}) @calls)))))
+          (is (= (repeat 3 {:connect-timeout-ms nil :socket-timeout-ms nil :max-bytes nil}) @calls)))))
     (testing "a failed SHACL fetch degrades to an empty schema instead of failing the sync"
       (with-redefs [shacl/metadata (fn [& _] (throw (ex-info "Failed to fetch" {:status 500})))]
         (is (= {:tables #{}} (database/describe-database :sparql (shacl-db))))
