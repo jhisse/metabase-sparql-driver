@@ -99,6 +99,17 @@ for key, db_id in ids.items():
     else:
         raise SystemExit(f"FAILED: database {key} ({db_id}) never finished its initial sync")
 
+# The SHACL display-value remap is written by a post-sync hook (dimensions.clj),
+# after initial_sync_status is already complete: wait for it too.
+meta = api("GET", f"/api/database/{ids['shacl']}/metadata", session=session)
+fks = [f["id"] for t in meta["tables"] for f in t["fields"] if f.get("fk_target_field_id")]
+for _ in range(60):
+    if any(api("GET", f"/api/field/{fk}", session=session)["dimensions"] for fk in fks):
+        break
+    time.sleep(1)
+else:
+    raise SystemExit("FAILED: the SHACL FK display-value remap was never written")
+
 with open(os.environ["ENV_FILE"], "w") as f:
     json.dump({"url": url, "email": email, "password": password, "databases": ids}, f, indent=2)
 print(f"==> Ready: {url}  (login {email} / {password})")
