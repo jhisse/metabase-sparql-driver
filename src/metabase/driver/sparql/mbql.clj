@@ -1180,6 +1180,7 @@
                                                           (vals field-id->var)
                                                           (vals pair->target-var)
                                                           (vals alias->intermediate-var)
+                                                          (keep :var (vals pair->hop))
                                                           (vals (:aliases bucketed))
                                                           (map :var agg-projections))))
         _ (log/debugf "[mbql] Expression BINDs: %d" (count expr-bind-lines))
