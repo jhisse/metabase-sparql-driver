@@ -1054,6 +1054,14 @@
                                                      (str (some-> (pair->hop [fid alias]) :name (str "__"))
                                                           (or (:name (field-id->metadata fid))
                                                               (str "f_" fid)))))]))
+        ;; Metabase adds no join for a `:source-field` that is not a FK (auto sync
+        ;; has none), so nothing would reach the column's entity.
+        _ (when-let [sf (->> (tree-seq coll? seq (select-keys triple-inner [:fields :order-by :filter :expressions]))
+                             (some #(and (vector? %) (= :field (first %)) (not (field-token->join-alias %))
+                                         (:source-field (field-token->opts %)))))]
+            (throw (ex-info (format "The SPARQL driver cannot follow %s: it is not a foreign key."
+                                    (let [meta (field-id->metadata sf)] (or (:display-name meta) (:name meta) sf)))
+                            {:type driver-api/qp.error-type.unsupported-feature})))
         ;; Field-ids read off the row itself (a field can also be reached through a
         ;; join, e.g. a self-referencing FK's display value). Field tokens whose parent
         ;; `:table-id` isn't the base table are excluded: they belong to a joined entity

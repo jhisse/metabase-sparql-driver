@@ -576,7 +576,11 @@
                                      [{:id 1} {:id 10 :lib/join-alias "C"} {:id 30 :lib/join-alias "C"}])]
             (is (= ["subject" "C__label" "C__stad__label"] vars))
             (is (str/includes? sparql (str "?C_subject <" base "stad> ?C__stad_subject . "
-                                           "?C__stad_subject <" base "label> ?C__stad__label .")))))))))
+                                           "?C__stad_subject <" base "label> ?C__stad__label ."))))
+          (testing "a column reached through a field that is not a FK fails clearly"
+            (is (thrown-with-msg? clojure.lang.ExceptionInfo #"cannot follow werkgever: it is not a foreign key"
+                                  (compile-stage* {:source-table 100
+                                                   :fields [[:field 1 nil] [:field 10 {:source-field 4}]]})))))))))
 
 (deftest compile-base-stage-implicit-join-projection-test
   (testing "Lib's result-metadata strips :lib/join-alias from implicit-joinable
