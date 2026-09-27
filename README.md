@@ -65,14 +65,14 @@ A `{{country}}` tag turns into a filter widget, and the driver renders its value
 
 Save the questions and put them on a dashboard. A dashboard filter mapped to the `{{country}}` variable drives the country map, as in the dashboard at the top of this page.
 
-### :bulb: Try with DBpedia
+## :bulb: Try with DBpedia
 
 - Endpoint URL: `https://dbpedia.org/sparql`
 - Default Graph: `http://dbpedia.org`
 
 ![DBpedia Connection](./images/sparql-connection.png)
 
-#### Select Query Example
+### Select Query Example
 
 ```sparql
 PREFIX dbr: <http://dbpedia.org/resource/>
@@ -96,7 +96,7 @@ LIMIT 30
 
 ![DBpedia Select Query](./images/select-query-example.png)
 
-#### Ask Query Example
+### Ask Query Example
 
 ```sparql
 PREFIX dbr: <http://dbpedia.org/resource/>
