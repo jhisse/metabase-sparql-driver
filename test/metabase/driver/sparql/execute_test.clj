@@ -21,7 +21,7 @@
      (let [res# (do ~@body)] res#)))
 
 (deftest process-response-classifies-errors-test
-  (let [process @#'execute/process-response]
+  (let [process #(@#'execute/process-response % "http://sparql.invalid/query")]
     (testing "a 400 (query rejection) is kind :query"
       (is (= :query (nth (process {:status 400 :body "parse error"}) 2))))
     (testing "auth failures are kind :db"
@@ -32,6 +32,23 @@
       (doseq [status [500 502 503 504]]
         (is (= :db (nth (process {:status status :body "boom"}) 2))
             (str "status " status))))
+    (testing "a redirect is kind :db and names its target"
+      (doseq [status [301 303 307]]
+        (let [[success msg kind] (process {:status status :headers {"location" "https://moved.example/sparql"}})]
+          (is (false? success))
+          (is (= :db kind) (str "status " status))
+          (is (str/includes? msg (str "redirected (" status ") to https://moved.example/sparql."))))))
+    (testing "a relative target is resolved against the endpoint"
+      (is (str/includes? (second (process {:status 301 :headers {"location" "/sparql/"}}))
+                         "to http://sparql.invalid/sparql/.")))
+    (testing "credentials, query and fragment of the target are not shown"
+      (let [msg (second (process {:status 302 :headers {"location" "https://u:p@sso.example/authorize?state=s3cret#x"}}))]
+        (is (str/includes? msg "to https://sso.example/authorize."))
+        (is (not (re-find #"s3cret|u:p" msg)))))
+    (testing "a redirect without a usable Location still explains itself"
+      (doseq [headers [{} {"location" "http://bad host/"}]]
+        (is (str/includes? (second (process {:status 302 :headers headers}))
+                           "redirected (302). Redirects are not followed"))))
     (testing "a 200 with an unparseable body is kind :db (endpoint problem, not the query)"
       (let [[success msg kind] (process {:status 200 :body "<html>login page</html>"})]
         (is (false? success))
@@ -115,6 +132,8 @@
       (is (= {:query "ASK {}"} (:form-params opts)))
       (is (= :json (:accept opts)))
       (is (false? (:throw-exceptions opts)) "non-200s must reach process-response, not throw")
+      (is (= :none (:redirect-strategy opts))
+          "a followed redirect re-sends the credentials to the new host")
       (is (str/starts-with? (get-in opts [:headers "User-Agent"]) "metabase-sparql-driver ")
           "Wikidata rejects the HTTP client's default User-Agent")
       (is (= [true {:boolean true}] result))))

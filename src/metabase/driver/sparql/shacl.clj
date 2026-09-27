@@ -85,6 +85,9 @@
    `opts` may supply `:connect-timeout-ms`, `:socket-timeout-ms` and
    `:max-bytes`; each falls back to a built-in default (10 s, 30 s, 10 MB).
 
+   Redirects are followed, unless `url` carries credentials: the HTTP client
+   would re-send them to the new host.
+
    Throws an `ex-info` on any non-200 response or when the body exceeds the
    size cap; connection errors and timeouts propagate from clj-http."
   ([url] (fetch-shacl url nil))
@@ -94,11 +97,12 @@
          max-bytes  (or max-bytes default-max-bytes)
          shown-url  (uri/redact-userinfo url)]
      (log/infof "[shacl] Fetching SHACL document from %s" shown-url)
-     (let [resp (http/get url {:headers            {"Accept" "text/turtle"}
-                               :throw-exceptions   false
-                               :connection-timeout connect-ms
-                               :socket-timeout     socket-ms
-                               :as                 :string})]
+     (let [resp (http/get url (cond-> {:headers            {"Accept" "text/turtle"}
+                                       :throw-exceptions   false
+                                       :connection-timeout connect-ms
+                                       :socket-timeout     socket-ms
+                                       :as                 :string}
+                                (not= url shown-url) (assoc :redirect-strategy :none)))]
        (if (= 200 (:status resp))
          (let [body  (:body resp)
                bytes (alength (.getBytes ^String body "UTF-8"))]

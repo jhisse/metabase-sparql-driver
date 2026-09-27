@@ -181,7 +181,12 @@
         (is (= "ttl" (shacl/fetch-shacl "https://example.org/shapes.ttl")))
         (is (= "text/turtle" (get-in @req [:opts :headers "Accept"])))
         (is (= 10000 (get-in @req [:opts :connection-timeout])))
-        (is (= 30000 (get-in @req [:opts :socket-timeout])))))
+        (is (= 30000 (get-in @req [:opts :socket-timeout])))
+        (is (nil? (get-in @req [:opts :redirect-strategy])) "w3id-style URLs rely on redirects")))
+    (testing "a URL with credentials does not follow redirects, which would re-send them"
+      (with-redefs [http/get (respond-with {:status 200 :body "ttl"})]
+        (shacl/fetch-shacl "https://u:p@example.org/shapes.ttl")
+        (is (= :none (get-in @req [:opts :redirect-strategy])))))
     (testing "configured timeouts are forwarded"
       (with-redefs [http/get (respond-with {:status 200 :body "ttl"})]
         (shacl/fetch-shacl "https://example.org/shapes.ttl" {:connect-timeout-ms 1 :socket-timeout-ms 2})

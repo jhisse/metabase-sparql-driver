@@ -7,7 +7,8 @@
             [metabase.driver-api.core :as driver-api]
             [metabase.driver.sparql.auth :as auth]
             [metabase.driver.sparql.uri :as uri]
-            [metabase.driver.sparql.query-processor :as query-processor]))
+            [metabase.driver.sparql.query-processor :as query-processor])
+  (:import [java.net URI]))
 
 (def ^:private user-agent
   "Sent with every query. Wikimedia endpoints (query.wikidata.org) answer 403
@@ -19,11 +20,15 @@
 
    `options` takes `:insecure?` (skip TLS certificate checks),
    `:default-graph` (sent as `default-graph-uri`) and `:auth` (from
-   `[[auth/http-options]]`, merged in)."
+   `[[auth/http-options]]`, merged in).
+
+   Redirects are not followed: the HTTP client would re-send the credentials
+   to the new host, and would turn the POST into a GET without the query."
   [query {:keys [insecure? default-graph auth]}]
   (cond-> {:accept :json
            :cookie-policy :none
            :throw-exceptions false
+           :redirect-strategy :none
            :form-params {:query query}
            :headers {"User-Agent" user-agent}}
     insecure? (assoc :insecure? true)
@@ -66,23 +71,45 @@
     :db
     :query))
 
-(defn- ^:private process-response
-  "Turn an HTTP `response` into `[true body]` with the decoded JSON, or into
-   `[false message kind]`.
+(defn- ^:private redirect-target
+  "Return the `location` of a redirect resolved against `endpoint`, without
+   credentials, query or fragment, which may hold tokens of a login page.
+   Nil when `location` is missing or not a URI."
+  [endpoint location]
+  (when (not-empty location)
+    (try
+      (let [target (.resolve (URI. (str endpoint)) (str location))]
+        (uri/redact-userinfo (str (URI. (.getScheme target) (.getAuthority target) (.getPath target) nil nil))))
+      (catch Exception _ nil))))
 
-   `kind` is `:db` for an endpoint problem (auth failure, 5xx, or a 200 whose
-   body is not JSON) and `:query` for any other status, taken as the endpoint
-   rejecting the query (e.g. a 400 parse error). The error body is truncated
-   to [[max-error-body-chars]]."
-  [response]
-  (if (= 200 (:status response))
-    (if-let [body (parse-json-response response)]
-      [true body]
-      [false "Invalid JSON response from SPARQL endpoint" :db])
-    [false
-     (str "SPARQL endpoint returned status: " (:status response)
-          "\nBody: " (truncate-body (:body response)))
-     (status->error-kind (:status response))]))
+(defn- ^:private process-response
+  "Turn the HTTP `response` of `endpoint` into `[true body]` with the decoded
+   JSON, or into `[false message kind]`.
+
+   `kind` is `:db` for an endpoint problem (auth failure, redirect, 5xx, or a
+   200 whose body is not JSON) and `:query` for any other status, taken as the
+   endpoint rejecting the query (e.g. a 400 parse error). The error body is
+   truncated to [[max-error-body-chars]]."
+  [response endpoint]
+  (let [status (:status response)]
+    (cond
+      (= 200 status)
+      (if-let [body (parse-json-response response)]
+        [true body]
+        [false "Invalid JSON response from SPARQL endpoint" :db])
+
+      (and (int? status) (<= 300 status 399))
+      [false
+       (str "SPARQL endpoint redirected (" status ")"
+            (some->> (redirect-target endpoint (get-in response [:headers "location"])) (str " to "))
+            ". Redirects are not followed; if that address is the SPARQL endpoint, use it as the endpoint URL.")
+       :db]
+
+      :else
+      [false
+       (str "SPARQL endpoint returned status: " status
+            "\nBody: " (truncate-body (:body response)))
+       (status->error-kind status)])))
 
 (defn execute-sparql-query
   "POST `query` to `endpoint` and return `[true body]` with the decoded JSON,
@@ -105,7 +132,7 @@
       (log/debugf "SPARQL query execution return status: %s" (:status response))
       (log/debugf "SPARQL query execution time: %d ms" execution-time)
       (log/debugf "--------------------------------")
-      (process-response response))
+      (process-response response endpoint))
     (catch Exception e
       (log/errorf "Error executing SPARQL query: %s" (.getMessage e))
       [false (.getMessage e) :transport])))
