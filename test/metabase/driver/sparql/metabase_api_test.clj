@@ -135,6 +135,23 @@
              (:values (api :get (format "/api/field/%d/values"
                                         (get-in company [:fields "listed" :id])))))))))
 
+(deftest ^:integration explicit-join-with-remapped-fk-test
+  (testing "a FK display value inside an explicit join reads the FK's target"
+    (let [{:strs [Person Company]} (tables :shacl)
+          {:keys [cols rows]}
+          (run-mbql :shacl {:source-table (:id Person)
+                            :fields       [(field-ref Person tu/rdfs-label)]
+                            :joins        [{:source-table (:id Company)
+                                            :alias        "C"
+                                            :condition    [:= (field-ref Person "worksFor")
+                                                           [:field (get-in Company [:fields "subject" :id]) {:join-alias "C"}]]
+                                            :fields       [[:field (get-in Company [:fields tu/rdfs-label :id]) {:join-alias "C"}]
+                                                           [:field (get-in Company [:fields "headquarters" :id]) {:join-alias "C"}]]}]})]
+      (is (= 4 (count cols)) "label, C's label and headquarters, and the headquarters' label")
+      (is (= #{["Alice" "Acme Inc" "https://example.org/springfield" "Springfield"]
+               ["Bob" "Globex" "https://example.org/springfield" "Springfield"]}
+             (set rows))))))
+
 (deftest ^:integration result-column-display-names-test
   (testing "MBQL result columns keep Metabase's display names, not SPARQL var names"
     (let [company (get (tables :shacl) "Company")

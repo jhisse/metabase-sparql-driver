@@ -185,15 +185,15 @@
   ([condition this-alias] (field-token->id (condition->fk-ref condition this-alias))))
 
 (defn- collect-joined-pairs
-  "Walk a legacy-MBQL stage and return the set of `[field-id alias]` pairs for every
-   `[:field id {:join-alias \"...\"}]` token that appears in `:fields`, `:order-by`,
-   or `:filter`."
+  "Walk a legacy-MBQL stage and return the set of `[field-id alias source-field]`
+   for every `[:field id {:join-alias \"...\"}]` token that appears in `:fields`,
+   `:order-by`, or `:filter`. `source-field` is the token's `:source-field`, or nil."
   [{:keys [fields order-by expressions] filter-clause :filter}]
   (letfn [(walk [x]
             (cond
               (and (vector? x) (= :field (first x)))
               (when-let [a (field-token->join-alias x)]
-                [[(field-token->id x) a]])
+                [[(field-token->id x) a (:source-field (field-token->opts x))]])
               (sequential? x) (mapcat walk x)
               (map? x) (mapcat walk (vals x))
               :else []))]
@@ -962,12 +962,15 @@
                                         [(:alias j) (sanitize-var-name (str (:alias j) "_subject"))]))
         ;; FK property to reach the joined entity. Implicit joins carry `:fk-field-id`;
         ;; explicit joins only have a `:condition`, so fall back to that.
-        alias->fk-prop (into {}
+        alias->fk-fid  (into {}
                              (for [j joins
-                                   :let [alias (:alias j)
-                                         fk-id (or (:fk-field-id j)
-                                                   (condition->fk-field-id (:condition j) alias))
-                                         nm    (when fk-id (:name (field-id->metadata fk-id)))]
+                                   :let [fk-id (or (:fk-field-id j)
+                                                   (condition->fk-field-id (:condition j) (:alias j)))]
+                                   :when fk-id]
+                               [(:alias j) fk-id]))
+        alias->fk-prop (into {}
+                             (for [[alias fk-id] alias->fk-fid
+                                   :let [nm (:name (field-id->metadata fk-id))]
                                    :when nm]
                                [alias (uri/absolute-uri nm naming)]))
         ;; LHS of each join's FK triple. Chained joins (e.g. Item → Provider → Owner)
@@ -1011,8 +1014,7 @@
         ;; this map to recover the originating join from an expected-cols entry.
         fk-fid->alias (into {}
                             (for [j joins
-                                  :let [fk-id (or (:fk-field-id j)
-                                                  (condition->fk-field-id (:condition j) (:alias j)))]
+                                  :let [fk-id (alias->fk-fid (:alias j))]
                                   :when fk-id]
                               [fk-id (:alias j)]))
         ;; FK triple patterns from ?subject down to `alias`'s intermediate var, one
@@ -1029,17 +1031,29 @@
                          (let [prefix (when parent (join-path parent (conj seen alias)))]
                            (when (or (nil? parent) prefix)
                              (conj (vec prefix) (triple-pattern src fk inter))))))))
+        ;; The display value of a FK column inside an explicit join, e.g.
+        ;; `[:field <City.label> {:join-alias "C" :source-field <C.headquarters>}]`,
+        ;; sits one hop past the joined entity, through a FK other than the join's own.
+        pair->hop (into {}
+                        (for [[fid alias sf] joined-pairs
+                              :when (and sf (not= sf (alias->fk-fid alias)))
+                              :let [nm (:name (field-id->metadata sf))]
+                              :when nm]
+                          [[fid alias] {:name nm
+                                        :prop (uri/absolute-uri nm naming)
+                                        :var  (joined-var-name alias (str nm "_subject"))}]))
         ;; Per joined-pair: the SPARQL var that carries the value. The joined entity's
         ;; own subject column IS the intermediate var (no extra triple needed); every
-        ;; other joined column gets a unique `<alias>__<field-name>` var.
+        ;; other joined column gets a unique `<alias>__[<hop>__]<field-name>` var.
         pair->target-var (into {}
                                (for [[fid alias] joined-pairs]
                                  [[fid alias]
                                   (if (id-field? fid)
                                     (get alias->intermediate-var alias)
                                     (joined-var-name alias
-                                                     (or (:name (field-id->metadata fid))
-                                                         (str "f_" fid))))]))
+                                                     (str (some-> (pair->hop [fid alias]) :name (str "__"))
+                                                          (or (:name (field-id->metadata fid))
+                                                              (str "f_" fid)))))]))
         ;; Field-ids read off the row itself (a field can also be reached through a
         ;; join, e.g. a self-referencing FK's display value). Field tokens whose parent
         ;; `:table-id` isn't the base table are excluded: they belong to a joined entity
@@ -1099,9 +1113,13 @@
                                         prop (uri/absolute-uri nm naming)
                                         target-var (get pair->target-var [fid alias])
                                         inter-var (get alias->intermediate-var alias)
+                                        hop (pair->hop [fid alias])
                                         path (join-path alias)]
                                   :when (and prop target-var path)]
-                              (emit-optional-group (conj path (triple-pattern inter-var prop target-var))))
+                              (emit-optional-group
+                               (concat path
+                                       (when hop [(triple-pattern inter-var (:prop hop) (:var hop))])
+                                       [(triple-pattern (:var hop inter-var) prop target-var)])))
         _ (log/debugf "[mbql] Triples: fields=%d extras=%d join-fk=%d join-targets=%d"
                       (count triples-for-fields) (count triples-for-extras)
                       (count join-fk-triples) (count join-target-triples))

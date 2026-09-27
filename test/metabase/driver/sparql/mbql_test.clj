@@ -77,8 +77,8 @@
 
 (deftest collect-joined-pairs-test
   (let [f @#'mbql/collect-joined-pairs]
-    (is (= #{[2 "J"]}
-           (f {:fields [[:field 1 nil] [:field 2 {:join-alias "J"}]]})))))
+    (is (= #{[2 "J" nil] [3 "J" 4]}
+           (f {:fields [[:field 1 nil] [:field 2 {:join-alias "J"}] [:field 3 {:join-alias "J" :source-field 4}]]})))))
 
 (deftest aggregation-helpers-test
   (let [unwrap  @#'mbql/unwrap-aggregation
@@ -552,6 +552,31 @@
         (is (= ["subject" "label" "Kent__label"] vars))
         (is (str/includes? sparql (str "OPTIONAL { ?subject <" base "label> ?label . }")))
         (is (str/includes? sparql "FILTER (?label = \"Jan\")"))))))
+
+(deftest compile-base-stage-remap-inside-explicit-join-test
+  (testing "the display value of a FK column inside an explicit join follows that FK"
+    (let [fields {1  {:name "subject" :table-id 100}
+                  4  {:name "werkgever" :table-id 100}
+                  10 {:name "label" :table-id 200}
+                  21 {:name "stad" :table-id 200}
+                  30 {:name "label" :table-id 300}}]
+      (with-redefs-fn
+        {#'mbql/field-id->metadata        (fn [id] (get fields id))
+         #'mbql/table-id->class-uri       (constantly (str base "Persoon"))
+         #'mbql/database-naming-context   (constantly {:default-graph base :prefixes []})
+         #'mbql/database-default-language (constantly "")}
+        (fn []
+          (let [{:keys [sparql vars]}
+                (compile-base-stage* {:source-table 100
+                                      :fields [[:field 1 nil]
+                                               [:field 10 {:join-alias "C"}]
+                                               [:field 30 {:join-alias "C" :source-field 21}]]
+                                      :joins  [{:alias     "C"
+                                                :condition [:= [:field 4 nil] [:field 1 {:join-alias "C"}]]}]}
+                                     [{:id 1} {:id 10 :lib/join-alias "C"} {:id 30 :lib/join-alias "C"}])]
+            (is (= ["subject" "C__label" "C__stad__label"] vars))
+            (is (str/includes? sparql (str "?C_subject <" base "stad> ?C__stad_subject . "
+                                           "?C__stad_subject <" base "label> ?C__stad__label .")))))))))
 
 (deftest compile-base-stage-implicit-join-projection-test
   (testing "Lib's result-metadata strips :lib/join-alias from implicit-joinable
