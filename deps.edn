@@ -59,4 +59,4 @@
                "--no-text"
                ;; Fails the build below this % of covered forms (cloverage
                ;; gates on min(forms, lines)). Ratchet it up, never down.
-               "--fail-threshold" "65"]}}}
+               "--fail-threshold" "70"]}}}

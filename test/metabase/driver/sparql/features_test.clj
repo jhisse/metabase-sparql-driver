@@ -13,9 +13,14 @@
   #{:basic-aggregations
     :case-sensitivity-string-filter-options
     :describe-fks
+    :expressions
+    :expressions/float
+    :expressions/integer
+    :expressions/text
     :left-join
     :native-parameters
     :metadata/key-constraints
+    :regex
     :test/cannot-destroy-db
     ;; not in the driver's table: inherited from Metabase's default
     :test/create-table-without-data})

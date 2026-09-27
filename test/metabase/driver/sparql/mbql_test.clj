@@ -333,7 +333,59 @@
   (let [f @#'mbql/var-for-token]
     (is (= "naam" (f [:field "naam" nil] {"naam" "naam"} {})))
     (testing "a join-alias token resolves through pair->target-var"
-      (is (= "jvar" (f [:field "x" {:join-alias "J"}] {} {["x" "J"] "jvar"}))))))
+      (is (= "jvar" (f [:field "x" {:join-alias "J"}] {} {["x" "J"] "jvar"}))))
+    (testing "an expression token resolves to its sanitized name"
+      (is (= "my_col" (f [:expression "my-col"] {} {}))))))
+
+(deftest compile-expression-test
+  (let [f (fn [clause]
+            (let [expr (@#'mbql/compile-expression clause {"a" "a" "b" "b"} {})
+                  q    (str "SELECT * WHERE { BIND(" expr " AS ?x) }")]
+              (is (nil? (tu/sparql-syntax-error q)) q)
+              expr))]
+    (testing "arithmetic"
+      (is (= "(?a + 1)" (f [:+ [:field "a" nil] 1])))
+      (is (= "(?a - ?b)" (f [:- [:field "a" nil] [:field "b" nil]])))
+      (is (= "(?a * 2)" (f [:* [:field "a" nil] 2]))))
+    (testing "string functions coerce args with STR()"
+      (is (= "LCASE(STR(?a))" (f [:lower [:field "a" nil]])))
+      (is (= "STRLEN(STR(?a))" (f [:length [:field "a" nil]])))
+      (is (= "CONCAT(STR(?a), STR(?b))" (f [:concat [:field "a" nil] [:field "b" nil]]))))
+    (testing "trim compiles to a REPLACE"
+      (is (= "REPLACE(STR(?a), \"^\\\\s+|\\\\s+$\", \"\")" (f [:trim [:field "a" nil]]))))
+    (testing "regexextract compiles to a first-match REPLACE"
+      (is (= (str "IF(REGEX(STR(?a), \"[-0-9.]+\", \"s\"), "
+                  "REPLACE(STR(?a), \"^.*?([-0-9.]+).*$\", \"$1\", \"s\"), (1/0))")
+             (f [:regex-match-first [:field "a" nil] "[-0-9.]+"]))))
+    (testing "a regexextract pattern taken from a column fails clearly"
+      (is (thrown-with-msg? clojure.lang.ExceptionInfo #"regexextract needs a literal pattern"
+                            (f [:regex-match-first [:field "a" nil] [:field "b" nil]]))))
+    (testing "a missing value and a case without default are null, not \"\""
+      (is (= "COALESCE(?a, (1/0))" (f [:coalesce [:field "a" nil] nil])))
+      (is (= "IF((?a > 5), \"big\", (1/0))"
+             (f [:case [[[:> [:field "a" nil] 5] "big"]]]))))
+    (testing "substring is 1-based SUBSTR"
+      (is (= "SUBSTR(STR(?a), 2, 3)" (f [:substring [:field "a" nil] 2 3])))
+      (is (= "SUBSTR(STR(?a), 2)" (f [:substring [:field "a" nil] 2]))))
+    (testing "replace escapes quotes, newlines and regex metacharacters in find, and \\ and $ in the replacement"
+      (is (= "REPLACE(STR(?a), \"a\\\"\\\\.b\\n\", \"\\\\$1\\\\\\\\\")"
+             (f [:replace [:field "a" nil] "a\".b\n" "$1\\"]))))
+    (testing "casts use the full xsd IRI constructor"
+      (is (= "<http://www.w3.org/2001/XMLSchema#double>(?a)" (f [:float [:field "a" nil]])))
+      (is (= (str "<http://www.w3.org/2001/XMLSchema#integer>(ROUND("
+                  "<http://www.w3.org/2001/XMLSchema#decimal>(?a)))")
+             (f [:integer [:field "a" nil]]))))
+    (testing "coalesce / case"
+      (is (= "COALESCE(?a, \"x\")" (f [:coalesce [:field "a" nil] "x"])))
+      (is (= "IF((?a > 5), \"big\", \"small\")"
+             (f [:case [[[:> [:field "a" nil] 5] "big"]] {:default "small"}]))))
+    (testing "case predicates compile like filters, and a bare boolean column is used as is"
+      (is (= "IF(?a, 1, 0)" (f [:case [[[:field "a" nil] 1]] {:default 0}])))
+      (is (= "IF((CONTAINS(LCASE(STR(?a)), LCASE(\"x\"))), 1, 0)"
+             (f [:case [[[:contains [:field "a" nil] "x" {:case-sensitive false}] 1]] {:default 0}]))))
+    (testing "an unsupported function throws a clear error"
+      (is (thrown-with-msg? clojure.lang.ExceptionInfo #"Unsupported expression function"
+                            (f [:totally-bogus [:field "a" nil]]))))))
 
 (deftest inner-var-for-ref-test
   (let [f @#'mbql/inner-var-for-ref]
@@ -778,6 +830,63 @@
               :order-by [[:asc [:field "Birthplace" nil]]]}
              expected)]
         (is (str/includes? sparql "ORDER BY ASC(?Place__label)"))))))
+
+(deftest compile-base-stage-expression-test
+  (with-fixture
+    (testing "a custom column emits a BIND and is projected"
+      (let [{:keys [sparql vars]}
+            (compile-stage* {:source-table 100
+                             :fields [[:field 1 nil] [:field 2 nil] [:expression "upper_naam"]]
+                             :expressions {"upper_naam" [:upper [:field 2 nil]]}})]
+        (is (some #{"upper_naam"} vars))
+        (is (str/includes? sparql "BIND(UCASE(STR(?naam)) AS ?upper_naam)"))
+        (is (str/includes? sparql "SELECT ?subject ?naam ?upper_naam"))))
+    (testing "a field referenced only inside an expression still gets its triple"
+      (let [{:keys [sparql]}
+            (compile-stage* {:source-table 100
+                             :fields [[:field 1 nil] [:expression "len"]]
+                             :expressions {"len" [:length [:field 3 nil]]}})]
+        (is (str/includes? sparql (str "OPTIONAL { ?subject <" base "leeftijd> ?leeftijd . }")))
+        (is (str/includes? sparql "BIND(STRLEN(STR(?leeftijd)) AS ?len)"))))
+    (testing "filter and order-by can reference an expression"
+      (let [{:keys [sparql]}
+            (compile-stage* {:source-table 100
+                             :fields [[:field 1 nil] [:expression "len"]]
+                             :expressions {"len" [:length [:field 2 nil]]}
+                             :filter [:> [:expression "len"] 3]
+                             :order-by [[:desc [:expression "len"]]]})]
+        (is (str/includes? sparql "FILTER (?len > 3)"))
+        (is (str/includes? sparql "ORDER BY DESC(?len)"))))
+    (testing "an expression is bound after the expressions it references"
+      ;; a → b → … → i, so name order is the reverse of dependency order
+      (let [names (map str "abcdefghi")
+            exprs (into {"i" [:length [:field 2 nil]]}
+                        (map (fn [n nxt] [n [:* [:expression nxt] 2]]) names (rest names)))
+            {:keys [sparql]}
+            (compile-stage* {:source-table 100
+                             :fields (mapv #(vector :expression %) names)
+                             :expressions exprs})
+            bind-order (map second (re-seq #"BIND\(.* AS \?(\w+)\)" sparql))]
+        (is (= (reverse names) bind-order))))
+    (testing "a custom column whose variable another column already uses fails clearly"
+      (is (thrown-with-msg? clojure.lang.ExceptionInfo #"Rename the custom column \"geboorte datum\""
+                            (@#'mbql/compile-stage {:source-table 100
+                                                    :fields [[:field 11 nil] [:expression "geboorte datum"]]
+                                                    :expressions {"geboorte datum" [:upper [:field 11 nil]]}})))
+      (is (thrown-with-msg? clojure.lang.ExceptionInfo #"its SPARQL variable \?x_y is already used"
+                            (@#'mbql/compile-stage {:source-table 100
+                                                    :fields [[:expression "x-y"] [:expression "x y"]]
+                                                    :expressions {"x-y" [:upper [:field 2 nil]]
+                                                                  "x y" [:lower [:field 2 nil]]}})))
+      (testing "including the variables of date buckets and aggregations"
+        (is (thrown-with-msg? clojure.lang.ExceptionInfo #"Rename the custom column \"geboorte_datum_month\""
+                              (@#'mbql/compile-stage {:source-table 100
+                                                      :breakout [[:field 11 {:temporal-unit :month}]]
+                                                      :expressions {"geboorte_datum_month" [:upper [:field 2 nil]]}})))
+        (is (thrown-with-msg? clojure.lang.ExceptionInfo #"Rename the custom column \"ag_0\""
+                              (@#'mbql/compile-stage {:source-table 100
+                                                      :aggregation [[:count]]
+                                                      :expressions {"ag_0" [:upper [:field 2 nil]]}})))))))
 
 ;; ---------------------------------------------------------------------------
 ;; Lib-driven projection (the column-count-mismatch fix)

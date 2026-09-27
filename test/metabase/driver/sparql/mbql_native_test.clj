@@ -107,3 +107,36 @@
         (is (str/includes? (->sparql (lib/filter q (lib/time-interval born -2 unit)))
                            "?birthDate >=")
             (name unit))))))
+
+(deftest custom-columns-test
+  (let [q      (tu/person-query)
+        label  (tu/column q tu/rdfs-label)
+        age    (tu/column q "age")
+        shout  (lib/expression q "shout" (lib/upper label))
+        ref    #(lib/expression-ref % "shout")]
+    (testing "a custom column is bound and projected after Lib's columns"
+      (let [sparql (->sparql shout)]
+        (is (re-find #"BIND\(UCASE\(STR\(\?\w+\)\) AS \?shout\)" sparql))
+        (is (= "shout" (last (select-vars sparql))))
+        (is (= 7 (count (select-vars sparql))))))
+    (testing "filter and order-by reference the custom column's variable"
+      (let [sparql (->sparql (-> shout
+                                 (lib/filter (lib/= (ref shout) "ALICE"))
+                                 (lib/order-by (ref shout) :desc)))]
+        (is (str/includes? sparql "FILTER (?shout = \"ALICE\")"))
+        (is (str/includes? sparql "ORDER BY DESC(?shout)"))))
+    (testing "aggregating and grouping by a custom column"
+      (let [dbl    (lib/expression q "double" (lib/* age 2))
+            sparql (->sparql (-> dbl
+                                 (lib/aggregate (lib/sum (lib/expression-ref dbl "double")))))]
+        (is (str/includes? sparql "BIND((?age * 2) AS ?double)"))
+        (is (str/includes? sparql "(SUM(?double) AS ?ag_0)")))
+      (let [sparql (->sparql (-> shout (lib/breakout (ref shout)) (lib/aggregate (lib/count))))]
+        (is (str/includes? sparql "GROUP BY ?shout"))))
+    (testing "a later stage reads the column through the sub-SELECT and can build on it"
+      (let [outer  (lib/append-stage shout)
+            inner  (tu/column outer lib/visible-columns "shout")
+            sparql (->sparql (lib/expression outer "whisper" (lib/lower inner)))]
+        (is (str/includes? sparql "BIND(LCASE(STR(?shout)) AS ?whisper)"))
+        (is (= ["shout" "whisper"] (take-last 2 (select-vars sparql))))
+        (is (= 8 (count (select-vars sparql))))))))

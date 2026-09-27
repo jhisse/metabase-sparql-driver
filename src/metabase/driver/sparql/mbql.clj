@@ -41,6 +41,18 @@
   [field-token]
   (:join-alias (field-token->opts field-token)))
 
+(declare collect-expression-tokens)
+
+(defn- expression-token?
+  "True for an `[:expression \"name\" opts?]` reference (a custom column)."
+  [token]
+  (and (vector? token) (= :expression (first token))))
+
+(defn- expression-token->name
+  "The expression name referenced by an `[:expression \"name\"]` token."
+  [token]
+  (when (expression-token? token) (second token)))
+
 (defn- field-id->metadata
   "Resolve field metadata by numeric ID. Returns nil for non-numeric field refs
    (e.g. string column names produced by nested-query / aggregation outputs) so
@@ -101,8 +113,8 @@
     uri))
 
 (defn- collect-field-ids
-  "Collect referenced field IDs from fields/order-by/filter."
-  [{:keys [fields order-by] filter-clause :filter}]
+  "Collect referenced field IDs from fields/order-by/filter/expressions."
+  [{:keys [fields order-by expressions] filter-clause :filter}]
   (let [ids-from-fields (set (keep field-token->id fields))
         ids-from-order  (set (keep (fn [[_dir fld & _]] (field-token->id fld)) order-by))
         ids-from-filter (letfn [(collect-field-tokens [x]
@@ -112,7 +124,8 @@
                                     (map? x) (mapcat collect-field-tokens (vals x))
                                     :else []))]
                           (set (keep field-token->id (collect-field-tokens filter-clause))))
-        all-ids         (vec (set/union ids-from-fields ids-from-order ids-from-filter))]
+        ids-from-expr   (set (keep field-token->id (collect-expression-tokens expressions)))
+        all-ids         (vec (set/union ids-from-fields ids-from-order ids-from-filter ids-from-expr))]
     (log/debugf "[mbql] Collected field IDs: fields=%d order=%d filter=%d total=%d"
                 (count ids-from-fields) (count ids-from-order) (count ids-from-filter) (count all-ids))
     all-ids))
@@ -130,6 +143,7 @@
   (let [fid   (field-token->id field-token)
         alias (field-token->join-alias field-token)]
     (cond
+      (expression-token? field-token) (sanitize-var-name (expression-token->name field-token))
       (and fid alias) (get pair->target-var [fid alias])
       (and fid (id-field? fid)) "subject"
       fid (or (get field-id->var fid)
@@ -171,7 +185,7 @@
   "Walk a legacy-MBQL stage and return the set of `[field-id alias]` pairs for every
    `[:field id {:join-alias \"...\"}]` token that appears in `:fields`, `:order-by`,
    or `:filter`."
-  [{:keys [fields order-by] filter-clause :filter}]
+  [{:keys [fields order-by expressions] filter-clause :filter}]
   (letfn [(walk [x]
             (cond
               (and (vector? x) (= :field (first x)))
@@ -182,6 +196,7 @@
               :else []))]
     (set (concat (mapcat walk (or fields []))
                  (mapcat walk (mapcat (fn [[_dir fld & _]] [fld]) (or order-by [])))
+                 (mapcat walk (collect-expression-tokens expressions))
                  (walk filter-clause)))))
 
 (defn- literal->sparql
@@ -233,6 +248,8 @@
 (def ^:private xsd-date     "<http://www.w3.org/2001/XMLSchema#date>")
 (def ^:private xsd-datetime "<http://www.w3.org/2001/XMLSchema#dateTime>")
 (def ^:private xsd-integer  "<http://www.w3.org/2001/XMLSchema#integer>")
+(def ^:private xsd-double   "<http://www.w3.org/2001/XMLSchema#double>")
+(def ^:private xsd-decimal  "<http://www.w3.org/2001/XMLSchema#decimal>")
 
 (def ^:private ^DateTimeFormatter xsd-datetime-format
   "xsd:dateTime lexical form. Seconds are always written: ISO_OFFSET_DATE_TIME
@@ -335,7 +352,9 @@
                   (if (and (vector? x) (= :value (first x)))
                     (second x)
                     x))]
-          (when-not fid
+          ;; A field LHS carries `fid`; an `[:expression …]` LHS has none but still
+          ;; resolves to a `var` (the custom-column BIND) and must compile.
+          (when-not (or fid (expression-token? lhs))
             (unsupported-filter! (if (and (vector? lhs) (keyword? (first lhs)))
                                    (str "the " (name (first lhs)) "() function")
                                    "this expression")
@@ -453,6 +472,169 @@
   (when-let [expr (compile-filter-expr filter-clause field-id->var pair->target-var)]
     [(str "  FILTER " expr)]))
 
+;; ---------------------------------------------------------------------------
+;; Custom expressions (Metabase "custom columns") → SPARQL
+;; ---------------------------------------------------------------------------
+
+(def ^:private null-term
+  "SPARQL has no null literal. Integer division by zero is an evaluation
+   error, which leaves a BIND unbound, makes IF unbound and is skipped by
+   COALESCE: the same result a SQL NULL gives. Unlike a spare variable, no
+   column can bind it."
+  "(1/0)")
+
+(defn- regex-escape
+  "Escape regex metacharacters so `s` matches literally inside a SPARQL REPLACE pattern."
+  [s]
+  (str/replace (str s) #"([\\.^$|?*+()\[\]{}])" "\\\\$1"))
+
+(declare compile-expression)
+
+(defn- expr-arg
+  "Compile one argument of an expression to a SPARQL expression string: a literal,
+   a `[:value v]` wrapper, a `[:field …]`/`[:expression …]` token (→ `?var`), or a
+   nested operation. Tokens resolve through [[var-for-token]]."
+  [arg field-id->var pair->target-var]
+  (cond
+    (number? arg)  (str arg)
+    (string? arg)  (uri/string-literal arg)
+    (boolean? arg) (if arg "true" "false")
+    (nil? arg)     null-term
+    (and (vector? arg) (= :value (first arg)))      (expr-arg (second arg) field-id->var pair->target-var)
+    (and (vector? arg) (#{:field :expression} (first arg)))
+    (if-let [v (var-for-token arg field-id->var pair->target-var)]
+      (str "?" v)
+      (throw (ex-info "Cannot resolve field/expression reference in expression"
+                      {:token arg})))
+    (sequential? arg) (compile-expression arg field-id->var pair->target-var)
+    :else (throw (ex-info "Unsupported expression argument" {:arg arg}))))
+
+(defn- compile-case
+  "Compile a `[:case [[pred val]…] {:default d}]` clause to nested SPARQL `IF()`.
+   A predicate is a filter clause and compiles like one; a bare boolean column
+   ref is used as is."
+  [args field-id->var pair->target-var]
+  (let [clauses (first args)
+        opts    (second args)
+        default (when (map? opts) (:default opts))
+        a       #(expr-arg % field-id->var pair->target-var)
+        pred    #(if (and (vector? %) (#{:field :expression} (first %)))
+                   (a %)
+                   (compile-filter-expr % field-id->var pair->target-var))]
+    (reduce (fn [else [p val]]
+              (format "IF(%s, %s, %s)" (pred p) (a val) else))
+            (if (some? default) (a default) null-term)
+            (reverse clauses))))
+
+(defn- compile-expression
+  "Compile a Metabase expression clause to a SPARQL expression string. Supports the
+   v1 function subset (arithmetic, string, regex, conditional, casts). Throws
+   `ex-info` on an unsupported function so the query fails with a clear message
+   rather than silently dropping the column."
+  [clause field-id->var pair->target-var]
+  (let [a #(expr-arg % field-id->var pair->target-var)
+        s #(format "STR(%s)" (a %))
+        cast (fn [iri x] (format "%s(%s)" iri (a x)))]
+    (if-not (sequential? clause)
+      (a clause)
+      (let [[op & args] clause]
+        (case op
+          :+ (str "(" (str/join " + " (map a args)) ")")
+          :- (if (= 1 (count args))
+               (str "(- " (a (first args)) ")")
+               (str "(" (str/join " - " (map a args)) ")"))
+          :* (str "(" (str/join " * " (map a args)) ")")
+          :/ (str "(" (str/join " / " (map a args)) ")")
+          :abs   (format "ABS(%s)" (a (first args)))
+          :ceil  (format "CEIL(%s)" (a (first args)))
+          :floor (format "FLOOR(%s)" (a (first args)))
+          :round (format "ROUND(%s)" (a (first args)))
+          :length (format "STRLEN(%s)" (s (first args)))
+          :lower  (format "LCASE(%s)" (s (first args)))
+          :upper  (format "UCASE(%s)" (s (first args)))
+          :trim   (format "REPLACE(%s, \"^\\\\s+|\\\\s+$\", \"\")" (s (first args)))
+          :ltrim  (format "REPLACE(%s, \"^\\\\s+\", \"\")" (s (first args)))
+          :rtrim  (format "REPLACE(%s, \"\\\\s+$\", \"\")" (s (first args)))
+          :concat (format "CONCAT(%s)" (str/join ", " (map s args)))
+          :coalesce (format "COALESCE(%s)" (str/join ", " (map a args)))
+          :substring (let [[txt start len] args]
+                       (if (some? len)
+                         (format "SUBSTR(%s, %s, %s)" (s txt) (a start) (a len))
+                         (format "SUBSTR(%s, %s)" (s txt) (a start))))
+          :replace (let [[txt find repl] args
+                         find-str (if (string? find) find (second find))
+                         repl-str (if (string? repl) repl (second repl))]
+                     ;; `\` and `$` are special in a REPLACE replacement string.
+                     (format "REPLACE(%s, %s, %s)"
+                             (s txt)
+                             (uri/string-literal (regex-escape find-str))
+                             (uri/string-literal (str/replace (str repl-str) #"[\\$]" "\\\\$0"))))
+          :regex-match-first
+          ;; REPLACE returns its input unchanged when nothing matches, so a
+          ;; non-matching row gets null from the REGEX guard instead. "s" lets
+          ;; `.` cross newlines.
+          (let [[txt pat] args
+                pat-str (cond
+                          (string? pat) pat
+                          (and (vector? pat) (= :value (first pat)) (string? (second pat))) (second pat)
+                          :else (throw (ex-info (str "regexextract needs a literal pattern; the SPARQL driver "
+                                                     "cannot use a column or expression as the regex.")
+                                                {:type driver-api/qp.error-type.unsupported-feature
+                                                 :clause clause})))]
+            (format "IF(REGEX(%s, %s, \"s\"), REPLACE(%s, %s, \"$1\", \"s\"), %s)"
+                    (s txt) (uri/string-literal pat-str)
+                    (s txt) (uri/string-literal (str "^.*?(" pat-str ").*$"))
+                    null-term))
+          :float   (cast xsd-double (first args))
+          ;; Metabase rounds; the xsd:integer constructor truncates. Decimal
+          ;; keeps long integers exact, where double would not.
+          :integer (format "%s(ROUND(%s(%s)))" xsd-integer xsd-decimal (a (first args)))
+          :text    (format "STR(%s)" (a (first args)))
+          :case    (compile-case args field-id->var pair->target-var)
+          (throw (ex-info (str "Unsupported expression function: " op)
+                          {:op op :clause clause})))))))
+
+(defn- collect-expression-tokens
+  "Collect every `[:field …]`/`[:expression …]` token appearing inside the values
+   of an `:expressions` map, so fields referenced only by a custom column still
+   get their triples emitted."
+  [expressions]
+  (letfn [(walk [x]
+            (cond
+              (and (vector? x) (#{:field :expression} (first x))) [x]
+              (sequential? x) (mapcat walk x)
+              (map? x) (mapcat walk (vals x))
+              :else []))]
+    (mapcat walk (vals (or expressions {})))))
+
+(defn- compile-expressions
+  "Compile a stage's `:expressions` map to SPARQL `BIND(… AS ?name)` lines.
+   Field/expression tokens resolve through [[var-for-token]]. Returns a vector of lines (one BIND per expression). An expression that
+   references another comes after it: the legacy `:expressions` map loses
+   Lib's order past 8 entries, and a BIND cannot read a variable bound later.
+
+   Throws when a custom column's variable is already `taken` by another column
+   (names that differ only in characters [[sanitize-var-name]] replaces, e.g.
+   `my-col` and `my col`): a BIND onto a bound variable is a SPARQL error."
+  [expressions field-id->var pair->target-var taken]
+  (doseq [[v names] (group-by sanitize-var-name (keys expressions))
+          :when (or (taken v) (next names))]
+    (throw (ex-info (format "Rename the custom column %s: its SPARQL variable ?%s is already used by another column."
+                            (pr-str (first names)) v)
+                    {:type driver-api/qp.error-type.unsupported-feature})))
+  (loop [todo (into (sorted-map) expressions) done #{} lines []]
+    (if (empty? todo)
+      lines
+      (let [ready? (fn [[_ clause]]
+                     (every? done (keep expression-token->name (collect-expression-tokens {nil clause}))))
+            [ename clause] (or (first (filter ready? todo))
+                               (throw (ex-info "Custom columns reference each other in a cycle"
+                                               {:expressions (keys todo)})))]
+        (recur (dissoc todo ename)
+               (conj done ename)
+               (conj lines (str "  BIND(" (compile-expression clause field-id->var pair->target-var)
+                                " AS ?" (sanitize-var-name ename) ")")))))))
+
 (defn- compile-order-by
   "Compile :order-by to ORDER BY."
   [order-by field-id->var pair->target-var]
@@ -475,12 +657,12 @@
     agg))
 
 (defn- aggregation-arg-token
-  "Return the `[:field …]` token an aggregation operates on, or nil for arg-less
-   aggregations such as `[:count]`."
+  "Return the `[:field …]`/`[:expression …]` token an aggregation operates on, or
+   nil for arg-less aggregations such as `[:count]`."
   [agg]
   (let [agg (unwrap-aggregation agg)
         arg (when (sequential? agg) (second agg))]
-    (when (and (vector? arg) (= :field (first arg)))
+    (when (and (vector? arg) (#{:field :expression} (first arg)))
       arg)))
 
 (defn- aggregation-output-name
@@ -615,7 +797,7 @@
                       :let [v (cond
                                 (and (vector? tok) (= :aggregation (first tok)))
                                 (str "ag_" (second tok))
-                                (and (vector? tok) (= :field (first tok)))
+                                (and (vector? tok) (#{:field :expression} (first tok)))
                                 (token->var tok)
                                 :else nil)]
                       :when v]
@@ -638,9 +820,12 @@
   (let [fid     (:id col)
         alias   (:lib/join-alias col)
         fk-fid  (:fk-field-id col)
+        expr-nm (or (:lib/expression-name col)
+                    (when (= :source/expressions (:lib/source col)) (:name col)))
         recovered-alias (when (and (not alias) fk-fid)
                           (get fk-fid->alias fk-fid))]
     (cond
+      expr-nm                   (sanitize-var-name expr-nm)
       (and fid alias)           (get pair->target-var [fid alias])
       (and fid recovered-alias) (get pair->target-var [fid recovered-alias])
       (and fid (id-field? fid)) "subject"
@@ -750,6 +935,7 @@
         ;; Grouped mode: a breakout without aggregations still groups (distinct
         ;; values, e.g. the query behind a field's filter-value list).
         agg?          (boolean (or (seq aggregations) (seq breakout)))
+        expressions   (:expressions inner)
         ;; In aggregation mode raw :fields are not projected; the columns that
         ;; need WHERE triples are the breakout columns and the aggregated columns.
         output-tokens (if agg?
@@ -882,7 +1068,8 @@
                                       (map? x) (mapcat collect-field-tokens (vals x))
                                       :else []))]
                             (->> (concat (mapcat (fn [[_dir fld & _]] [fld]) (or order-by []))
-                                         (collect-field-tokens filter-clause))
+                                         (collect-field-tokens filter-clause)
+                                         (collect-expression-tokens expressions))
                                  (remove field-token->join-alias)
                                  (keep field-token->id)
                                  set
@@ -938,6 +1125,17 @@
                                         aggregations))
         bucketed        (bucket-breakout breakout token->var)
         breakout-vars   (when agg? (:vars bucketed))
+        ;; Custom-column BINDs. Emitted after the triples that bind the variables
+        ;; they reference (direct fields, extras, joined targets) so the values are
+        ;; available; placed before filters/GROUP BY/ORDER BY which may use them.
+        expr-bind-lines (compile-expressions expressions field-id->var pair->target-var
+                                             (set (concat ["subject"]
+                                                          (vals field-id->var)
+                                                          (vals pair->target-var)
+                                                          (vals alias->intermediate-var)
+                                                          (vals (:aliases bucketed))
+                                                          (map :var agg-projections))))
+        _ (log/debugf "[mbql] Expression BINDs: %d" (count expr-bind-lines))
         ;; Non-aggregation SELECT var list: ?subject + direct fields + joined target vars.
         direct-select-vars (when-not agg?
                              (->> fields
@@ -955,6 +1153,14 @@
                                             (get pair->target-var [(field-token->id tok) a]))))
                                   distinct
                                   vec))
+        ;; Expression columns explicitly projected via :fields (fallback path only;
+        ;; the reconcile path resolves them positionally against Lib's expected-cols).
+        expr-select-vars (when-not agg?
+                           (->> fields
+                                (filter expression-token?)
+                                (map token->var)
+                                distinct
+                                vec))
         ;; When Lib's expected columns are known, reconcile the SELECT against them so
         ;; the driver's column count/order can never drift from the `annotate` middleware.
         reconciled  (when (and expected-cols (not agg?))
@@ -969,7 +1175,7 @@
         result-vars (cond
                       agg?       (vec (concat breakout-vars (keep :var agg-projections)))
                       reconciled (vec (:vars reconciled))
-                      :else      (vec (concat ["subject"] direct-select-vars joined-select-vars)))
+                      :else      (vec (concat ["subject"] direct-select-vars joined-select-vars expr-select-vars)))
         select-part (if agg?
                       (str "SELECT "
                            (str/join " " (concat (map #(str "?" %) breakout-vars)
@@ -986,6 +1192,7 @@
                                  join-fk-triples
                                  join-target-triples
                                  (or (:triples reconciled) [])
+                                 expr-bind-lines
                                  (:binds bucketed)
                                  (or lang-filter-lines [])
                                  filters)
@@ -1099,8 +1306,13 @@
                                    alias (:lib/join-alias col)
                                    join  (when alias (get alias->join alias))
                                    fk-var (some-> join :condition condition->fk-ref inner-var-for-ref)
-                                   nm    (when (integer? tid) (:name (field-id->metadata tid)))]
+                                   nm    (when (integer? tid) (:name (field-id->metadata tid)))
+                                   expr-nm (or (:lib/expression-name col)
+                                               (when (= :source/expressions (:lib/source col)) (:name col)))]
                                (cond
+                                 expr-nm
+                                 (update acc :vars conj (sanitize-var-name expr-nm))
+
                                  (and alias (get pair->target-var [tid alias]))
                                  (update acc :vars conj (get pair->target-var [tid alias]))
 
@@ -1140,6 +1352,13 @@
                                            expected-cols (:vars reconciled))))
         ;; The map used to resolve the outer stage's own filter/order-by clauses.
         outer-field-id->var (merge field-id->var expected-name->var)
+        ;; Custom columns defined on the derived stage, resolved against the inner
+        ;; sub-SELECT's columns (by sanitized name) and any remap vars.
+        expressions   (:expressions stage)
+        expr-bind-lines (compile-expressions expressions outer-field-id->var pair->target-var
+                                             (set (concat passthrough-vars
+                                                          (vals (:aliases bucketed))
+                                                          (map :var agg-projections))))
         result-vars   (cond
                         agg?           (vec (concat breakout-vars (keep :var agg-projections)))
                         reconciled     (vec (:vars reconciled))
@@ -1164,6 +1383,8 @@
                              (str (str/join "\n" (map :optional remap-entries)) "\n"))
                            (when (seq (:optionals reconciled))
                              (str (str/join "\n" (:optionals reconciled)) "\n"))
+                           (when (seq expr-bind-lines)
+                             (str (str/join "\n" expr-bind-lines) "\n"))
                            (when (seq (:binds bucketed))
                              (str (str/join "\n" (:binds bucketed)) "\n"))
                            (when (seq filters)

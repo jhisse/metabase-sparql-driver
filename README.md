@@ -447,6 +447,30 @@ With **Default Graph URI** = `http://dbpedia.org/ontology/` and **Default Langua
 - `wikiPageRevisionID` is absent (`metabase:hide`).
 - The synced Dutch description ("Wikipedia-pagina-ID") is preferred over the English one.
 
+## :triangular_ruler: Custom Columns (Expressions)
+
+The driver compiles a useful subset of Metabase **custom expressions** ("Custom column" in the notebook editor, and the expression editor) into SPARQL. Each expression becomes a `BIND(... AS ?name)` in the compiled query; fields referenced only inside an expression still get their triples (including across implicit joins).
+
+**Supported functions**
+
+| Category | Functions | Compiles to |
+|:---------|:----------|:------------|
+| Arithmetic | `+` `-` `*` `/`, `abs`, `ceil`, `floor`, `round` | infix / `ABS` `CEIL` `FLOOR` `ROUND` |
+| Text | `concat`, `substring`, `length`, `lower`, `upper`, `trim`, `ltrim`, `rtrim`, `replace` | `CONCAT`, `SUBSTR`, `STRLEN`, `LCASE`, `UCASE`, `REPLACE` |
+| Regex | `regexextract` (literal pattern only) | first match via `REPLACE`; null when the pattern does not match |
+| Conditional | `coalesce`, `case` | `COALESCE`, nested `IF`; `case` conditions accept the same operators as filters |
+| Casts | `float`, `integer`, `text` | `xsd:double`, `xsd:integer` (rounded, like Metabase), `STR` |
+
+> **Note:** Enabling expressions exposes the *entire* expression palette in the UI. Anything outside the subset above (most date/time math, advanced math, window functions) raises a clear **"Unsupported expression function"** error instead of silently producing a wrong query. If you hit one you need, open an issue.
+
+Each custom column becomes a SPARQL variable named after it, with every character outside `A-Za-z0-9_` replaced by `_`. Two columns that end up with the same variable (for example a `my-col` property and a `my col` custom column) fail with a "Rename the custom column" error.
+
+Example — extract a number from a string and treat it numerically:
+
+```text
+float(regexextract([code], "[0-9]+"))
+```
+
 ## :warning: Limitations and Known Issues
 
 - **Query forms**: Native questions can be `SELECT` or `ASK`. `CONSTRUCT` and `DESCRIBE` return a graph, not a table, and fail with an error saying so.
