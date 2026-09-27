@@ -227,11 +227,14 @@
 (defn- shacl-fetch-opts
   "Build the HTTP options map for the SHACL fetch from connection `details`.
    Timeouts are configured in seconds and the size cap in megabytes; unset
-   values are left `nil` so the SHACL extractor applies its own defaults."
+   values, and zero or negative ones (a 0 timeout means no timeout to the
+   HTTP client), are left `nil` so the SHACL extractor applies its own
+   defaults."
   [details]
-  {:connect-timeout-ms (some-> (:shacl-connect-timeout details) ->long (* 1000))
-   :socket-timeout-ms  (some-> (:shacl-socket-timeout details) ->long (* 1000))
-   :max-bytes          (some-> (:shacl-max-size-mb details) ->long (* 1024 1024))})
+  (let [positive #(some-> % ->long (as-> n (when (pos? n) n)))]
+    {:connect-timeout-ms (some-> (positive (:shacl-connect-timeout details)) (* 1000))
+     :socket-timeout-ms  (some-> (positive (:shacl-socket-timeout details)) (* 1000))
+     :max-bytes          (some-> (positive (:shacl-max-size-mb details)) (* 1024 1024))}))
 
 (defn shacl-shapes
   "Return the SHACL shapes of `database` (cached by [[shacl/metadata]]), or
@@ -241,7 +244,7 @@
    come from the connection details."
   [database]
   (let [details (:details database)
-        url     (:shacl-url details)]
+        url     (not-empty (str/trim (str (:shacl-url details))))]
     (when (and url (= :shacl (keyword (get details :metadata-sync-strategy "auto"))))
       (try
         (shacl/metadata url
