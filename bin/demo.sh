@@ -32,9 +32,6 @@ up() {
   echo "==> Starting Oxigraph and Metabase"
   $COMPOSE up -d
   wait_for_oxigraph
-  # Graph Store POST appends: clear both graphs so a rerun reloads the fixture as is.
-  curl -sS -f -X DELETE "$STORE" >/dev/null 2>&1 || true
-  curl -sS -f -X DELETE "$SHACL_URL" >/dev/null 2>&1 || true
   seed_fixtures
 
   echo -n "==> Waiting for Metabase (first start takes a minute or two) "
