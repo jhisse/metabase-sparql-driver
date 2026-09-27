@@ -25,7 +25,7 @@ If your change affects user-visible behavior (a connection property, a type mapp
 ### Docstrings
 
 - Every public var has a docstring. Private functions have one unless the name already says everything.
-- Write prose. Don't use `Parameters:`, `Returns:` or `Usage:` sections. Older docstrings in that style are rewritten when their function changes.
+- Write prose. Don't use `Parameters:`, `Returns:` or `Usage:` sections.
 - The first sentence says what the function returns or does. Start with a verb ("Render …", "Resolve …"), or with "True when …" for a predicate.
 - Put argument names and code in backticks (`class-uri`) and refer to other vars as `[[name]]`. Describe the shape of the return value inline (`{:vars [...] :triples [...]}`).
 - After that, write only what the code does not show: why it works this way, edge cases, what happens on failure (returns nil or throws), and SPARQL or Metabase constraints.

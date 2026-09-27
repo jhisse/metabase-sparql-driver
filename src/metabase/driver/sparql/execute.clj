@@ -15,19 +15,11 @@
   "metabase-sparql-driver (https://github.com/jhisse/metabase-sparql-driver)")
 
 (defn- ^:private create-http-options
-  "Create HTTP options map for SPARQL query execution.
-  
-   Parameters:
-     query - SPARQL query string to execute
-     options - Map containing configuration options:
-       :insecure? - Boolean flag to ignore SSL certificate validation
-       :default-graph - URI of the default graph to query
-       :auth - clj-http fragment with auth keys (e.g. :basic-auth or :headers).
-               Built by `metabase.driver.sparql.auth/http-options` from
-               connection details. Optional.
+  "Build the clj-http options that POST `query` as a form parameter.
 
-   Returns:
-     A map of HTTP options for clj-http client."
+   `options` takes `:insecure?` (skip TLS certificate checks),
+   `:default-graph` (sent as `default-graph-uri`) and `:auth` (from
+   `[[auth/http-options]]`, merged in)."
   [query {:keys [insecure? default-graph auth]}]
   (cond-> {:accept :json
            :cookie-policy :none
@@ -39,14 +31,8 @@
     (seq auth) (#(merge-with merge % auth))))
 
 (defn- ^:private parse-json-response
-  "Parse JSON response body from SPARQL endpoint.
-  
-   Parameters:
-     response - HTTP response from SPARQL endpoint
-     
-   Returns:
-     Parsed JSON body as Clojure data structure, or nil if parsing fails.
-     Logs error details when parsing fails."
+  "Decode the JSON body of `response`, or return nil and log the error when
+   it is not valid JSON."
   [response]
   (try
     (json/decode+kw (:body response))
@@ -81,17 +67,13 @@
     :query))
 
 (defn- ^:private process-response
-  "Process HTTP response from SPARQL endpoint.
+  "Turn an HTTP `response` into `[true body]` with the decoded JSON, or into
+   `[false message kind]`.
 
-   Parameters:
-     response - HTTP response from SPARQL endpoint
-
-   Returns:
-     On success: [true, response-body] where response-body is the parsed JSON response
-     On failure: [false, error-message, kind] where kind is `:query` (the
-     endpoint rejected the query, e.g. a 400 parse error) or `:db` (auth
-     failure, 5xx, or an unparseable 200 body — an endpoint problem, not the
-     user's query). The error body is truncated to a sane size."
+   `kind` is `:query` when the endpoint rejected the query (a 400 parse
+   error) and `:db` for an endpoint problem: auth failure, 5xx, or a 200 whose
+   body is not JSON. The error body is truncated to
+   `[[max-error-body-chars]]`."
   [response]
   (if (= 200 (:status response))
     (if-let [body (parse-json-response response)]
@@ -103,24 +85,13 @@
      (status->error-kind (:status response))]))
 
 (defn execute-sparql-query
-  "Execute SPARQL queries against an endpoint using POST.
+  "POST `query` to `endpoint` and return `[true body]` with the decoded JSON,
+   or `[false message kind]`.
 
-   Parameters:
-     endpoint - URL of the SPARQL endpoint
-     query - SPARQL query string to execute
-     options - Map of additional options:
-       :default-graph - URI of the default graph to query (optional)
-       :insecure? - Boolean flag to ignore SSL certificate validation (optional)
-       :auth - clj-http auth fragment from `auth/http-options` (optional)
-
-   Returns:
-     On success: [true, response-body] where response-body is the parsed JSON response
-     On failure: [false, error-message, kind] where kind is `:query` (the
-     endpoint rejected the query), `:db` (auth/5xx/bad body), or `:transport`
-     (connection refused, DNS, TLS…)
-
-   This function handles all HTTP communication with the SPARQL endpoint
-   using the POST method, which is robust for queries of any length."
+   `kind` is `:query` or `:db` as in `[[process-response]]`, or `:transport`
+   when the request never got an answer (connection refused, DNS, TLS).
+   `options` is passed to `[[create-http-options]]`. POST keeps queries of any
+   length out of the URL."
   [endpoint query options]
   (try
     (let [start-time (System/currentTimeMillis)
@@ -140,17 +111,13 @@
       [false (.getMessage e) :transport])))
 
 (defn execute-reducible-query
-  "Executes a SPARQL query and processes the results for Metabase.
-  
-  Arguments:
-    - native-query: map containing at least :query under :native. The endpoint is
-      always taken from the database details and cannot be overridden by the query.
-    - respond: callback function to handle the processed results
+  "Run the SPARQL in `native-query`'s `[:native :query]` and pass its columns
+  and rows to `respond`.
 
-  This function retrieves database details, executes the SPARQL query, and processes the response.
-  On failure it throws, so the error reaches the user instead of rendering as an
-  empty result: query rejections (e.g. SPARQL parse errors) as `invalid-query`,
-  endpoint problems (auth, 5xx, bad body) and transport failures as `db`."
+  The endpoint always comes from the database details, never from the query,
+  so stored credentials cannot be sent elsewhere. On failure it throws instead
+  of returning an empty result: a rejected query (e.g. a SPARQL parse error)
+  as `invalid-query`, endpoint and transport problems as `db`."
   [native-query _context respond]
   (log/info "Executing SPARQL query:" (pr-str (select-keys native-query [:native])))
   (let [database (driver-api/database (driver-api/metadata-provider))

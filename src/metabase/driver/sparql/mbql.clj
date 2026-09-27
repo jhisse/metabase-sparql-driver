@@ -49,7 +49,7 @@
   (and (vector? token) (= :expression (first token))))
 
 (defn- expression-token->name
-  "The expression name referenced by an `[:expression \"name\"]` token."
+  "Return the expression name referenced by an `[:expression \"name\"]` token."
   [token]
   (when (expression-token? token) (second token)))
 
@@ -74,9 +74,9 @@
   (= "subject" (:name (field-id->metadata field-id))))
 
 (defn- database-naming-context
-  "URI-naming context (Default Graph + namespace prefixes) from the connection
-   details of the current database. Consumed by `uri/absolute-uri` to expand
-   shortened table/field names back to full URIs."
+  "Return the URI-naming context (Default Graph + namespace prefixes) of the
+   current database, which expands shortened table and field names back to
+   full URIs."
   []
   (uri/naming-context (some-> (driver-api/database (driver-api/metadata-provider))
                               :details)))
@@ -182,7 +182,7 @@
                     first))))))))
 
 (defn- condition->fk-field-id
-  "Field-id of the FK-source side of a join `:condition` (see [[condition->fk-ref]])."
+  "Return the field id of the FK-source side of a join `:condition` (see [[condition->fk-ref]])."
   ([condition] (field-token->id (condition->fk-ref condition)))
   ([condition this-alias] (field-token->id (condition->fk-ref condition this-alias))))
 
@@ -263,13 +263,13 @@
   (DateTimeFormatter/ofPattern "uuuu-MM-dd'T'HH:mm:ssXXX"))
 
 (defn- query-zone
-  "Zone that relative dates and date-only values are resolved in (the QP's
+  "Return the zone that relative dates and date-only values are resolved in (the QP's
    results timezone)."
   ^ZoneId []
   (ZoneId/of (driver-api/results-timezone-id)))
 
 (defn- query-now
-  "Current time in [[query-zone]]; the reference point for `:relative-datetime`."
+  "Return the current time in [[query-zone]]; the reference point for `:relative-datetime`."
   ^ZonedDateTime []
   (ZonedDateTime/now (query-zone)))
 
@@ -324,7 +324,7 @@
          :local (str "\"" (.format xsd-local-datetime-format zdt) "\"^^" xsd-datetime)}))))
 
 (defn- compare-expr
-  "`?var op term`. For a `{:tz … :local …}` dateTime bound, compare each value
+  "Render the comparison `?var op term`. For a `{:tz … :local …}` dateTime bound, compare each value
    against the form that matches whether it carries a timezone."
   [var op term]
   (if (map? term)
@@ -673,7 +673,7 @@
       arg)))
 
 (defn- aggregation-output-name
-  "Metabase's default result-column name for an aggregation clause — the name a
+  "Return Metabase's default result-column name for an aggregation clause — the name a
    *later* stage uses to reference the aggregation as a plain field (e.g. drilling
    on a count value adds a filter `[:< [:field \"count\" …] 12]`). An
    `:aggregation-options` `:name` wins; otherwise it is derived from the operator
@@ -1465,7 +1465,7 @@
      (compile-base-stage stage expected-cols))))
 
 (defn- expected-result-columns
-  "Lib's authoritative result columns for `outer-query` (pMBQL) — the same calculation
+  "Return Lib's authoritative result columns for `outer-query` (pMBQL) — the same calculation
    the `annotate` middleware uses to decide how many columns the query should return.
    Returns nil if Lib cannot compute them, in which case the compiler falls back to
    deriving the projection from the query's own `:fields`."

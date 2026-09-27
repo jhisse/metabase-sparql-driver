@@ -112,7 +112,7 @@
                          src-table-name src-field-name))))))))
 
 (defn- readable-display-name
-  "The display name for a field named by a full URI (a property outside the
+  "Return the display name for a field named by a full URI (a property outside the
    Default Graph and the namespace prefixes, e.g. rdfs:label): its humanized
    local name (\"Label\"). nil for other fields, for a field whose display
    name is no longer sync's default (one an admin renamed), and when nothing

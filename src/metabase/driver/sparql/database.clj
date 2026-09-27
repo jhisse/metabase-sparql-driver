@@ -26,8 +26,8 @@
     (parse-long (str/trim (str v)))))
 
 (defn- parse-schema-config
-  "Parses the schema configuration JSON string.
-   Returns a map with a :tables key containing a list of table definitions, or nil if parsing fails or config is empty."
+  "Parse the schema configuration JSON into `{:tables [...]}`, or return nil
+   when it is empty or not valid JSON."
   [config-str]
   (when-not (str/blank? config-str)
     (try
@@ -37,7 +37,7 @@
         nil))))
 
 (defn- build-pk-field
-  "Creates the synthetic primary-key field that represents the RDF subject of each
+  "Build the synthetic primary-key field for the RDF subject of each
    instance. Named `subject` to mirror the `?subject` variable used in the emitted
    SPARQL and to avoid collisions with shortened property URIs whose local name is
    `id` (a very common case once Default Graph stripping is in effect)."
@@ -49,7 +49,7 @@
    :database-position 0})
 
 (defn- build-field-from-uri
-  "Creates a field definition from a property URI.
+  "Build the field for the property `field-uri`.
 
    `naming` (a [[uri/naming-context]]) shortens the URI when it matches the
    Default Graph or a configured namespace prefix, so the column name in
@@ -58,7 +58,7 @@
 
    `iri?` marks a property whose values are IRI nodes (discovered via the
    `?isIri` projection of `class-properties-query`): it syncs as
-   `:database-type \"uri\"` — the same marker as the subject column — so
+   `:database-type \"uri\"`, the same marker as the subject column, so
    equality filters compile to `<iri>` terms (see `mbql/value->term`)."
   ([naming idx field-uri]
    (build-field-from-uri naming idx field-uri false))
@@ -70,7 +70,8 @@
     :database-position (inc idx)}))
 
 (defn- build-fields-from-explicit-config
-  "Builds field set from explicit schema configuration."
+  "Build the field set of an explicit-schema table: the `subject` key plus one
+  field per configured property, without foreign URIs when `hide-foreign?`."
   [naming hide-foreign? explicit-table]
   (let [pk-field     (build-pk-field)
         candidates   (cond->> (:fields explicit-table)
@@ -86,7 +87,9 @@
   (contains? #{"1" "true"} (get-in binding [:isIri :value])))
 
 (defn- build-fields-from-sparql-query
-  "Builds field set from SPARQL query results."
+  "Build the field set of a discovered class from the property query's
+  `bindings`: the `subject` key plus one field per property, without foreign
+  URIs when `hide-foreign?`."
   [naming hide-foreign? bindings]
   (let [pk-field   (build-pk-field)
         candidates (cond->> bindings
@@ -100,7 +103,7 @@
     (set (cons pk-field other-fields))))
 
 (defn- describe-table-none
-  "Handles describe-table when sync strategy is 'none'."
+  "Return `table` with no fields: the none strategy skips sync."
   [table]
   (log/info "Skipping table metadata sync for SPARQL database - sync strategy is 'none'")
   {:name (:name table)
@@ -108,7 +111,7 @@
    :fields #{}})
 
 (defn- describe-table-explicit
-  "Handles describe-table when sync strategy is 'explicit'."
+  "Return the fields listed for `table` in the explicit schema configuration."
   [naming hide-foreign? table explicit-table]
   (log/info "Using explicit schema configuration for table:" (:name table))
   {:name (:name table)
@@ -141,7 +144,8 @@
           (run false)))))
 
 (defn- describe-table-auto
-  "Handles describe-table when sync strategy is 'auto' (or fallback)."
+  "Discover the properties of `table` by sampling its instances. A failed
+  query logs and returns no fields."
   [database table]
   (let [details        (:details database)
         naming         (uri/naming-context details)
@@ -299,15 +303,11 @@
         {:name (:name table) :schema nil :fields #{(build-pk-field)}}))))
 
 (defn describe-table
-  "Describes the fields (properties) of an RDF class (SPARQL table).
+  "Return the fields of `table`, an RDF class whose `:name` may be a shortened
+   URI, as `{:name … :schema nil :fields #{…}}`.
 
-   Parameters:
-     _ - driver (not used)
-     database - Metabase Database instance
-     table - Table definition with :name containing the (possibly shortened) RDF class URI
-
-   Returns:
-     Map with :name, :schema, and :fields keys describing the table structure"
+   Uses the same sync strategy as [[describe-database]]; an explicit strategy
+   that does not list the class falls back to auto."
   [_ database table]
   (let [details        (:details database)
         sync-strategy  (keyword (get details :metadata-sync-strategy "auto"))
@@ -331,7 +331,7 @@
       (describe-table-auto database table))))
 
 (defn- build-table-from-config
-  "Builds a table definition from schema configuration."
+  "Build the table for a class listed in the explicit schema configuration."
   [naming table]
   (let [uri        (:name table)
         short-name (uri/shorten-uri uri naming)]
@@ -342,7 +342,8 @@
                       (str "RDF Class: " uri " (Explicit)"))}))
 
 (defn- build-table-from-sparql-result
-  "Builds a table definition from SPARQL query results."
+  "Build the table for a class found by the discovery query, with its instance
+  count in the description."
   [naming {:keys [uri count]}]
   {:name (uri/shorten-uri uri naming)
    :schema nil
@@ -350,13 +351,13 @@
    :description (str "RDF Class: " uri " (Instances: " count ")")})
 
 (defn- describe-database-none
-  "Handles describe-database when sync strategy is 'none'."
+  "Return no tables: the none strategy skips sync."
   []
   (log/info "Skipping metadata sync for SPARQL database - sync strategy is 'none'")
   {:tables #{}})
 
 (defn- describe-database-explicit
-  "Handles describe-database when sync strategy is 'explicit'."
+  "Return the tables listed in the explicit schema configuration."
   [naming hide-foreign? database schema-config]
   (log/info "Using explicit schema configuration for database:" (:name database))
   (let [tables (cond->> (:tables schema-config)
@@ -364,7 +365,8 @@
     {:tables (set (map #(build-table-from-config naming %) tables))}))
 
 (defn- describe-database-auto
-  "Handles describe-database when sync strategy is 'auto' (or fallback)."
+  "Discover the classes with the discovery query, capped by the database's
+  class limit (default 100). A failed query logs and returns no tables."
   [database]
   (let [details       (:details database)
         naming        (uri/naming-context details)
@@ -387,14 +389,11 @@
         {:tables #{}}))))
 
 (defn describe-database
-  "Discovers the available 'tables' (RDF classes) in the SPARQL endpoint.
+  "Return `{:tables #{…}}` with the RDF classes of `database`, one table per
+   class, found by its metadata sync strategy (auto, explicit, SHACL or none).
 
-   Parameters:
-     _ - driver (not used)
-     database - Metabase Database instance
-
-   Returns:
-     Map with the :tables key containing a set of table definitions."
+   An explicit strategy without a valid schema configuration falls back to
+   auto."
   [_ database]
   (let [details       (:details database)
         sync-strategy (keyword (get details :metadata-sync-strategy "auto"))

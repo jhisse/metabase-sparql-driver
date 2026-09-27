@@ -54,18 +54,10 @@
   (str xsd "boolean"))
 
 (defn sparql-type->base-type
-  "Converts a SPARQL type to a Metabase base type.
+  "Return the Metabase base type for a SPARQL term type (`\"uri\"`, `\"literal\"`,
+   `\"bnode\"`, …) and its optional `datatype` IRI.
 
-   A pure lookup, intentionally free of logging: determine-column-types calls
-   it once per distinct (type, datatype) pair per column, but callers are free
-   to call it per cell.
-
-   Parameters:
-     sparql-type - SPARQL type ('uri', 'literal', 'bnode', etc.)
-     datatype - Datatype URI (optional)
-
-   Returns:
-     Metabase base type (:type/URL, :type/Text, :type/Integer, etc.)"
+   A pure lookup with no logging, so it is safe to call once per cell."
   [sparql-type datatype]
   (cond
     ;; URIs are typed as :type/URL (a Text subtype)
@@ -91,13 +83,11 @@
     :else :type/Text))
 
 (defn convert-value
-  "Converts a SPARQL value to the appropriate Metabase type.
-   
-   Parameters:
-     binding - SPARQL binding containing :value, :type, and possibly :datatype
-   
-   Returns:
-     Value converted to the appropriate type."
+  "Convert a SPARQL result `binding` to a Clojure value by its datatype:
+   integers to Long, decimals and floats to Double, booleans to Boolean.
+
+   Any other value, or a number that fails to parse (logged), stays the
+   original string."
   [binding]
   (let [value (:value binding)
         type-key (:type binding)
@@ -138,25 +128,17 @@
    #{:type/Date :type/DateTime} :type/DateTime})
 
 (defn determine-column-types
-  "Determines column types from the result rows.
-   Scans every row instead of a fixed-size sample — a column whose first rows
-   are all null or all integers no longer misses a later type flip. The rows
-   are already fully materialized in memory; a single pass collects the distinct
-   (type, datatype) pairs per column (typically one or two), which are then
-   classified — so the cost is one traversal of the present cells, not a
-   datatype classification per cell.
+  "Return a map from each variable in `vars` to the Metabase base type of its
+   values in `bindings`.
 
-   Trade-off of the full scan: the column type is now sensitive to every row,
-   so a saved question's result_metadata can flip between runs when the
-   underlying RDF data gains a divergent value — the price of correctness
-   over sampling stability.
+   Every row is scanned, not a sample, so a column whose first rows are null
+   or integers still catches a later type flip. One pass collects the distinct
+   (type, datatype) pairs per column, usually one or two, and only those are
+   classified.
 
-   Parameters:
-     vars - List of variable names (columns) in the result
-     bindings - List of bindings (rows) in the result
-
-   Returns:
-     Map associating variable names to Metabase base types"
+   The trade-off: the type depends on every row, so a saved question's
+   result_metadata can change between runs when the data gains a divergent
+   value."
   [vars bindings]
   (let [;; One pass over the rows, collecting per column key the distinct raw
         ;; (type, datatype) pairs — touching only the cells actually present,

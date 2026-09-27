@@ -4,14 +4,11 @@
             [metabase.util.log :as log]))
 
 (defn humanize-connection-error-message
-  "Humanizes the connection error message.
+  "Turn the exception chain's `messages` (from `metabase.util/all-ex-messages`)
+   into a readable message or one of Metabase's known error keywords.
 
-   Parameters:
-     messages - Sequence of error message strings from the exception chain
-                (as produced by `metabase.util/all-ex-messages`).
-
-   Returns:
-     A user-friendly error message string or a known error keyword."
+   HTTP statuses and common network failures are matched; anything else
+   returns the first message unchanged."
   [messages]
   (log/debugf "[humanize-connection-error-message] - Received messages: %s" messages)
   (let [joined (str/join " -> " messages)]

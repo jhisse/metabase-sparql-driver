@@ -34,7 +34,7 @@
   #"^[A-Za-z][A-Za-z0-9_-]*__")
 
 (defn- prefix-head
-  "The `prefix__` head a shortened name starts with."
+  "Return the `prefix__` head a shortened name starts with."
   [prefix]
   (str prefix prefix-separator))
 
@@ -226,7 +226,7 @@
             uri)))))
 
 (defn local-name
-  "The local name of `iri`: the part after its last `/` or `#`
+  "Return the local name of `iri`: the part after its last `/` or `#`
    (`https://example.org/Persoon` → `Persoon`), or the URI itself when that
    part is blank."
   [iri]
@@ -269,9 +269,9 @@
   (str "\"" (escape-string v) "\""))
 
 (defn iri-shaped?
-  "Heuristic: a string that looks like an absolute IRI we should render as
-   `<...>` (via [[iri-ref]]) rather than a quoted literal. Accepts `http(s)://`
-   and `urn:` shapes; anything else stays a literal. Deliberately narrower than
+  "True when `s` looks like an absolute IRI to render as `<...>` (via
+   [[iri-ref]]) rather than a quoted literal. Accepts `http(s)://` and `urn:`
+   shapes; anything else stays a literal. Deliberately narrower than
    [[absolute-uri]]'s scheme check — that one answers \"already has a scheme,
    don't prepend the base\", which is a different question."
   [s]

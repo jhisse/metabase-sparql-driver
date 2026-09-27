@@ -23,7 +23,7 @@
    [metabase.util.log :as log]))
 
 (defn- unsupported-kind
-  "The name of a parameter value record we cannot meaningfully render in SPARQL,
+  "Return the name of a parameter value record we cannot meaningfully render in SPARQL,
    or nil: Field Filters (SQL-shaped BETWEEN/IN clauses), referenced cards,
    snippets, and referenced tables. Predicate fns live in
    `metabase.driver.common.parameters` itself precisely so callers don't need
@@ -56,7 +56,7 @@
     :else                                v))
 
 (defn- date-literal
-  "A Date parameter's `s` as a typed literal: a plain string never compares
+  "Render a Date parameter's `s` as a typed literal: a plain string never compares
    equal to, or orders against, an xsd:date value. xsd:dateTime needs seconds,
    which a `…THH:mm` value (with or without a timezone) lacks."
   [s]

@@ -142,7 +142,7 @@
   (first (get-in spo [subject pred-iri])))
 
 (defn- objects
-  "All objects for `subject`/`pred-iri`, or `nil` if none."
+  "Return all objects for `subject`/`pred-iri`, or nil if none."
   [spo subject pred-iri]
   (get-in spo [subject pred-iri]))
 
