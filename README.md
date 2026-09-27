@@ -134,13 +134,22 @@ Open the cancer cell lines table and filter on **Disease → Label** is `Melanom
 
 ![Query builder table of melanoma cell lines with name, accession, sex, age and date](./images/cellosaurus/melanoma-table.webp)
 
-### 3. Summarize
+### 3. Follow two foreign keys in a Sankey
 
-Count rows by **Disease → Label**, sort by count and keep the top 10: the diseases with the most cancer cell lines.
+Count rows by **Sex → Label** and **Disease → Label**, keep six common cancers and the donors of known sex, and pick the Sankey visualization. Both labels come through the SHACL foreign keys, so the flows read "Male → Colon carcinoma" instead of two IRIs.
 
 <picture>
-  <source media="(prefers-color-scheme: dark)" srcset="./images/cellosaurus/chart-dark.webp">
-  <img alt="Bar chart of the ten diseases with the most cancer cell lines in Cellosaurus" src="./images/cellosaurus/chart-light.webp">
+  <source media="(prefers-color-scheme: dark)" srcset="./images/cellosaurus/sankey-dark.webp">
+  <img alt="Sankey diagram of cancer cell lines flowing from donor sex to disease" src="./images/cellosaurus/sankey-light.webp">
+</picture>
+
+### 4. Group by year in a waterfall
+
+Count rows by **Created** grouped by year and pick the Waterfall visualization: each step is the cell lines Cellosaurus added that year, and the last bar is the total. The driver groups the `xsd:date` values by year in SPARQL.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="./images/cellosaurus/waterfall-dark.webp">
+  <img alt="Waterfall chart of cancer cell lines added to Cellosaurus each year, from 2012 to 2026" src="./images/cellosaurus/waterfall-light.webp">
 </picture>
 
 ## :arrows_counterclockwise: Automatic Type Conversion
