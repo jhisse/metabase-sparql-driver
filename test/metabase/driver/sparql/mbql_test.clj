@@ -372,7 +372,9 @@
              (f [:replace [:field "a" nil] "a\".b\n" "$1\\"]))))
     (testing "casts use the full xsd IRI constructor"
       (is (= "<http://www.w3.org/2001/XMLSchema#double>(?a)" (f [:float [:field "a" nil]])))
-      (is (= "<http://www.w3.org/2001/XMLSchema#integer>(?a)" (f [:integer [:field "a" nil]]))))
+      (is (= (str "<http://www.w3.org/2001/XMLSchema#integer>(ROUND("
+                  "<http://www.w3.org/2001/XMLSchema#decimal>(?a)))")
+             (f [:integer [:field "a" nil]]))))
     (testing "coalesce / case"
       (is (= "COALESCE(?a, \"x\")" (f [:coalesce [:field "a" nil] "x"])))
       (is (= "IF((?a > 5), \"big\", \"small\")"

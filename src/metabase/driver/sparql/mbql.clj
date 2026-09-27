@@ -249,6 +249,7 @@
 (def ^:private xsd-datetime "<http://www.w3.org/2001/XMLSchema#dateTime>")
 (def ^:private xsd-integer  "<http://www.w3.org/2001/XMLSchema#integer>")
 (def ^:private xsd-double   "<http://www.w3.org/2001/XMLSchema#double>")
+(def ^:private xsd-decimal  "<http://www.w3.org/2001/XMLSchema#decimal>")
 
 (def ^:private ^DateTimeFormatter xsd-datetime-format
   "xsd:dateTime lexical form. Seconds are always written: ISO_OFFSET_DATE_TIME
@@ -585,7 +586,9 @@
                     (s txt) (uri/string-literal (str "^.*?(" pat-str ").*$"))
                     null-term))
           :float   (cast xsd-double (first args))
-          :integer (cast xsd-integer (first args))
+          ;; Metabase rounds; the xsd:integer constructor truncates. Decimal
+          ;; keeps long integers exact, where double would not.
+          :integer (format "%s(ROUND(%s(%s)))" xsd-integer xsd-decimal (a (first args)))
           :text    (format "STR(%s)" (a (first args)))
           :case    (compile-case args field-id->var pair->target-var)
           (throw (ex-info (str "Unsupported expression function: " op)
