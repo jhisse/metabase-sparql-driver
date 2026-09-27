@@ -51,6 +51,9 @@ seed() { # seed <file> <graph> <store-url>
 }
 
 seed_fixtures() {
+  # Graph Store POST appends: clear both graphs so a rerun reloads the fixture as is.
+  curl -sS -f -X DELETE "$STORE" >/dev/null 2>&1 || true
+  curl -sS -f -X DELETE "$SHACL_URL" >/dev/null 2>&1 || true
   seed "$FIXTURE" "$GRAPH" "$STORE"
   seed "$SHAPES" "$SHAPES_GRAPH" "$SHACL_URL"
 }

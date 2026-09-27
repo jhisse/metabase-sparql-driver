@@ -32,9 +32,6 @@ up() {
   echo "==> Starting Oxigraph and Metabase"
   $COMPOSE up -d
   wait_for_oxigraph
-  # Graph Store POST appends: clear both graphs so a rerun reloads the fixture as is.
-  curl -sS -f -X DELETE "$STORE" >/dev/null 2>&1 || true
-  curl -sS -f -X DELETE "$SHACL_URL" >/dev/null 2>&1 || true
   seed_fixtures
 
   echo -n "==> Waiting for Metabase (first start takes a minute or two) "
@@ -98,6 +95,21 @@ for key, db_id in ids.items():
         time.sleep(1)
     else:
         raise SystemExit(f"FAILED: database {key} ({db_id}) never finished its initial sync")
+
+# The post-sync hook (dimensions.clj) runs after initial_sync_status is already
+# complete: wait until it has written the FK remap and, after it, the rdfs:label
+# display name.
+LABEL = "http://www.w3.org/2000/01/rdf-schema#label"
+for _ in range(60):
+    fields = [f for t in api("GET", f"/api/database/{ids['shacl']}/metadata", session=session)["tables"]
+              for f in t["fields"]]
+    remapped = any(api("GET", f"/api/field/{f['id']}", session=session)["dimensions"]
+                   for f in fields if f.get("fk_target_field_id"))
+    if remapped and all(f["display_name"] == "Label" for f in fields if f["name"] == LABEL):
+        break
+    time.sleep(1)
+else:
+    raise SystemExit("FAILED: the post-sync hook never wrote the FK remap and display names")
 
 with open(os.environ["ENV_FILE"], "w") as f:
     json.dump({"url": url, "email": email, "password": password, "databases": ids}, f, indent=2)

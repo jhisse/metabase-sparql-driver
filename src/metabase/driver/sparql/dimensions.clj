@@ -1,6 +1,10 @@
 (ns metabase.driver.sparql.dimensions
-  "Post-sync hook that writes Metabase `dimension` rows from SHACL
-   `metabase:displayValueProperty` declarations.
+  "Post-sync hook that writes what `describe-table` cannot:
+
+     - Metabase `dimension` rows from SHACL `metabase:displayValueProperty`
+       declarations;
+     - readable display names for fields named by a full URI (see
+       [[sync-display-names!]]).
 
    Why this exists:
      `describe-table` returns per-field metadata, but Metabase's FK display-value
@@ -18,6 +22,7 @@
    [metabase.driver.sparql.shacl :as shacl]
    [metabase.driver.sparql.uri :as uri]
    [metabase.events.core :as events]
+   [metabase.models.humanization :as humanization]
    [metabase.util.log :as log]
    [methodical.core :as methodical]
    [toucan2.core :as t2]))
@@ -106,18 +111,47 @@
               (log/warnf t "[sparql.dimensions] Failed to upsert dimension for %s.%s"
                          src-table-name src-field-name))))))))
 
+(defn- readable-display-name
+  "The display name for a field named by a full URI (a property outside the
+   Default Graph and the namespace prefixes, e.g. rdfs:label): its humanized
+   local name (\"Label\"). nil for other fields, for a field whose display
+   name is no longer sync's default (one an admin renamed), and when nothing
+   would change (a URI without a `/` or `#` local name)."
+  [{:keys [name display_name]}]
+  (when (and (uri/has-scheme? name)
+             (= display_name (humanization/name->human-readable-name name)))
+    (let [readable (humanization/name->human-readable-name (uri/local-name name))]
+      (when (not= readable display_name)
+        readable))))
+
+(defn sync-display-names!
+  "Give fields named by a full URI a readable display name. Sync ignores a
+   driver's field display name and humanizes the name itself, which for a full
+   URI reads \"Http://www.w3.org/2000/01/rdf Schema#label\"."
+  [database]
+  (doseq [field (t2/select [:model/Field :id :name :display_name]
+                           {:select    [:f.id :f.name :f.display_name]
+                            :from      [[:metabase_field :f]]
+                            :left-join [[:metabase_table :t] [:= :t.id :f.table_id]]
+                            :where     [:and [:= :t.db_id (:id database)] [:= :f.active true]]})
+          :let  [display-name (readable-display-name field)]
+          :when display-name]
+    (t2/update! :model/Field (:id field) {:display_name display-name})))
+
 (derive ::sparql-sync-end :metabase/event)
 (derive :event/sync-metadata-end ::sparql-sync-end)
 
 (methodical/defmethod events/publish-event! ::sparql-sync-end
   "After SPARQL metadata sync finishes, materialize SHACL displayValueProperty
-   declarations as Metabase Dimension rows. No-op for non-SPARQL databases."
+   declarations as Metabase Dimension rows and fix full-URI display names.
+   No-op for non-SPARQL databases."
   [_topic {:keys [database_id] :as _event}]
   (try
     (when-let [database (and database_id
                              (t2/select-one [:model/Database :id :engine :details]
                                             :id database_id))]
       (when (= :sparql (keyword (:engine database)))
-        (sync-display-dimensions! database)))
+        (sync-display-dimensions! database)
+        (sync-display-names! database)))
     (catch Exception t
       (log/warnf t "[sparql.dimensions] Error handling sync-metadata-end event"))))

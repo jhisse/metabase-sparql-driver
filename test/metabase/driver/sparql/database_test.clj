@@ -9,7 +9,6 @@
             [metabase.driver.sparql.execute :as execute]
             [metabase.driver.sparql.shacl :as shacl]))
 
-(def ^:private extract-class-name @#'database/extract-class-name)
 (def ^:private parse-schema-config @#'database/parse-schema-config)
 (def ^:private build-pk-field @#'database/build-pk-field)
 (def ^:private build-field-from-uri @#'database/build-field-from-uri)
@@ -18,12 +17,6 @@
 (def ^:private shacl-shape->describe-table @#'database/shacl-shape->describe-table)
 
 (def ^:private graph "https://example.org/")
-
-(deftest extract-class-name-test
-  (testing "local name is taken after the last slash or hash"
-    (is (= "Persoon" (extract-class-name "https://example.org/Persoon")))
-    (is (= "Person"  (extract-class-name "http://xmlns.com/foaf/0.1/Person")))
-    (is (= "name"    (extract-class-name "http://example.org/schema#name")))))
 
 (deftest parse-schema-config-test
   (testing "valid JSON is decoded with keyword keys"

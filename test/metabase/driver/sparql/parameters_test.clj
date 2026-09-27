@@ -1,7 +1,10 @@
 (ns metabase.driver.sparql.parameters-test
   "Unit tests for SPARQL parameter substitution"
-  (:require [clojure.test :refer :all]
-            [metabase.driver.sparql.parameters :as parameters]))
+  (:require [clojure.string :as str]
+            [clojure.test :refer :all]
+            [metabase.driver.common.parameters :as params]
+            [metabase.driver.sparql.parameters :as parameters]
+            [metabase.driver.sparql.test-util :as tu]))
 
 (defn- subst [inner-query]
   (:query (parameters/substitute-native-parameters :sparql inner-query)))
@@ -65,12 +68,31 @@
                                     :target [:variable [:template-tag "name"]]
                                     :value "Alice"}]})))))
 
-(deftest missing-optional-leaves-placeholder
-  (testing "An optional tag with no value leaves the `{{x}}` literal in place"
-    (is (= "SELECT * WHERE { ?s rdfs:label {{name}} }"
-           (subst {:query         "SELECT * WHERE { ?s rdfs:label {{name}} }"
-                   :template-tags {"name" {:name "name" :display-name "Name" :type :text}}
-                   :parameters    []})))))
+(deftest valueless-tag-stays-as-written
+  (let [tags {"x" {:name "x" :display-name "X" :type :text}}]
+    (testing "a tag in a `#` comment does not break the query"
+      (let [q "SELECT ?s WHERE { ?s ?p ?o\n# FILTER(?s = {{x}})\n}"]
+        (is (= q (subst {:query q :template-tags tags :parameters []})))))
+    (testing "a nested group written `{{ … }}` is not a tag"
+      (let [q "SELECT ?s WHERE {{ ?s a <https://example.org/A> } UNION { ?s a <https://example.org/B> }}"
+            out (subst {:query q :template-tags tags :parameters []})]
+        (is (= "SELECT ?s WHERE {{?s a <https://example.org/A> } UNION { ?s a <https://example.org/B>}}" out)
+            "the parser trims the inner edges, which SPARQL ignores")
+        (is (nil? (tu/sparql-syntax-error out)) out)))))
+
+(deftest optional-clause
+  (let [label "<http://www.w3.org/2000/01/rdf-schema#label>"
+        q     (str "SELECT * WHERE { ?s " label " ?l [[FILTER(?l = {{name}})]] }")
+        tags  {"name" {:name "name" :display-name "Name" :type :text}}]
+    (testing "dropped when its parameter has no value"
+      (let [out (subst {:query q :template-tags tags :parameters []})]
+        (is (= (str "SELECT * WHERE { ?s " label " ?l  }") out))
+        (is (nil? (tu/sparql-syntax-error out)) out)))
+    (testing "kept, brackets removed, when it has a value"
+      (let [out (subst {:query q :template-tags tags
+                        :parameters [{:type "category" :target [:variable [:template-tag "name"]] :value "Alice"}]})]
+        (is (= (str "SELECT * WHERE { ?s " label " ?l FILTER(?l = \"Alice\") }") out))
+        (is (nil? (tu/sparql-syntax-error out)) out)))))
 
 (deftest multi-value-renders-as-comma-list
   (testing "A vector of values renders as a comma-separated SPARQL term list"
@@ -98,3 +120,28 @@
                    :parameters    [{:type "category"
                                     :target [:variable [:template-tag "x"]]
                                     :value "$1 backslash\\here"}]})))))
+
+(deftest date-parameter-is-typed
+  (letfn [(date [value]
+            (subst {:query         "SELECT * WHERE { ?s <https://example.org/d> ?d FILTER(?d > {{d}}) }"
+                    :template-tags {"d" {:name "d" :display-name "D" :type :date}}
+                    :parameters    [{:type   "date/single"
+                                     :target [:variable [:template-tag "d"]]
+                                     :value  value}]}))]
+    (testing "a date compares as xsd:date, not as a plain string"
+      (let [out (date "2005-01-01")]
+        (is (= "SELECT * WHERE { ?s <https://example.org/d> ?d FILTER(?d > \"2005-01-01\"^^<http://www.w3.org/2001/XMLSchema#date>) }" out))
+        (is (nil? (tu/sparql-syntax-error out)) out)))
+    (testing "a date with a time is an xsd:dateTime, seconds added"
+      (let [out (date "2005-01-01T10:30")]
+        (is (= "SELECT * WHERE { ?s <https://example.org/d> ?d FILTER(?d > \"2005-01-01T10:30:00\"^^<http://www.w3.org/2001/XMLSchema#dateTime>) }" out))
+        (is (nil? (tu/sparql-syntax-error out)) out)))
+    (testing "seconds go before a timezone, not after it"
+      (is (str/includes? (date "2005-01-01T10:30Z") "\"2005-01-01T10:30:00Z\"^^"))
+      (is (str/includes? (date "2005-01-01T10:30+02:00") "\"2005-01-01T10:30:00+02:00\"^^"))
+      (is (str/includes? (date "2005-01-01T10:30:15Z") "\"2005-01-01T10:30:15Z\"^^")))))
+
+(deftest field-filter-is-a-clear-error
+  (testing "a Field Filter fails with a clear message instead of a generic endpoint 400"
+    (is (thrown-with-msg? clojure.lang.ExceptionInfo #"does not support Field Filter variables"
+                          (#'parameters/->sparql-term (params/map->FieldFilter {:field {} :value "x"}))))))

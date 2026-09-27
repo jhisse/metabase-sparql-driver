@@ -14,7 +14,12 @@ teardown() {
   echo "==> Tearing down Oxigraph"
   $COMPOSE down -v >/dev/null 2>&1 || true
 }
-trap teardown EXIT
+# `make demo` shares this compose project: reuse its Oxigraph and leave it running.
+if [ -n "$($COMPOSE ps -q oxigraph 2>/dev/null)" ]; then
+  echo "==> Oxigraph already running (make demo?): reusing it, no teardown"
+else
+  trap teardown EXIT
+fi
 
 echo "==> Starting Oxigraph"
 $COMPOSE up -d

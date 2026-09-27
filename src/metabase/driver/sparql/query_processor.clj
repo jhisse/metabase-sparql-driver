@@ -3,7 +3,8 @@
 
    This namespace handles SPARQL query processing and result transformation.
    Provides functions to extract metadata and convert results to the format expected by Metabase."
-  (:require [metabase.driver.sparql.conversion :as conversion]))
+  (:require [metabase.driver-api.core :as driver-api]
+            [metabase.driver.sparql.conversion :as conversion]))
 
 (defn- handle-ask
   "Processes the result of an ASK SPARQL query and calls respond with metadata and rows."
@@ -36,7 +37,8 @@
     (respond metadata rows)))
 
 (defn process-query-results
-  "Processes the results of a SPARQL query (SELECT or ASK).
+  "Processes the results of a SPARQL query (SELECT or ASK); any other result
+   (a CONSTRUCT or DESCRIBE graph) throws.
    
    Parameters:
      result - SPARQL query result in JSON format
@@ -45,6 +47,9 @@
    Returns:
      Result of the call to the respond function. For ASK queries, returns a single boolean column. For SELECT queries, returns columns and rows as usual."
   [result respond]
-  (if (contains? result :boolean)
-    (handle-ask result respond)
-    (handle-select result respond)))
+  (cond
+    (and (map? result) (contains? result :boolean)) (handle-ask result respond)
+    (and (map? result) (contains? result :head))    (handle-select result respond)
+    ;; CONSTRUCT / DESCRIBE answer with a graph (e.g. a JSON-LD array), not a table.
+    :else (throw (ex-info "Only SELECT and ASK queries are supported; CONSTRUCT and DESCRIBE return graphs."
+                          {:type driver-api/qp.error-type.invalid-query}))))

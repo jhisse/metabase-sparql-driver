@@ -12,23 +12,6 @@
             [metabase.driver.sparql.templates :as templates]
             [metabase.driver.sparql.uri :as uri]))
 
-(defn- extract-class-name
-  "Extracts the class name from a URI.
-   
-   Parameters:
-     class-uri - RDF class URI
-
-   Returns:
-     Class name extracted from the last part of the URI (after the last '/' or '#')."
-  [class-uri]
-  (let [last-part (last (or (re-seq #"[^/#]+$" class-uri)
-                            (re-seq #"[^/]+$" class-uri)
-                            (re-seq #"[^#]+$" class-uri)
-                            [class-uri]))]
-    (if (str/blank? last-part)
-      class-uri
-      last-part)))
-
 (defn- ->long
   "Coerce a manifest connection-property value to a Long (manifest props are
    type: string; legacy configs may hold a number). nil if blank/unparseable
@@ -207,7 +190,7 @@
   [naming {:keys [class-uri description]}]
   {:name         (uri/shorten-uri class-uri naming)
    :schema       nil
-   :display-name (extract-class-name class-uri)
+   :display-name (uri/local-name class-uri)
    :description  (or description (str "RDF Class: " class-uri " (SHACL)"))})
 
 (defn- shacl-shape->describe-table
@@ -354,7 +337,7 @@
         short-name (uri/shorten-uri uri naming)]
     {:name short-name
      :schema nil
-     :display-name (extract-class-name uri)
+     :display-name (uri/local-name uri)
      :description (or (:description table)
                       (str "RDF Class: " uri " (Explicit)"))}))
 
@@ -363,7 +346,7 @@
   [naming {:keys [uri count]}]
   {:name (uri/shorten-uri uri naming)
    :schema nil
-   :display-name (extract-class-name uri)
+   :display-name (uri/local-name uri)
    :description (str "RDF Class: " uri " (Instances: " count ")")})
 
 (defn- describe-database-none

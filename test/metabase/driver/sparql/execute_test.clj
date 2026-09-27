@@ -84,6 +84,13 @@
           (is (= [{:name "x" :base_type :type/Text}]
                  (vec (:cols (:metadata @responded))))))))))
 
+(deftest execute-reducible-query-rejects-graph-results-test
+  (testing "a CONSTRUCT/DESCRIBE graph (a JSON-LD array) fails clearly instead of crashing"
+    (with-execution-stubs [true [{(keyword "@id") "https://example.org/a"}]]
+      (is (thrown-with-msg? ExceptionInfo #"Only SELECT and ASK queries are supported"
+                            (execute/execute-reducible-query
+                             {:native {:query "CONSTRUCT WHERE { ?s ?p ?o }"}} nil (fn [_ _])))))))
+
 (def ^:private ok-response {:status 200 :body "{\"boolean\":true}"})
 
 (defn- capture-post

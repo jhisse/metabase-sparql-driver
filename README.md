@@ -164,11 +164,13 @@ Native SPARQL questions can use Metabase's `{{tag}}` template parameters. The dr
 | IRI-shaped (`http://`, `https://`, `urn:`) — `https://data.example/Item` | `<https://data.example/Item>` (IRI) |
 | Number — `25`                             | `25` (bare literal)          |
 | Boolean — `true`                          | `true` (bare literal)        |
-| Date / date range                         | `"2024-01-15"` / `"2024-01-01/2024-01-31"` (quoted string) |
+| Date — `2024-01-15`                       | `"2024-01-15"^^xsd:date` (`xsd:dateTime` when a time is given) |
+| Date range                                | `"2024-01-01/2024-01-31"` (quoted string) |
 | Multi-value — `[A B C]`                   | `"A", "B", "C"` (each value rendered as above) — wrap with `IN(...)` / `VALUES` |
-| Missing optional                          | `{{tag}}` left in place + warning logged |
+| No value, inside `[[ … ]]`                | the whole `[[ … ]]` clause is dropped |
+| No value, anywhere else                   | `{{tag}}` left as written + warning logged (so a tag in a `#` comment is harmless) |
 
-Whitespace inside `{{ tag }}` is tolerated. Embedded `"`, `\`, newlines, tabs, and `$` in values are escaped safely; characters that cannot appear inside `<...>` are percent-encoded in IRIs. **Field Filters**, **Referenced Card Queries**, **Referenced Query Snippets**, and **Referenced Tables** are SQL-shaped template tag types and are not rendered to SPARQL — using them logs a warning and leaves the placeholder untouched so the endpoint surfaces a clear parse error.
+Whitespace inside `{{ tag }}` is tolerated. In a question that has variables, `{{` always starts a tag, so write nested groups with a space: `{ { … } UNION { … } }`. Embedded `"`, `\`, newlines, tabs, and `$` in values are escaped safely; characters that cannot appear inside `<...>` are percent-encoded in IRIs. **Field Filters**, **Referenced Card Queries**, **Referenced Query Snippets**, and **Referenced Tables** are SQL-shaped template tag types and are not rendered to SPARQL — a question that uses one fails with an error naming the unsupported variable type.
 
 Example:
 
@@ -447,6 +449,7 @@ With **Default Graph URI** = `http://dbpedia.org/ontology/` and **Default Langua
 
 ## :warning: Limitations and Known Issues
 
+- **Query forms**: Native questions can be `SELECT` or `ASK`. `CONSTRUCT` and `DESCRIBE` return a graph, not a table, and fail with an error saying so.
 - **Aggregations**: Basic aggregations in Query Builder's "Summarize" are supported — **Count**, **Count distinct**, **Sum**, **Average**, **Minimum**, **Maximum** — with an optional group-by (breakout). `Count` compiles to `COUNT(DISTINCT ?subject)`, so grouping by a multi-valued property counts *entities* per group rather than fanned-out solution rows. A date group-by can use year, quarter, month, day, hour or minute, or month of year, quarter of year, day of month, hour of day or minute of hour; each value is bucketed in the timezone it is written in. Week and day-of-week / day-of-year groupings have no SPARQL 1.1 function and fail with a "not supported" error. Advanced aggregations (standard deviation, percentiles, cumulative sum/count, expression aggregations) and post-aggregation filtering (`HAVING`) are not supported.
 - **Joins**: Implicit foreign-key joins (the "Display values" remap on a FK column) are emitted as `OPTIONAL` patterns that repeat the FK path from the row, so a row without the FK keeps an empty display value. Multi-hop chains (e.g. `Item → Provider → Owner → owner_name`) are supported. Explicit inner/right/full joins from Query Builder are not supported — only `:left-join` is enabled.
 - **Saved cards / models as a source**: When a saved card or model is used as the source of another question, the inner query is compiled as a SPARQL sub-`SELECT` and the outer stage's FK display-value remaps wrap it. The outer stage can add its own filter, breakout or aggregation (e.g. drilling into a count). Known issue: an aggregation over an aggregation (e.g. "Minimum of Count") re-binds `?ag_0`, which RDF4J and Jena reject; Oxigraph accepts it.
