@@ -66,6 +66,17 @@
                                        triples)]
         (is (= 3 (count node-shape-triples)))))))
 
+(deftest malformed-min-count-test
+  (testing "a non-integer sh:minCount is ignored instead of failing the whole document"
+    (let [ttl    (str "@prefix sh: <http://www.w3.org/ns/shacl#> .\n"
+                      "@prefix ex: <https://example.org/> .\n"
+                      "ex:S a sh:NodeShape ; sh:targetClass ex:C ; sh:property ex:p1 , ex:p2 .\n"
+                      "ex:p1 a sh:PropertyShape ; sh:path ex:a ; sh:minCount \"1.0\" .\n"
+                      "ex:p2 a sh:PropertyShape ; sh:path ex:b ; sh:minCount \"one\" .\n")
+          props  (-> (shacl->metadata (shacl/parse-turtle ttl base) "") first :properties)]
+      (is (= 2 (count props)))
+      (is (every? (comp false? :database-required) props)))))
+
 (deftest shacl->metadata-test
   (let [shapes  (shacl->metadata (shacl/parse-turtle turtle base) "nl")
         by-cls  (into {} (map (juxt :class-uri identity)) shapes)

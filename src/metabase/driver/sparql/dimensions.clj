@@ -37,6 +37,7 @@
                   :where     [:and
                               [:= :t.db_id db-id]
                               [:= :t.name table-name]
+                              [:= :t.active true]
                               [:= :f.name field-name]
                               [:= :f.active true]]}))
 
@@ -132,17 +133,27 @@
 (derive ::sparql-sync-end :metabase/event)
 (derive :event/sync-metadata-end ::sparql-sync-end)
 
+(defn- sync-end!
+  "Run the post-sync steps for the database `database-id` when it is a SPARQL
+   database. Each step has its own try, so a failed Dimension sync does not
+   skip the display-name fix."
+  [database-id]
+  (when-let [database (and database-id
+                           (t2/select-one [:model/Database :id :engine :details]
+                                          :id database-id))]
+    (when (= :sparql (keyword (:engine database)))
+      (doseq [step [sync-display-dimensions! sync-display-names!]]
+        (try
+          (step database)
+          (catch Exception t
+            (log/warnf t "[sparql.dimensions] Post-sync step failed for database %s" database-id)))))))
+
 (methodical/defmethod events/publish-event! ::sparql-sync-end
   "After SPARQL metadata sync finishes, materialize SHACL displayValueProperty
    declarations as Metabase Dimension rows and fix full-URI display names.
    No-op for non-SPARQL databases."
   [_topic {:keys [database_id] :as _event}]
   (try
-    (when-let [database (and database_id
-                             (t2/select-one [:model/Database :id :engine :details]
-                                            :id database_id))]
-      (when (= :sparql (keyword (:engine database)))
-        (sync-display-dimensions! database)
-        (sync-display-names! database)))
+    (sync-end! database_id)
     (catch Exception t
       (log/warnf t "[sparql.dimensions] Error handling sync-metadata-end event"))))

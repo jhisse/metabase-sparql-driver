@@ -52,6 +52,22 @@
       (fn []
         (is (nil? (dimensions/sync-display-dimensions! {:id 1 :details {:default-graph graph}})))))))
 
+(deftest field-for-skips-retired-tables-test
+  (testing "the lookup only matches fields of active tables"
+    (let [query (atom nil)]
+      (with-redefs [t2/select-one (fn [_ q] (reset! query q) nil)]
+        (#'dimensions/field-for 1 "Persoon" "naam"))
+      (is (some #{[:= :t.active true]} (:where @query))))))
+
+(deftest sync-end-runs-each-step-test
+  (testing "a failing Dimension sync does not skip the display-name fix"
+    (let [named (atom nil)]
+      (with-redefs [t2/select-one                          (constantly {:id 1 :engine "sparql"})
+                    dimensions/sync-display-dimensions!    (fn [_] (throw (ex-info "db down" {})))
+                    dimensions/sync-display-names!         (fn [db] (reset! named (:id db)))]
+        (#'dimensions/sync-end! 1))
+      (is (= 1 @named)))))
+
 (deftest upsert-dimension-test
   (letfn [(writes-for [existing display-field-id]
             (let [writes (atom [])

@@ -239,10 +239,7 @@
                                             (= (:value node-kind) (str sh "IRI")))))
        :fk-target-class   (when (iri? target-cls) (:value target-cls))
        :display-value-property (when (iri? mb-display) (:value mb-display))
-       :database-required (boolean (and (literal? min-count)
-                                        (some-> (:value min-count)
-                                                Long/parseLong
-                                                pos?)))
+       :database-required (boolean (some-> (parse-long-literal min-count) pos?))
        :lang-string?      lang-string?
        :hidden?           (literal-truthy? mb-hide)})))
 
