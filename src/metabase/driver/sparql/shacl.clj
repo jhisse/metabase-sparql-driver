@@ -13,7 +13,8 @@
    The public entry point is [[metadata]] which returns a fully-resolved
    intermediate description that [[metabase.driver.sparql.database]] turns
    into the maps Metabase's sync interface expects. Results are cached per
-   URL and language for 30 seconds so a single sync run only fetches once."
+   URL, language and fetch options for 30 seconds so a single sync run only
+   fetches once."
   (:require [clj-http.client :as http]
             [clojure.string :as str]
             [metabase.util.log :as log])
@@ -239,10 +240,7 @@
                                             (= (:value node-kind) (str sh "IRI")))))
        :fk-target-class   (when (iri? target-cls) (:value target-cls))
        :display-value-property (when (iri? mb-display) (:value mb-display))
-       :database-required (boolean (and (literal? min-count)
-                                        (some-> (:value min-count)
-                                                Long/parseLong
-                                                pos?)))
+       :database-required (boolean (some-> (parse-long-literal min-count) pos?))
        :lang-string?      lang-string?
        :hidden?           (literal-truthy? mb-hide)})))
 
@@ -379,13 +377,14 @@
 
 (defn metadata
   "Return the [[shacl->metadata]] shapes of the SHACL document at `url` under
-   language `lang`, fetching and parsing it unless `[url lang]` was cached in
-   the last 30 seconds. `opts` is forwarded to [[fetch-shacl]] (HTTP timeouts
-   and size cap) and is not part of the cache key. Fetch and parse errors
-   throw and are not cached."
+   language `lang`, fetching and parsing it unless `[url lang opts]` was
+   cached in the last 30 seconds. `opts` is forwarded to [[fetch-shacl]] (HTTP
+   timeouts and size cap) and is part of the cache key, so a database never
+   gets a document fetched under another database's size cap. Fetch and parse
+   errors throw and are not cached."
   ([url lang] (metadata url lang nil))
   ([url lang opts]
-   (let [k [url lang]]
+   (let [k [url lang opts]]
      (or (cache-lookup k)
          (cache-store! k
                        (-> (fetch-shacl url opts)
@@ -393,6 +392,6 @@
                            (shacl->metadata lang)))))))
 
 (defn invalidate!
-  "Forget the cached SHACL metadata for `url` (all languages)."
+  "Forget the cached SHACL metadata for `url` (all languages and options)."
   [url]
-  (swap! cache (fn [m] (into {} (remove (fn [[[u _] _]] (= u url)) m)))))
+  (swap! cache (fn [m] (into {} (remove (fn [[[u] _]] (= u url)) m)))))

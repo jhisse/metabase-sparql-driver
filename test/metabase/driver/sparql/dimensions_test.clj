@@ -3,7 +3,9 @@
    The SHACL fetch and every app-DB access (field lookup, toucan2 reads and
    writes) are stubbed, so no Metabase application database is needed."
   (:require [clojure.test :refer :all]
+            [metabase.driver.sparql.database :as database]
             [metabase.driver.sparql.dimensions :as dimensions]
+            [metabase.driver.sparql.shacl :as shacl]
             [metabase.models.humanization :as humanization]
             [toucan2.core :as t2]))
 
@@ -32,7 +34,7 @@
 
 (deftest sync-display-dimensions-test
   (let [upserts (atom [])]
-    (with-redefs-fn {#'dimensions/shacl-shapes      (constantly shapes)
+    (with-redefs-fn {#'database/shacl-shapes        (constantly shapes)
                      #'dimensions/field-for         (fn [db-id table field]
                                                       (is (= 1 db-id))
                                                       (synced-fields [table field]))
@@ -43,13 +45,50 @@
                   with URIs shortened to the synced table/field names"
           (is (= [[10 "geboorteplaats" 20]] @upserts)))))))
 
+(deftest sync-display-dimensions-outside-shacl-strategy-test
+  (testing "with a SHACL URL but another sync strategy, the hook neither fetches nor writes"
+    (let [fetched? (atom false)
+          upserts  (atom [])]
+      (with-redefs-fn {#'shacl/metadata               (fn [& _] (reset! fetched? true) shapes)
+                       #'dimensions/field-for         (fn [_ table field] (synced-fields [table field]))
+                       #'dimensions/upsert-dimension! (fn [& args] (swap! upserts conj (vec args)))}
+        #(dimensions/sync-display-dimensions!
+          {:id 1 :details {:default-graph          graph
+                           :shacl-url              "https://example.org/shapes.ttl"
+                           :metadata-sync-strategy "auto"}}))
+      (is (false? @fetched?))
+      (is (= [] @upserts)))))
+
 (deftest sync-display-dimensions-survives-upsert-failure-test
   (testing "a failing upsert is logged and does not abort the sync hook"
-    (with-redefs-fn {#'dimensions/shacl-shapes      (constantly shapes)
+    (with-redefs-fn {#'database/shacl-shapes        (constantly shapes)
                      #'dimensions/field-for         (fn [_ table field] (synced-fields [table field]))
                      #'dimensions/upsert-dimension! (fn [& _] (throw (ex-info "db down" {})))}
       (fn []
         (is (nil? (dimensions/sync-display-dimensions! {:id 1 :details {:default-graph graph}})))))))
+
+(deftest field-for-skips-retired-tables-test
+  (testing "the lookup only matches fields of active tables"
+    (let [query (atom nil)]
+      (with-redefs [t2/select-one (fn [_ q] (reset! query q) nil)]
+        (#'dimensions/field-for 1 "Persoon" "naam"))
+      (is (some #{[:= :t.active true]} (:where @query))))))
+
+(deftest sync-display-names-skips-retired-tables-test
+  (testing "display names are only fixed on fields of active tables"
+    (let [query (atom nil)]
+      (with-redefs [t2/select (fn [_ q] (reset! query q) [])]
+        (#'dimensions/sync-display-names! {:id 1}))
+      (is (some #{[:= :t.active true]} (:where @query))))))
+
+(deftest sync-end-runs-each-step-test
+  (testing "a failing Dimension sync does not skip the display-name fix"
+    (let [named (atom nil)]
+      (with-redefs [t2/select-one                          (constantly {:id 1 :engine "sparql"})
+                    dimensions/sync-display-dimensions!    (fn [_] (throw (ex-info "db down" {})))
+                    dimensions/sync-display-names!         (fn [db] (reset! named (:id db)))]
+        (#'dimensions/sync-end! 1))
+      (is (= 1 @named)))))
 
 (deftest upsert-dimension-test
   (letfn [(writes-for [existing display-field-id]

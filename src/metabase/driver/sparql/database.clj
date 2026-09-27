@@ -23,6 +23,14 @@
   (when (some? v)
     (parse-long (str/trim (str v)))))
 
+(defn- sync-strategy
+  "Return the metadata sync strategy of connection `details` as a keyword,
+   `:auto` when unset or blank. Case and surrounding whitespace are ignored,
+   since the setting is free text."
+  [details]
+  (keyword (or (not-empty (str/lower-case (str/trim (str (:metadata-sync-strategy details)))))
+               "auto")))
+
 (defn- parse-schema-config
   "Parse the schema configuration JSON into `{:tables [...]}`, or return nil
    when it is blank or not valid JSON (the parse error is logged)."
@@ -226,25 +234,34 @@
 
 (defn- shacl-fetch-opts
   "Build the HTTP options map for the SHACL fetch from connection `details`.
-   Timeouts are configured in seconds and the size cap in megabytes; unset
-   values are left `nil` so the SHACL extractor applies its own defaults."
+   Timeouts are configured in seconds and the size cap in megabytes. Unset,
+   malformed or out-of-range values (<= 0, where a 0 timeout would disable
+   it, or too large for the HTTP client) are left `nil` so the SHACL
+   extractor's defaults apply. Never throws: a mistyped limit must not empty
+   the schema."
   [details]
-  {:connect-timeout-ms (some-> (:shacl-connect-timeout details) ->long (* 1000))
-   :socket-timeout-ms  (some-> (:shacl-socket-timeout details) ->long (* 1000))
-   :max-bytes          (some-> (:shacl-max-size-mb details) ->long (* 1024 1024))})
+  (let [scaled (fn [v unit max-value]
+                 (when-let [n (->long v)]
+                   (when (<= 1 n (quot max-value unit))
+                     (* n unit))))]
+    {:connect-timeout-ms (scaled (:shacl-connect-timeout details) 1000 Integer/MAX_VALUE)
+     :socket-timeout-ms  (scaled (:shacl-socket-timeout details) 1000 Integer/MAX_VALUE)
+     :max-bytes          (scaled (:shacl-max-size-mb details) (* 1024 1024) Long/MAX_VALUE)}))
 
-(defn- shacl-shapes
+(defn shacl-shapes
   "Return the SHACL shapes of `database` (cached by [[shacl/metadata]]), or
-   nil when no SHACL URL is configured or the document cannot be fetched or
-   parsed (the error is logged). The language for `sh:name`/`sh:description`
-   and the HTTP timeouts and size cap come from the connection details."
+   nil when the sync strategy is not `shacl`, no SHACL URL is configured, or
+   the document cannot be fetched or parsed (the error is logged). The
+   language for `sh:name`/`sh:description` and the HTTP timeouts and size cap
+   come from the connection details."
   [database]
-  (when-let [url (-> database :details :shacl-url)]
-    (let [details (:details database)
-          lang    (or (:default-language details) "")
-          opts    (shacl-fetch-opts details)]
+  (let [details (:details database)
+        url     (not-empty (str/trim (str (:shacl-url details))))]
+    (when (and url (= :shacl (sync-strategy details)))
       (try
-        (shacl/metadata url lang opts)
+        (shacl/metadata url
+                        (or (:default-language details) "")
+                        (shacl-fetch-opts details))
         (catch Exception t
           (log/errorf t "[shacl] Failed to load SHACL document at %s" url)
           nil)))))
@@ -257,26 +274,23 @@
    `:hide-foreign-uris`, an FK is dropped when its class, property or target
    class is foreign."
   [database]
-  (if-not (= :shacl (keyword (get-in database [:details :metadata-sync-strategy] "auto")))
-    []
-    (let [naming        (uri/naming-context (:details database))
-          hide-foreign? (boolean (-> database :details :hide-foreign-uris))
-          shapes        (shacl-shapes database)]
-      (for [shape shapes
-            prop  (:properties shape)
-            :let  [fk-class (:fk-target-class prop)
-                   prop-uri (:property-uri prop)]
-            :when fk-class
-            :when (not (and hide-foreign?
-                            (or (uri/foreign-uri? fk-class naming)
-                                (uri/foreign-uri? prop-uri naming)
-                                (uri/foreign-uri? (:class-uri shape) naming))))]
-        {:fk-table-name   (uri/shorten-uri (:class-uri shape) naming)
-         :fk-table-schema nil
-         :fk-column-name  (uri/shorten-uri prop-uri naming)
-         :pk-table-name   (uri/shorten-uri fk-class naming)
-         :pk-table-schema nil
-         :pk-column-name  "subject"}))))
+  (let [naming        (uri/naming-context (:details database))
+        hide-foreign? (boolean (-> database :details :hide-foreign-uris))]
+    (for [shape (shacl-shapes database)
+          prop  (:properties shape)
+          :let  [fk-class (:fk-target-class prop)
+                 prop-uri (:property-uri prop)]
+          :when fk-class
+          :when (not (and hide-foreign?
+                          (or (uri/foreign-uri? fk-class naming)
+                              (uri/foreign-uri? prop-uri naming)
+                              (uri/foreign-uri? (:class-uri shape) naming))))]
+      {:fk-table-name   (uri/shorten-uri (:class-uri shape) naming)
+       :fk-table-schema nil
+       :fk-column-name  (uri/shorten-uri prop-uri naming)
+       :pk-table-name   (uri/shorten-uri fk-class naming)
+       :pk-table-schema nil
+       :pk-column-name  "subject"})))
 
 (defn- describe-database-shacl
   [database]
@@ -314,21 +328,21 @@
    that does not list the class falls back to auto."
   [_ database table]
   (let [details        (:details database)
-        sync-strategy  (keyword (get details :metadata-sync-strategy "auto"))
+        strategy       (sync-strategy details)
         naming         (uri/naming-context details)
         hide-foreign?  (boolean (:hide-foreign-uris details))
         schema-config  (some-> details :schema-config parse-schema-config)
         full-name      (uri/absolute-uri (:name table) naming)
-        explicit-table (when (= sync-strategy :explicit)
+        explicit-table (when (= strategy :explicit)
                          (some #(when (= (:name %) full-name) %) (:tables schema-config)))]
     (cond
-      (= sync-strategy :none)
+      (= strategy :none)
       (describe-table-none table)
 
-      (= sync-strategy :shacl)
+      (= strategy :shacl)
       (describe-table-shacl database table)
 
-      (and (= sync-strategy :explicit) explicit-table)
+      (and (= strategy :explicit) explicit-table)
       (describe-table-explicit naming hide-foreign? table explicit-table)
 
       :else
@@ -400,18 +414,18 @@
    auto."
   [_ database]
   (let [details       (:details database)
-        sync-strategy (keyword (get details :metadata-sync-strategy "auto"))
+        strategy      (sync-strategy details)
         naming        (uri/naming-context details)
         hide-foreign? (boolean (:hide-foreign-uris details))
         schema-config (some-> details :schema-config parse-schema-config)]
     (cond
-      (= sync-strategy :none)
+      (= strategy :none)
       (describe-database-none)
 
-      (= sync-strategy :shacl)
+      (= strategy :shacl)
       (describe-database-shacl database)
 
-      (and (= sync-strategy :explicit) schema-config)
+      (and (= strategy :explicit) schema-config)
       (describe-database-explicit naming hide-foreign? database schema-config)
 
       :else

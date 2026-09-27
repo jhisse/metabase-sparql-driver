@@ -18,7 +18,7 @@
    the `:model/Dimension` / `:model/Field` / `:model/Database` toucan models,
    and the raw `metabase_field` / `metabase_table` tables)."
   (:require
-   [metabase.driver.sparql.shacl :as shacl]
+   [metabase.driver.sparql.database :as database]
    [metabase.driver.sparql.uri :as uri]
    [metabase.events.core :as events]
    [metabase.models.humanization :as humanization]
@@ -26,22 +26,9 @@
    [methodical.core :as methodical]
    [toucan2.core :as t2]))
 
-(defn- shacl-shapes
-  "Return the SHACL shapes of `database`, or nil when no SHACL URL is
-   configured or the document cannot be loaded (logged as a warning)."
-  [database]
-  (when-let [url (-> database :details :shacl-url)]
-    (try
-      (shacl/metadata url
-                      (or (-> database :details :default-language) "")
-                      {})
-      (catch Exception t
-        (log/warnf t "[sparql.dimensions] Failed to load SHACL document at %s" url)
-        nil))))
-
 (defn- field-for
   "Return the active Field `{:id :name :table_id}` named `field-name` in the
-   table `table-name` of database `db-id` (both short names), or nil."
+   active table `table-name` of database `db-id` (both short names), or nil."
   [db-id table-name field-name]
   (t2/select-one [:model/Field :id :name :table_id]
                  {:select    [:f.id :f.name :f.table_id]
@@ -50,6 +37,7 @@
                   :where     [:and
                               [:= :t.db_id db-id]
                               [:= :t.name table-name]
+                              [:= :t.active true]
                               [:= :f.name field-name]
                               [:= :f.active true]]}))
 
@@ -80,13 +68,13 @@
 (defn sync-display-dimensions!
   "Upsert a `Dimension` row for every SHACL property of `database` that
    declares `metabase:displayValueProperty` and points at an `sh:class`
-   target. No-op when no SHACL URL is configured or the document cannot be
-   loaded. Fields not synced yet are skipped at debug level (the next sync
-   resolves them); a failed upsert is logged and skipped."
+   target. No-op outside the `shacl` sync strategy, or when the document
+   cannot be loaded. Fields not synced yet are skipped at debug level (the
+   next sync resolves them); a failed upsert is logged and skipped."
   [database]
   (let [db-id  (:id database)
         naming (uri/naming-context (:details database))
-        shapes (shacl-shapes database)]
+        shapes (database/shacl-shapes database)]
     (doseq [shape shapes
             prop  (:properties shape)
             :let  [display-uri (:display-value-property prop)
@@ -136,7 +124,7 @@
                            {:select    [:f.id :f.name :f.display_name]
                             :from      [[:metabase_field :f]]
                             :left-join [[:metabase_table :t] [:= :t.id :f.table_id]]
-                            :where     [:and [:= :t.db_id (:id database)] [:= :f.active true]]})
+                            :where     [:and [:= :t.db_id (:id database)] [:= :t.active true] [:= :f.active true]]})
           :let  [display-name (readable-display-name field)]
           :when display-name]
     (t2/update! :model/Field (:id field) {:display_name display-name})))
@@ -145,17 +133,29 @@
 (derive ::sparql-sync-end :metabase/event)
 (derive :event/sync-metadata-end ::sparql-sync-end)
 
+(defn- sync-end!
+  "Run the post-sync steps for the database `database-id` when it is a SPARQL
+   database. Each step has its own try, so a failed Dimension sync does not
+   skip the display-name fix."
+  [database-id]
+  (when-let [database (and database-id
+                           (t2/select-one [:model/Database :id :engine :details]
+                                          :id database-id))]
+    (when (= :sparql (keyword (:engine database)))
+      (doseq [[step-name step] [["display-value dimensions" sync-display-dimensions!]
+                                ["display names" sync-display-names!]]]
+        (try
+          (step database)
+          (catch Exception t
+            (log/warnf t "[sparql.dimensions] Post-sync step %s failed for database %s"
+                       step-name database-id)))))))
+
 (methodical/defmethod events/publish-event! ::sparql-sync-end
   "After SPARQL metadata sync finishes, materialize SHACL displayValueProperty
    declarations as Metabase Dimension rows and fix full-URI display names.
    No-op for non-SPARQL databases."
   [_topic {:keys [database_id] :as _event}]
   (try
-    (when-let [database (and database_id
-                             (t2/select-one [:model/Database :id :engine :details]
-                                            :id database_id))]
-      (when (= :sparql (keyword (:engine database)))
-        (sync-display-dimensions! database)
-        (sync-display-names! database)))
+    (sync-end! database_id)
     (catch Exception t
       (log/warnf t "[sparql.dimensions] Error handling sync-metadata-end event"))))

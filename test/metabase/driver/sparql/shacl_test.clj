@@ -66,6 +66,17 @@
                                        triples)]
         (is (= 3 (count node-shape-triples)))))))
 
+(deftest malformed-min-count-test
+  (testing "a non-integer sh:minCount is ignored instead of failing the whole document"
+    (let [ttl    (str "@prefix sh: <http://www.w3.org/ns/shacl#> .\n"
+                      "@prefix ex: <https://example.org/> .\n"
+                      "ex:S a sh:NodeShape ; sh:targetClass ex:C ; sh:property ex:p1 , ex:p2 .\n"
+                      "ex:p1 a sh:PropertyShape ; sh:path ex:a ; sh:minCount \"1.0\" .\n"
+                      "ex:p2 a sh:PropertyShape ; sh:path ex:b ; sh:minCount \"one\" .\n")
+          props  (-> (shacl->metadata (shacl/parse-turtle ttl base) "") first :properties)]
+      (is (= 2 (count props)))
+      (is (every? (comp false? :database-required) props)))))
+
 (deftest shacl->metadata-test
   (let [shapes  (shacl->metadata (shacl/parse-turtle turtle base) "nl")
         by-cls  (into {} (map (juxt :class-uri identity)) shapes)
@@ -199,12 +210,17 @@
         (shacl/metadata url "en")
         (is (= 2 @fetches)))
       (testing "an entry older than the TTL is refetched"
-        (swap! @#'shacl/cache assoc-in [[url "nl"] :at] 0)
+        (swap! @#'shacl/cache assoc-in [[url "nl" nil] :at] 0)
         (shacl/metadata url "nl")
         (is (= 3 @fetches)))
-      (testing "invalidate! drops every language for the URL"
+      (testing "different fetch options are a cache miss, so each size cap is applied"
+        (shacl/metadata url "nl" {:max-bytes 100})
+        (shacl/metadata url "nl" {:max-bytes 100})
+        (is (= 4 @fetches)))
+      (testing "invalidate! drops every language and option set for the URL"
         (shacl/invalidate! url)
         (shacl/metadata url "nl")
         (shacl/metadata url "en")
-        (is (= 5 @fetches)))
+        (shacl/metadata url "nl" {:max-bytes 100})
+        (is (= 7 @fetches)))
       (shacl/invalidate! url))))
