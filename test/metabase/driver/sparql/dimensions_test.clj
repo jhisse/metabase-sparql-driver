@@ -59,6 +59,13 @@
         (#'dimensions/field-for 1 "Persoon" "naam"))
       (is (some #{[:= :t.active true]} (:where @query))))))
 
+(deftest sync-display-names-skips-retired-tables-test
+  (testing "display names are only fixed on fields of active tables"
+    (let [query (atom nil)]
+      (with-redefs [t2/select (fn [_ q] (reset! query q) [])]
+        (#'dimensions/sync-display-names! {:id 1}))
+      (is (some #{[:= :t.active true]} (:where @query))))))
+
 (deftest sync-end-runs-each-step-test
   (testing "a failing Dimension sync does not skip the display-name fix"
     (let [named (atom nil)]

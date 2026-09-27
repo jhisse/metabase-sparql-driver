@@ -124,7 +124,7 @@
                            {:select    [:f.id :f.name :f.display_name]
                             :from      [[:metabase_field :f]]
                             :left-join [[:metabase_table :t] [:= :t.id :f.table_id]]
-                            :where     [:and [:= :t.db_id (:id database)] [:= :f.active true]]})
+                            :where     [:and [:= :t.db_id (:id database)] [:= :t.active true] [:= :f.active true]]})
           :let  [display-name (readable-display-name field)]
           :when display-name]
     (t2/update! :model/Field (:id field) {:display_name display-name})))
@@ -142,11 +142,13 @@
                            (t2/select-one [:model/Database :id :engine :details]
                                           :id database-id))]
     (when (= :sparql (keyword (:engine database)))
-      (doseq [step [sync-display-dimensions! sync-display-names!]]
+      (doseq [[step-name step] [["display-value dimensions" sync-display-dimensions!]
+                                ["display names" sync-display-names!]]]
         (try
           (step database)
           (catch Exception t
-            (log/warnf t "[sparql.dimensions] Post-sync step failed for database %s" database-id)))))))
+            (log/warnf t "[sparql.dimensions] Post-sync step %s failed for database %s"
+                       step-name database-id)))))))
 
 (methodical/defmethod events/publish-event! ::sparql-sync-end
   "After SPARQL metadata sync finishes, materialize SHACL displayValueProperty

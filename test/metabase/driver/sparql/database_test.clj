@@ -304,21 +304,20 @@
         (with-redefs [shacl/metadata (fn [& _] (reset! fetched? true) shapes)]
           (is (nil? (database/shacl-shapes (shacl-db :metadata-sync-strategy "auto"))))
           (is (false? @fetched?)))))
-    (testing "shacl-shapes: an overflowing size setting is logged and yields nil"
-      (with-redefs [shacl/metadata (fn [& _] shapes)]
-        (is (nil? (database/shacl-shapes (shacl-db :shacl-max-size-mb "10000000000000"))))))
     (testing "shacl-shapes: a blank SHACL URL counts as unset"
       (let [fetched? (atom false)]
         (with-redefs [shacl/metadata (fn [& _] (reset! fetched? true) shapes)]
           (is (nil? (database/shacl-shapes (shacl-db :shacl-url "  "))))
           (is (false? @fetched?)))))
-    (testing "zero or negative limits fall back to the SHACL fetch defaults"
+    (testing "out-of-range limits fall back to the SHACL fetch defaults and still load the shapes"
       (let [calls (atom [])]
         (with-redefs [shacl/metadata (fn [_ _ opts] (swap! calls conj opts) shapes)]
-          (database/shacl-shapes (shacl-db :shacl-connect-timeout "0"
-                                           :shacl-socket-timeout "-5"
-                                           :shacl-max-size-mb "0"))
-          (is (= [{:connect-timeout-ms nil :socket-timeout-ms nil :max-bytes nil}] @calls)))))
+          (doseq [[connect socket size] [["0" "-5" "0"]
+                                         ["3000000" "9999999999999999999" "10000000000000"]]]
+            (is (= shapes (database/shacl-shapes (shacl-db :shacl-connect-timeout connect
+                                                           :shacl-socket-timeout socket
+                                                           :shacl-max-size-mb size)))))
+          (is (= (repeat 2 {:connect-timeout-ms nil :socket-timeout-ms nil :max-bytes nil}) @calls)))))
     (testing "a failed SHACL fetch degrades to an empty schema instead of failing the sync"
       (with-redefs [shacl/metadata (fn [& _] (throw (ex-info "Failed to fetch" {:status 500})))]
         (is (= {:tables #{}} (database/describe-database :sparql (shacl-db))))

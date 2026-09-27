@@ -23,6 +23,12 @@
   (when (some? v)
     (parse-long (str/trim (str v)))))
 
+(defn- sync-strategy
+  "Return the metadata sync strategy of connection `details` as a keyword,
+   `:auto` when unset."
+  [details]
+  (keyword (get details :metadata-sync-strategy "auto")))
+
 (defn- parse-schema-config
   "Parse the schema configuration JSON into `{:tables [...]}`, or return nil
    when it is blank or not valid JSON (the parse error is logged)."
@@ -226,15 +232,19 @@
 
 (defn- shacl-fetch-opts
   "Build the HTTP options map for the SHACL fetch from connection `details`.
-   Timeouts are configured in seconds and the size cap in megabytes; unset
-   values, and zero or negative ones (a 0 timeout means no timeout to the
-   HTTP client), are left `nil` so the SHACL extractor applies its own
-   defaults."
+   Timeouts are configured in seconds and the size cap in megabytes. Unset
+   values, and values out of range (zero or negative, where a 0 timeout means
+   no timeout to the HTTP client, or too large for the HTTP client), are left
+   `nil` so the SHACL extractor applies its own defaults. Never throws, so a
+   mistyped limit cannot turn into an empty schema."
   [details]
-  (let [positive #(some-> % ->long (as-> n (when (pos? n) n)))]
-    {:connect-timeout-ms (some-> (positive (:shacl-connect-timeout details)) (* 1000))
-     :socket-timeout-ms  (some-> (positive (:shacl-socket-timeout details)) (* 1000))
-     :max-bytes          (some-> (positive (:shacl-max-size-mb details)) (* 1024 1024))}))
+  (let [scaled (fn [v unit max-value]
+                 (when-let [n (->long v)]
+                   (when (<= 1 n (quot max-value unit))
+                     (* n unit))))]
+    {:connect-timeout-ms (scaled (:shacl-connect-timeout details) 1000 Integer/MAX_VALUE)
+     :socket-timeout-ms  (scaled (:shacl-socket-timeout details) 1000 Integer/MAX_VALUE)
+     :max-bytes          (scaled (:shacl-max-size-mb details) (* 1024 1024) Long/MAX_VALUE)}))
 
 (defn shacl-shapes
   "Return the SHACL shapes of `database` (cached by [[shacl/metadata]]), or
@@ -245,7 +255,7 @@
   [database]
   (let [details (:details database)
         url     (not-empty (str/trim (str (:shacl-url details))))]
-    (when (and url (= :shacl (keyword (get details :metadata-sync-strategy "auto"))))
+    (when (and url (= :shacl (sync-strategy details)))
       (try
         (shacl/metadata url
                         (or (:default-language details) "")
@@ -316,7 +326,7 @@
    that does not list the class falls back to auto."
   [_ database table]
   (let [details        (:details database)
-        sync-strategy  (keyword (get details :metadata-sync-strategy "auto"))
+        sync-strategy  (sync-strategy details)
         naming         (uri/naming-context details)
         hide-foreign?  (boolean (:hide-foreign-uris details))
         schema-config  (some-> details :schema-config parse-schema-config)
@@ -402,7 +412,7 @@
    auto."
   [_ database]
   (let [details       (:details database)
-        sync-strategy (keyword (get details :metadata-sync-strategy "auto"))
+        sync-strategy (sync-strategy details)
         naming        (uri/naming-context details)
         hide-foreign? (boolean (:hide-foreign-uris details))
         schema-config (some-> details :schema-config parse-schema-config)]

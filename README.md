@@ -144,7 +144,7 @@ Query-time mapping (every strategy). SHACL sync reads `sh:datatype` instead — 
 | Metadata Sync Strategy (Advanced)     |    ❌    | How the driver discovers tables/fields.                                                                                                                                                                                                                  | `auto` / `none` / `explicit` / `shacl` |
 | Schema Configuration (Advanced)       |    ❌    | JSON schema. Visible when strategy is `explicit`.                                                                                                                                                                                                        | See JSON example below              |
 | SHACL URL (Advanced)                  |    ❌    | URL serving a SHACL document in Turtle. Visible when strategy is `shacl`. Fetched on every sync. HTTPS is recommended; plain HTTP is allowed for local testing. | `https://example.org/schema.ttl`    |
-| SHACL Connect / Read Timeout, Max Document Size (Advanced) | ❌ | Limits for fetching the SHACL document. Visible when strategy is `shacl`. | `10` s / `30` s / `10` MB (defaults) |
+| SHACL Connect / Read Timeout, Max Document Size (Advanced) | ❌ | Limits for fetching the SHACL document. Visible when strategy is `shacl`. A blank, zero, negative or out-of-range value uses the default. | `10` s / `30` s / `10` MB (defaults) |
 
 > [!WARNING]
 > Because the Default Graph URI is also sent as `default-graph-uri`, it must name a graph the endpoint actually holds (or one the endpoint ignores). On DBpedia, for example, `http://dbpedia.org` is the real graph; `http://dbpedia.org/ontology/` gives shorter names but may return empty results.
