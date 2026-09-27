@@ -225,6 +225,19 @@
                   prefixes)
             uri)))))
 
+(defn local-name
+  "The local name of `iri`: the part after its last `/` or `#`
+   (`https://example.org/Persoon` → `Persoon`), or the URI itself when that
+   part is blank."
+  [iri]
+  (let [last-part (last (or (re-seq #"[^/#]+$" iri)
+                            (re-seq #"[^/]+$" iri)
+                            (re-seq #"[^#]+$" iri)
+                            [iri]))]
+    (if (str/blank? last-part)
+      iri
+      last-part)))
+
 (defn foreign-uri?
   "True when at least one known namespace is configured (the Default Graph or
    a namespace prefix) and `uri` belongs to none of them. `base` is a

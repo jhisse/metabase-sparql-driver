@@ -171,3 +171,9 @@
                   :prefixes      (uri/parse-prefixes "foaf=http://xmlns.com/foaf/0.1/")}]
       (is (not (uri/foreign-uri? "http://xmlns.com/foaf/0.1/name" naming)))
       (is (uri/foreign-uri? "http://other.example/x" naming)))))
+
+(deftest local-name-test
+  (testing "local name is taken after the last slash or hash"
+    (is (= "Persoon" (uri/local-name "https://example.org/Persoon")))
+    (is (= "Person"  (uri/local-name "http://xmlns.com/foaf/0.1/Person")))
+    (is (= "name"    (uri/local-name "http://example.org/schema#name")))))

@@ -68,3 +68,14 @@
       (testing "a changed display field updates the existing row in place"
         (is (= [[:update 5 {:type :external :name "geboorteplaats" :human_readable_field_id 21}]]
                (writes-for existing 21)))))))
+
+(deftest readable-display-name-test
+  (let [readable (fn [field-name display-name]
+                   (#'dimensions/readable-display-name {:name field-name :display_name display-name}))
+        label    "http://www.w3.org/2000/01/rdf-schema#label"]
+    (testing "a full-URI field with sync's default display name gets its local name"
+      (is (= "Label" (readable label "Http://www.w3.org/2000/01/rdf Schema#label"))))
+    (testing "a display name an admin changed is kept"
+      (is (nil? (readable label "Name"))))
+    (testing "a short field name is left to sync"
+      (is (nil? (readable "foundedOn" "Founded On"))))))

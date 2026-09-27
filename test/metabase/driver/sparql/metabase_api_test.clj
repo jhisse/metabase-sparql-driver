@@ -142,6 +142,10 @@
                                           :aggregation  [[:sum (field-ref company "revenue")]]}})]
       (is (= ["Sum of Revenue"] (mapv :display_name (:cols data)))))))
 
+(deftest ^:integration foreign-uri-field-display-name-test
+  (testing "a property outside the Default Graph (rdfs:label) reads as its local name"
+    (is (= "Label" (get-in (tables :shacl) ["Person" :fields tu/rdfs-label :display_name])))))
+
 (deftest ^:integration native-query-through-api-test
   (let [{:keys [status error data]}
         (api :post "/api/dataset"
