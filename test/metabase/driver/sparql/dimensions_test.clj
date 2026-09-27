@@ -49,13 +49,13 @@
   (testing "with a SHACL URL but another sync strategy, the hook neither fetches nor writes"
     (let [fetched? (atom false)
           upserts  (atom [])]
-      (with-redefs [shacl/metadata                (fn [& _] (reset! fetched? true) shapes)
-                    dimensions/field-for          (fn [_ table field] (synced-fields [table field]))
-                    dimensions/upsert-dimension!  (fn [& args] (swap! upserts conj (vec args)))]
-        (dimensions/sync-display-dimensions!
-         {:id 1 :details {:default-graph          graph
-                          :shacl-url              "https://example.org/shapes.ttl"
-                          :metadata-sync-strategy "auto"}}))
+      (with-redefs-fn {#'shacl/metadata               (fn [& _] (reset! fetched? true) shapes)
+                       #'dimensions/field-for         (fn [_ table field] (synced-fields [table field]))
+                       #'dimensions/upsert-dimension! (fn [& args] (swap! upserts conj (vec args)))}
+        #(dimensions/sync-display-dimensions!
+          {:id 1 :details {:default-graph          graph
+                           :shacl-url              "https://example.org/shapes.ttl"
+                           :metadata-sync-strategy "auto"}}))
       (is (false? @fetched?))
       (is (= [] @upserts)))))
 

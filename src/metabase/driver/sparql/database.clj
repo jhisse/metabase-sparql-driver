@@ -234,11 +234,11 @@
 
 (defn- shacl-fetch-opts
   "Build the HTTP options map for the SHACL fetch from connection `details`.
-   Timeouts are configured in seconds and the size cap in megabytes. Unset
-   values, and values out of range (zero or negative, where a 0 timeout means
-   no timeout to the HTTP client, or too large for the HTTP client), are left
-   `nil` so the SHACL extractor applies its own defaults. Never throws, so a
-   mistyped limit cannot turn into an empty schema."
+   Timeouts are configured in seconds and the size cap in megabytes. Unset,
+   malformed or out-of-range values (<= 0, where a 0 timeout would disable
+   it, or too large for the HTTP client) are left `nil` so the SHACL
+   extractor's defaults apply. Never throws: a mistyped limit must not empty
+   the schema."
   [details]
   (let [scaled (fn [v unit max-value]
                  (when-let [n (->long v)]

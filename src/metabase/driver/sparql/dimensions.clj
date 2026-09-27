@@ -28,7 +28,7 @@
 
 (defn- field-for
   "Return the active Field `{:id :name :table_id}` named `field-name` in the
-   table `table-name` of database `db-id` (both short names), or nil."
+   active table `table-name` of database `db-id` (both short names), or nil."
   [db-id table-name field-name]
   (t2/select-one [:model/Field :id :name :table_id]
                  {:select    [:f.id :f.name :f.table_id]
@@ -69,8 +69,8 @@
   "Upsert a `Dimension` row for every SHACL property of `database` that
    declares `metabase:displayValueProperty` and points at an `sh:class`
    target. No-op outside the `shacl` sync strategy, or when the document
-   cannot be loaded. Fields not synced yet are skipped at debug level (the next sync
-   resolves them); a failed upsert is logged and skipped."
+   cannot be loaded. Fields not synced yet are skipped at debug level (the
+   next sync resolves them); a failed upsert is logged and skipped."
   [database]
   (let [db-id  (:id database)
         naming (uri/naming-context (:details database))
