@@ -150,6 +150,22 @@
       (is (= 4 (count cols)) "label, C's label and headquarters, and the headquarters' label")
       (is (= #{["Alice" "Acme Inc" "https://example.org/springfield" "Springfield"]
                ["Bob" "Globex" "https://example.org/springfield" "Springfield"]}
+             (set rows)))))
+  (testing "a self-join keeps the joined label apart from the joined FK's display value of the same field"
+    (let [person (get (tables :shacl) "Person")
+          {:keys [rows]}
+          (run-mbql :shacl {:source-table (:id person)
+                            :fields       [(field-ref person tu/rdfs-label)]
+                            :joins        [{:source-table (:id person)
+                                            :alias        "P"
+                                            :condition    [:= (field-ref person "knows")
+                                                           [:field (get-in person [:fields "subject" :id]) {:join-alias "P"}]]
+                                            :fields       [[:field (get-in person [:fields tu/rdfs-label :id]) {:join-alias "P"}]
+                                                           [:field (get-in person [:fields "knows" :id]) {:join-alias "P"}]
+                                                           [:field (get-in person [:fields "worksFor" :id]) {:join-alias "P"}]]}]})]
+      ;; label, P's label, knows and worksFor, then the display values of P's knows and worksFor
+      (is (= #{["Alice" "Bob" nil "https://example.org/globex" nil "Globex"]
+               ["Bob" nil nil nil nil nil]}
              (set rows))))))
 
 (deftest ^:integration result-column-display-names-test

@@ -559,6 +559,7 @@
                   4  {:name "werkgever" :table-id 100}
                   10 {:name "label" :table-id 200}
                   21 {:name "stad" :table-id 200}
+                  22 {:name "zetel" :table-id 200}
                   30 {:name "label" :table-id 300}}]
       (with-redefs-fn
         {#'mbql/field-id->metadata        (fn [id] (get fields id))
@@ -570,17 +571,43 @@
                 (compile-base-stage* {:source-table 100
                                       :fields [[:field 1 nil]
                                                [:field 10 {:join-alias "C"}]
-                                               [:field 30 {:join-alias "C" :source-field 21}]]
+                                               [:field 30 {:join-alias "C" :source-field 21}]
+                                               [:field 30 {:join-alias "C" :source-field 22}]]
                                       :joins  [{:alias     "C"
                                                 :condition [:= [:field 4 nil] [:field 1 {:join-alias "C"}]]}]}
-                                     [{:id 1} {:id 10 :lib/join-alias "C"} {:id 30 :lib/join-alias "C"}])]
-            (is (= ["subject" "C__label" "C__stad__label"] vars))
+                                     [{:id 1} {:id 10 :lib/join-alias "C"}
+                                      {:id 30 :lib/join-alias "C"} {:id 30 :lib/join-alias "C"}])]
+            (testing "two FKs to the same field keep one variable each"
+              (is (= ["subject" "C__label" "C__stad__label" "C__zetel__label"] vars)))
             (is (str/includes? sparql (str "?C_subject <" base "stad> ?C__stad_subject . "
                                            "?C__stad_subject <" base "label> ?C__stad__label ."))))
           (testing "a column reached through a field that is not a FK fails clearly"
             (is (thrown-with-msg? clojure.lang.ExceptionInfo #"cannot follow werkgever: it is not a foreign key"
                                   (compile-stage* {:source-table 100
                                                    :fields [[:field 1 nil] [:field 10 {:source-field 4}]]})))))))))
+
+(deftest compile-base-stage-explicit-self-join-test
+  (testing "a self-join on a FK: the joined label and that FK's display value inside the join stay apart"
+    (let [fields {1  {:name "subject" :table-id 100}
+                  4  {:name "kent" :table-id 100}
+                  10 {:name "label" :table-id 100}}]
+      (with-redefs-fn
+        {#'mbql/field-id->metadata        (fn [id] (get fields id))
+         #'mbql/table-id->class-uri       (constantly (str base "Persoon"))
+         #'mbql/database-naming-context   (constantly {:default-graph base :prefixes []})
+         #'mbql/database-default-language (constantly "")}
+        (fn []
+          (let [{:keys [sparql vars]}
+                (compile-base-stage* {:source-table 100
+                                      :fields [[:field 1 nil]
+                                               [:field 10 {:join-alias "P"}]
+                                               [:field 10 {:join-alias "P" :source-field 4}]]
+                                      :joins  [{:alias     "P"
+                                                :condition [:= [:field 4 nil] [:field 1 {:join-alias "P"}]]}]}
+                                     [{:id 1} {:id 10 :lib/join-alias "P"} {:id 10 :lib/join-alias "P"}])]
+            (is (= ["subject" "P__label" "P__kent__label"] vars))
+            (is (str/includes? sparql (str "?P_subject <" base "kent> ?P__kent_subject . "
+                                           "?P__kent_subject <" base "label> ?P__kent__label .")))))))))
 
 (deftest compile-base-stage-implicit-join-projection-test
   (testing "Lib's result-metadata strips :lib/join-alias from implicit-joinable
