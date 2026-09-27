@@ -17,6 +17,7 @@
    fetches once."
   (:require [clj-http.client :as http]
             [clojure.string :as str]
+            [metabase.driver.sparql.uri :as uri]
             [metabase.util.log :as log])
   (:import (java.io StringReader)
            (org.eclipse.rdf4j.model BNode IRI Literal Resource Statement Value)
@@ -84,30 +85,35 @@
    `opts` may supply `:connect-timeout-ms`, `:socket-timeout-ms` and
    `:max-bytes`; each falls back to a built-in default (10 s, 30 s, 10 MB).
 
+   Redirects are followed, unless `url` carries credentials: the HTTP client
+   would re-send them to the new host.
+
    Throws an `ex-info` on any non-200 response or when the body exceeds the
    size cap; connection errors and timeouts propagate from clj-http."
   ([url] (fetch-shacl url nil))
   ([url {:keys [connect-timeout-ms socket-timeout-ms max-bytes]}]
    (let [connect-ms (or connect-timeout-ms default-connect-timeout-ms)
          socket-ms  (or socket-timeout-ms default-socket-timeout-ms)
-         max-bytes  (or max-bytes default-max-bytes)]
-     (log/infof "[shacl] Fetching SHACL document from %s" url)
-     (let [resp (http/get url {:headers            {"Accept" "text/turtle"}
-                               :throw-exceptions   false
-                               :connection-timeout connect-ms
-                               :socket-timeout     socket-ms
-                               :as                 :string})]
+         max-bytes  (or max-bytes default-max-bytes)
+         shown-url  (uri/redact-userinfo url)]
+     (log/infof "[shacl] Fetching SHACL document from %s" shown-url)
+     (let [resp (http/get url (cond-> {:headers            {"Accept" "text/turtle"}
+                                       :throw-exceptions   false
+                                       :connection-timeout connect-ms
+                                       :socket-timeout     socket-ms
+                                       :as                 :string}
+                                (not= url shown-url) (assoc :redirect-strategy :none)))]
        (if (= 200 (:status resp))
          (let [body  (:body resp)
                bytes (alength (.getBytes ^String body "UTF-8"))]
            (when (> bytes max-bytes)
              (throw (ex-info (format "SHACL document from %s is %d bytes, exceeding the %d-byte limit"
-                                     url bytes max-bytes)
-                             {:url url :bytes bytes :max-bytes max-bytes})))
+                                     shown-url bytes max-bytes)
+                             {:url shown-url :bytes bytes :max-bytes max-bytes})))
            body)
          (throw (ex-info (format "Failed to fetch SHACL document from %s (status %s)"
-                                 url (:status resp))
-                         {:url url :status (:status resp)})))))))
+                                 shown-url (:status resp))
+                         {:url shown-url :status (:status resp)})))))))
 
 (def ^:private no-contexts
   "Empty array for the trailing `Resource...` varargs on `Rio/parse`. Clojure's

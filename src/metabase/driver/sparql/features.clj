@@ -23,9 +23,9 @@
   (log/debugf "[database-supports?] - Checking now() function support")
   (let [details          (:details database)
         endpoint         (:endpoint details)
-        options          {:default-graph (:default-graph details)
-                          :insecure?     (:use-insecure details)
-                          :auth          (auth/http-options details)}
+        options          (execute/probe-options {:default-graph (:default-graph details)
+                                                 :insecure?     (:use-insecure details)
+                                                 :auth          (auth/http-options details)})
         [success result] (execute/execute-sparql-query endpoint
                                                        (templates/now-function-support-query)
                                                        options)]

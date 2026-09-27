@@ -263,7 +263,7 @@
                         (or (:default-language details) "")
                         (shacl-fetch-opts details))
         (catch Exception t
-          (log/errorf t "[shacl] Failed to load SHACL document at %s" url)
+          (log/errorf t "[shacl] Failed to load SHACL document at %s" (uri/redact-userinfo url))
           nil)))))
 
 (defn fks

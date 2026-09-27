@@ -3,6 +3,15 @@
   (:require [clojure.test :refer :all]
             [metabase.driver.sparql.uri :as uri]))
 
+(deftest redact-userinfo-test
+  (is (= "https://example.org/sparql" (uri/redact-userinfo "https://u:p@example.org/sparql")))
+  (testing "a password containing @ goes whole"
+    (is (= "https://example.org/sparql" (uri/redact-userinfo "https://u:p@ss@example.org/sparql"))))
+  (testing "URLs without credentials are unchanged, including an @ in the path or query"
+    (doseq [url ["https://example.org/sparql" "https://example.org/a@b" "https://example.org/q?to=a@b"]]
+      (is (= url (uri/redact-userinfo url)))))
+  (is (nil? (uri/redact-userinfo nil))))
+
 (deftest escape-string-test
   (testing "double quotes are escaped"
     (is (= "a\\\"b" (uri/escape-string "a\"b"))))
