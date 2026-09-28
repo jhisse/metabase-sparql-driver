@@ -26,15 +26,14 @@
   (testing "boolean datatype"
     (is (= :type/Boolean (conversion/sparql-type->base-type "typed-literal" (str xsd "boolean")))))
 
-  (testing "DateTime family datatypes"
-    (doseq [t ["dateTime" "gYear" "gYearMonth"]]
-      (is (= :type/DateTime (conversion/sparql-type->base-type "literal" (str xsd t)))
-          (str t " should map to :type/DateTime"))))
+  (testing "dateTime and date datatypes"
+    (is (= :type/DateTime (conversion/sparql-type->base-type "literal" (str xsd "dateTime"))))
+    (is (= :type/Date (conversion/sparql-type->base-type "literal" (str xsd "date")))))
 
-  (testing "Date family datatypes"
-    (doseq [t ["date" "gMonthDay" "gDay" "gMonth"]]
-      (is (= :type/Date (conversion/sparql-type->base-type "literal" (str xsd t)))
-          (str t " should map to :type/Date"))))
+  (testing "partial dates (1990, --12-25) are not dates Metabase can read, so they stay text"
+    (doseq [t ["gYear" "gYearMonth" "gMonthDay" "gDay" "gMonth"]]
+      (is (= :type/Text (conversion/sparql-type->base-type "literal" (str xsd t)))
+          (str t " should map to :type/Text"))))
 
   (testing "Time datatype"
     (is (= :type/Time (conversion/sparql-type->base-type "literal" (str xsd "time")))))
@@ -49,12 +48,24 @@
       (is (= 42 v))
       (is (instance? Long v))))
 
+  (testing "an integer past Long's range becomes a BigInteger, not a string in an Integer column"
+    (let [v (conversion/convert-value {:value "99999999999999999999" :type "literal" :datatype (str xsd "integer")})]
+      (is (= 99999999999999999999N v))
+      (is (instance? BigInteger v)))
+    (is (= 42 (conversion/convert-value {:value "+42" :type "literal" :datatype (str xsd "integer")}))
+        "a leading + is valid xsd:integer"))
+
   (testing "decimals/doubles are parsed to Double"
     (is (= 3.5 (conversion/convert-value {:value "3.5" :type "typed-literal" :datatype (str xsd "decimal")}))))
 
   (testing "booleans are parsed"
     (is (true?  (conversion/convert-value {:value "true"  :type "literal" :datatype (str xsd "boolean")})))
-    (is (false? (conversion/convert-value {:value "false" :type "literal" :datatype (str xsd "boolean")}))))
+    (is (false? (conversion/convert-value {:value "false" :type "literal" :datatype (str xsd "boolean")})))
+    (testing "1 and 0 are xsd:boolean lexical forms too"
+      (is (true?  (conversion/convert-value {:value "1" :type "literal" :datatype (str xsd "boolean")})))
+      (is (false? (conversion/convert-value {:value "0" :type "literal" :datatype (str xsd "boolean")}))))
+    (testing "anything else is not a boolean: kept as the raw string, not read as false"
+      (is (= "yes" (conversion/convert-value {:value "yes" :type "literal" :datatype (str xsd "boolean")})))))
 
   (testing "unparseable numbers fall back to the raw string"
     (is (= "not-a-number"

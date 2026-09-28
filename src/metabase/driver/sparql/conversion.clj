@@ -1,7 +1,8 @@
 (ns metabase.driver.sparql.conversion
   "Map SPARQL result terms to Metabase base types and parse their values into
    Clojure numbers and booleans, per column and per cell."
-  (:require [metabase.util.log :as log]))
+  (:require [clojure.string :as str]
+            [metabase.util.log :as log]))
 
 (def ^:private xsd
   "Base URI of the XSD datatype namespace."
@@ -35,16 +36,14 @@
     (str xsd "float")
     (str xsd "double")})
 
+;; gYear, gYearMonth, gMonthDay, gDay and gMonth are left out: their values
+;; (`1990`, `--12-25`) are not dates or datetimes Metabase can read, so they
+;; stay text, as they do in SHACL sync.
 (def ^:private xsd-datetime-datatypes
-  #{(str xsd "dateTime")
-    (str xsd "gYear")
-    (str xsd "gYearMonth")})
+  #{(str xsd "dateTime")})
 
 (def ^:private xsd-date-datatypes
-  #{(str xsd "date")
-    (str xsd "gMonthDay")
-    (str xsd "gDay")
-    (str xsd "gMonth")})
+  #{(str xsd "date")})
 
 (def ^:private xsd-boolean
   "Single-valued family, named because it is used by BOTH classification and
@@ -82,11 +81,13 @@
 
 (defn convert-value
   "Return the value of a SPARQL result `binding` parsed by its datatype:
-   integers to Long, decimals and floats to Double, booleans to Boolean
-   (only `\"true\"` in any case is true).
+   integers to Long (BigInteger past Long's range), decimals and floats to
+   Double, booleans to Boolean
+   (`true`/`1` and `false`/`0`, the lexical forms of `xsd:boolean`, in any
+   case).
 
-   Any other value, or a number that fails to parse (logged), stays the
-   original string."
+   Any other value, or a number or boolean that fails to parse (logged),
+   stays the original string."
   [binding]
   (let [value (:value binding)
         type-key (:type binding)
@@ -96,8 +97,13 @@
                           (= type-key "literal")))]
     (cond
       ;; Handle integers (both typed-literal and literal)
+      ;; xsd:integer has no size limit, so a value past Long's range (an ID,
+      ;; a population count) becomes a BigInteger rather than staying a
+      ;; string in an Integer column.
       (and typed? (contains? xsd-integer-datatypes datatype))
-      (try (Long/parseLong value)
+      (try (let [s (str/trim value)]
+             (try (Long/parseLong s)
+                  (catch NumberFormatException _ (BigInteger. s))))
            (catch Exception e
              (log/warn "Failed to convert integer:" value "Error:" (.getMessage e))
              value))
@@ -111,7 +117,11 @@
 
       ;; Handle booleans (both typed-literal and literal)
       (and typed? (= datatype xsd-boolean))
-      (Boolean/parseBoolean value)
+      (case (str/lower-case (str/trim value))
+        ("true" "1")  true
+        ("false" "0") false
+        (do (log/warn "Failed to convert boolean:" value)
+            value))
 
       ;; Default case - strings and all other types
       :else value)))
