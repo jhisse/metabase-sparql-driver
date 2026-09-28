@@ -189,24 +189,23 @@
                  (g [:= [:field 5 nil] "https://x.example/> } UNION { ?s ?p ?o . #"]))
               "a hostile value cannot close the IRIREF — forbidden chars are percent-encoded"))))))
 
-(deftest emit-optional-triple-escapes-iri-test
-  (let [emit @#'mbql/emit-optional-triple]
+(deftest ensure-triple-for-field-escapes-iri-test
+  (let [emit @#'mbql/ensure-triple-for-field]
     (testing "the property IRI is routed through uri/iri-ref, so an illegal char is percent-encoded"
       (is (= (str "  OPTIONAL { ?subject " (uri/iri-ref "http://example.org/a b") " ?t . }")
-             (emit "http://example.org/a b" "t")))
-      ;; a normal property URI is unchanged (iri-ref is a no-op)
-      (is (= "  OPTIONAL { ?s <http://example.org/name> ?t . }"
-             (emit "s" "http://example.org/name" "t"))))))
+             (emit "http://example.org/a b" "t" nil))))
+    (testing "a language filter goes inside the OPTIONAL"
+      (is (= "  OPTIONAL { ?subject <http://example.org/name> ?t . FILTER(x) }"
+             (emit "http://example.org/name" "t" "FILTER(x)"))))))
 
-(deftest lang-filter-line-escapes-tag-test
-  (let [lang-line @#'mbql/lang-filter-line]
+(deftest lang-filter-escapes-tag-test
+  (let [lang-filter @#'mbql/lang-filter]
     (testing "an escapable char in the language tag is escaped, not leaked raw into the FILTER literal"
-      (is (= (str "  FILTER(!BOUND(?naam) || LANG(?naam) = \""
-                  (uri/escape-string "en\"") "\" || LANG(?naam) = \"\")")
-             (lang-line "naam" "en\""))))
+      (is (= (str "FILTER(LANGMATCHES(LANG(?naam), " (uri/string-literal "en\"") ") || LANG(?naam) = \"\")")
+             (lang-filter "naam" "en\""))))
     (testing "a normal BCP-47 tag is unchanged"
-      (is (= "  FILTER(!BOUND(?naam) || LANG(?naam) = \"pt-BR\" || LANG(?naam) = \"\")"
-             (lang-line "naam" "pt-BR"))))))
+      (is (= "FILTER(LANGMATCHES(LANG(?naam), \"pt-BR\") || LANG(?naam) = \"\")"
+             (lang-filter "naam" "pt-BR"))))))
 
 (deftest between-filter-test
   (let [f #(@#'mbql/compile-filter-expr % {"leeftijd" "leeftijd"} {})]
@@ -1034,6 +1033,9 @@
         (is (= {:vars    ["subject" "Plaats__naam"]
                 :triples [(str "  OPTIONAL { ?subject <" base "geboorteplaats> ?Plaats_subject . ?Plaats_subject <" base "naam> ?Plaats__naam . }")]}
                (f [{:id 1} {:id 2 :lib/join-alias "Plaats"}] ctx))))
+      (testing "a synthesized column carries the Default Language filter inside its OPTIONAL"
+        (is (= [(str "  OPTIONAL { ?subject <" base "geboorteplaats> ?Plaats_subject . ?Plaats_subject <" base "naam> ?Plaats__naam . FILTER(lang) }")]
+               (:triples (f [{:id 2 :lib/join-alias "Plaats"}] (assoc ctx :lang-guard (fn [_ _] "FILTER(lang)")))))))
       (testing "an unresolvable column still gets a (placeholder) variable"
         (is (= {:vars ["undefined_1"] :triples []}
                (f [{:lib/join-alias "Nope"}] ctx)))))))
@@ -1094,10 +1096,12 @@
               (compile-stage* {:source-table 100
                                :fields [[:field 1 nil] [:field 2 nil] [:field 2 {:join-alias "P"}]]
                                :joins  [{:alias "P" :fk-field-id 4}]})]
-          (is (str/includes?
-               sparql
-               "FILTER(!BOUND(?naam) || LANG(?naam) = \"nl\" || LANG(?naam) = \"\")"))
-          (testing "also on a joined column"
+          (testing "inside the OPTIONAL that binds the column, so the row survives without a value"
             (is (str/includes?
                  sparql
-                 "FILTER(!BOUND(?P__naam) || LANG(?P__naam) = \"nl\" || LANG(?P__naam) = \"\")"))))))))
+                 (str "OPTIONAL { ?subject <" base "naam> ?naam . "
+                      "FILTER(LANGMATCHES(LANG(?naam), \"nl\") || LANG(?naam) = \"\") }")))
+            (is (not (re-find #"(?m)^  FILTER\((LANG|LANGMATCHES)" sparql)) "no group-level LANG filter"))
+          (testing "also on a joined column"
+            (is (re-find #"OPTIONAL \{[^}]*\?P__naam \. FILTER\(LANGMATCHES\(LANG\(\?P__naam\), \"nl\"\) \|\| LANG\(\?P__naam\) = \"\"\) \}"
+                         sparql))))))))

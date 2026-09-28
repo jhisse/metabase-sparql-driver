@@ -10,6 +10,7 @@
             [clojure.test :refer :all]
             [metabase.driver-api.core :as driver-api]
             [metabase.driver.sparql.database :as database]
+            [metabase.driver.sparql.mbql :as mbql]
             [metabase.driver.sparql.test-util :as tu]
             [metabase.lib.core :as lib]))
 
@@ -63,6 +64,15 @@
       (is (= [["Alice"]] (rows (lib/= nickname "Ally"))))
       (is (= [["Alice"]] (rows (lib/!= nickname "Bobby")))
           "is not also excludes the tagged match"))))
+
+(deftest ^:integration default-language-keeps-rows-without-that-language-test
+  (testing "with Default Language en, Bob (only a @fr nickname) keeps his row, nickname empty"
+    (with-redefs [mbql/database-default-language (constantly "en")]
+      (let [q        (tu/person-query)
+            label    (tu/column q tu/rdfs-label)
+            nickname (tu/column q "nickname")]
+        (is (= #{["Alice" "Ally"] ["Bob" nil]}
+               (set (:rows (tu/run-query (lib/with-fields q [label nickname]))))))))))
 
 (deftest ^:integration iri-equality-filter-test
   (testing "equality on the subject column matches the IRI node"

@@ -100,13 +100,15 @@
   [field-id]
   (= "langString" (:database-type (field-id->metadata field-id))))
 
-(defn- lang-filter-line
-  "Render the LANG filter clause for one variable. Guards against unbound
-   variables (left joins) and accepts untagged literals alongside the target
-   language."
+(defn- lang-filter
+  "Render the LANG filter for one variable, accepting untagged literals
+   alongside the target language. LANGMATCHES ignores case and accepts
+   subtags, so `en` also keeps `@en-GB`. It goes inside the OPTIONAL that binds
+   the variable, so an entity without a value in that language keeps its row
+   with the value unbound, instead of losing the row."
   [var-name lang]
-  (format "  FILTER(!BOUND(?%s) || LANG(?%s) = \"%s\" || LANG(?%s) = \"\")"
-          var-name var-name (uri/escape-string lang) var-name))
+  (format "FILTER(LANGMATCHES(LANG(?%s), %s) || LANG(?%s) = \"\")"
+          var-name (uri/string-literal lang) var-name))
 
 (defn- table-id->class-uri
   "Return the RDF class URI of table `table-id`: its name, expanded to a full
@@ -482,14 +484,6 @@
   [patterns]
   (str "  OPTIONAL { " (str/join " " patterns) " }"))
 
-(defn- emit-optional-triple
-  "Render a SPARQL `OPTIONAL { ?source <property> ?target . }` line.
-   The two-argument form reads off the synthetic subject (`?subject`)."
-  ([property-uri target-var]
-   (emit-optional-triple "subject" property-uri target-var))
-  ([source-var property-uri target-var]
-   (emit-optional-group [(triple-pattern source-var property-uri target-var)])))
-
 (defn- emit-remap-optional
   "Render the OPTIONAL that reads `property` off `fk-var`, a variable bound by a
    sub-SELECT. `fk-var` is unbound on rows without the FK, and a plain
@@ -512,9 +506,10 @@
 
 (defn- ensure-triple-for-field
   "Return the OPTIONAL line that binds `?var-alias` to `property-uri` of
-   `?subject`."
-  [property-uri var-alias]
-  (let [triple (emit-optional-triple property-uri var-alias)]
+   `?subject`, with the [[lang-filter]] `lang-filter` (or nil) inside it."
+  [property-uri var-alias lang-filter]
+  (let [triple (emit-optional-group (cond-> [(triple-pattern "subject" property-uri var-alias)]
+                                      lang-filter (conj lang-filter)))]
     (log/debugf "[mbql] OPTIONAL triple: property=%s var=?%s" property-uri var-alias)
     triple))
 
@@ -909,7 +904,8 @@
 
    Returns `{:vars [...] :triples [...]}`."
   [expected-cols {:keys [field-id->var pair->target-var alias->intermediate-var
-                         fk-fid->alias join-path naming joined-field-vars]}]
+                         fk-fid->alias join-path naming joined-field-vars lang-guard]
+                  :or   {lang-guard (constantly nil)}}]
   (let [placeholder (atom 0)
         seen        (atom {})]
     (reduce
@@ -942,8 +938,8 @@
                      (update :vars conj v)
                      (update :triples conj
                              (emit-optional-group
-                              (conj (vec (join-path alias))
-                                    (triple-pattern inter prop v))))))))
+                              (cond-> (conj (vec (join-path alias)) (triple-pattern inter prop v))
+                                (lang-guard fid v) (conj (lang-guard fid v)))))))))
 
            ;; Direct column the compiler missed: bind it off ?subject.
            (and fid (not alias) (not (id-field? fid)) (:name (field-id->metadata fid)))
@@ -953,7 +949,7 @@
              (-> acc
                  (update :vars conj v)
                  (update :triples conj
-                         (emit-optional-triple prop v))))
+                         (ensure-triple-for-field prop v (lang-guard fid v)))))
 
            (and fid (id-field? fid))
            (update acc :vars conj "subject")
@@ -1145,6 +1141,10 @@
                                [fid (uri/absolute-uri nm naming)]))
         field-id->var  (build-var-aliases field-ids)
         token->var     (fn [tok] (var-for-token tok field-id->var pair->target-var))
+        ;; With a Default Language, `rdf:langString` columns only take values in
+        ;; that language (or untagged), filtered inside their OPTIONAL.
+        lang           (let [l (database-default-language)] (when-not (str/blank? l) l))
+        lang-guard     (fn [fid var] (when (and lang var (lang-string-field? fid)) (lang-filter var lang)))
         triples-for-fields (->> output-tokens
                                 (keep (fn [tok]
                                         (let [fid   (field-token->id tok)
@@ -1154,7 +1154,8 @@
                                                      (not (id-field? fid))
                                                      (get field-id->prop fid))
                                             (ensure-triple-for-field (get field-id->prop fid)
-                                                                     (get field-id->var fid)))))))
+                                                                     (get field-id->var fid)
+                                                                     (lang-guard fid (get field-id->var fid))))))))
         ;; Field tokens appearing in order-by/filter but not in fields (still need their triple).
         extra-direct-fids (letfn [(collect-field-tokens [x]
                                     (cond
@@ -1174,7 +1175,7 @@
                                  :let [prop (get field-id->prop fid)
                                        var  (get field-id->var fid)]
                                  :when (and prop var)]
-                             (ensure-triple-for-field prop var))
+                             (ensure-triple-for-field prop var (lang-guard fid var)))
         ;; OPTIONAL triples introduced by left-joins.
         join-fk-triples (for [j joins
                               :let [path (join-path (:alias j))]
@@ -1195,25 +1196,12 @@
                               (emit-optional-group
                                (concat path
                                        (when hop [(triple-pattern inter-var (:prop hop) (:var hop))])
-                                       (when-not id? [(triple-pattern (:var hop inter-var) prop target-var)]))))
+                                       (when-not id?
+                                         (cond-> [(triple-pattern (:var hop inter-var) prop target-var)]
+                                           (lang-guard fid target-var) (conj (lang-guard fid target-var)))))))
         _ (log/debugf "[mbql] Triples: fields=%d extras=%d join-fk=%d join-targets=%d"
                       (count triples-for-fields) (count triples-for-extras)
                       (count join-fk-triples) (count join-target-triples))
-        ;; LANG filters for `rdf:langString` columns, when a default-language is configured.
-        ;; One per referenced variable; covers direct fields, extras, and joined targets.
-        lang-filter-lines
-        (let [lang (database-default-language)]
-          (when-not (str/blank? lang)
-            (let [direct-lang-vars (->> (concat (keep field-token->id (remove field-token->join-alias output-tokens))
-                                                extra-direct-fids)
-                                        (filter lang-string-field?)
-                                        (keep #(get field-id->var %)))
-                  joined-lang-vars (->> joined-keys
-                                        (filter (fn [[fid]] (lang-string-field? fid)))
-                                        (keep pair->target-var))]
-              (mapv #(lang-filter-line % lang)
-                    (distinct (concat direct-lang-vars joined-lang-vars))))))
-        _ (log/debugf "[mbql] LANG filter lines: %d" (count (or lang-filter-lines [])))
         filters (when filter-clause
                   (or (compile-basic-filter filter-clause field-id->var pair->target-var)
                       []))
@@ -1278,7 +1266,8 @@
                         :fk-fid->alias           fk-fid->alias
                         :join-path               join-path
                         :naming                  naming
-                        :joined-field-vars       joined-field-vars}))
+                        :joined-field-vars       joined-field-vars
+                        :lang-guard              lang-guard}))
         result-vars (cond
                       agg?       (vec (concat breakout-vars (keep :var agg-projections)))
                       reconciled (vec (:vars reconciled))
@@ -1301,7 +1290,6 @@
                                  (or (:triples reconciled) [])
                                  expr-bind-lines
                                  (:binds bucketed)
-                                 (or lang-filter-lines [])
                                  filters)
                          (str/join "\n"))
         where-part  (str "WHERE {\n" where-body "\n}")
