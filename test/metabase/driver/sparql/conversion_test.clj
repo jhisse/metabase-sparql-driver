@@ -26,15 +26,14 @@
   (testing "boolean datatype"
     (is (= :type/Boolean (conversion/sparql-type->base-type "typed-literal" (str xsd "boolean")))))
 
-  (testing "DateTime family datatypes"
-    (doseq [t ["dateTime" "gYear" "gYearMonth"]]
-      (is (= :type/DateTime (conversion/sparql-type->base-type "literal" (str xsd t)))
-          (str t " should map to :type/DateTime"))))
+  (testing "dateTime and date datatypes"
+    (is (= :type/DateTime (conversion/sparql-type->base-type "literal" (str xsd "dateTime"))))
+    (is (= :type/Date (conversion/sparql-type->base-type "literal" (str xsd "date")))))
 
-  (testing "Date family datatypes"
-    (doseq [t ["date" "gMonthDay" "gDay" "gMonth"]]
-      (is (= :type/Date (conversion/sparql-type->base-type "literal" (str xsd t)))
-          (str t " should map to :type/Date"))))
+  (testing "partial dates (1990, --12-25) are not dates Metabase can read, so they stay text"
+    (doseq [t ["gYear" "gYearMonth" "gMonthDay" "gDay" "gMonth"]]
+      (is (= :type/Text (conversion/sparql-type->base-type "literal" (str xsd t)))
+          (str t " should map to :type/Text"))))
 
   (testing "Time datatype"
     (is (= :type/Time (conversion/sparql-type->base-type "literal" (str xsd "time")))))

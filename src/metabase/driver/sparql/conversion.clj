@@ -36,16 +36,14 @@
     (str xsd "float")
     (str xsd "double")})
 
+;; gYear, gYearMonth, gMonthDay, gDay and gMonth are left out: their values
+;; (`1990`, `--12-25`) are not dates or datetimes Metabase can read, so they
+;; stay text, as they do in SHACL sync.
 (def ^:private xsd-datetime-datatypes
-  #{(str xsd "dateTime")
-    (str xsd "gYear")
-    (str xsd "gYearMonth")})
+  #{(str xsd "dateTime")})
 
 (def ^:private xsd-date-datatypes
-  #{(str xsd "date")
-    (str xsd "gMonthDay")
-    (str xsd "gDay")
-    (str xsd "gMonth")})
+  #{(str xsd "date")})
 
 (def ^:private xsd-boolean
   "Single-valued family, named because it is used by BOTH classification and
