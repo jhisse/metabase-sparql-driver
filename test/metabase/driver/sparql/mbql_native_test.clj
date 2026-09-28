@@ -30,7 +30,7 @@
   (testing "a bare table query projects every Lib column, subject first"
     (let [sparql (->sparql (tu/person-query))]
       (is (= "subject" (first (select-vars sparql))))
-      (is (= 6 (count (select-vars sparql))))
+      (is (= 7 (count (select-vars sparql))))
       (is (str/includes? sparql "?subject a <https://example.org/Person> .")))))
 
 (deftest fields-projection-follows-lib-test
@@ -66,7 +66,7 @@
     (let [q     (tu/person-query)
           knows (tu/column q "knows")]
       (is (str/includes? (->sparql (lib/filter q (lib/!= knows "https://example.org/bob")))
-                         "FILTER (!BOUND(?knows) || ?knows != <https://example.org/bob>)"))
+                         "FILTER (!BOUND(?knows) || !(?knows = <https://example.org/bob>))"))
       (is (str/includes? (->sparql (lib/filter q (lib/does-not-contain knows "bob")))
                          "FILTER (!BOUND(?knows) || !(CONTAINS(STR(?knows), \"bob\")))")))))
 
@@ -127,12 +127,12 @@
       (let [sparql (->sparql shout)]
         (is (re-find #"BIND\(UCASE\(STR\(\?\w+\)\) AS \?shout\)" sparql))
         (is (= "shout" (last (select-vars sparql))))
-        (is (= 7 (count (select-vars sparql))))))
+        (is (= 8 (count (select-vars sparql))))))
     (testing "filter and order-by reference the custom column's variable"
       (let [sparql (->sparql (-> shout
                                  (lib/filter (lib/= (ref shout) "ALICE"))
                                  (lib/order-by (ref shout) :desc)))]
-        (is (str/includes? sparql "FILTER (?shout = \"ALICE\")"))
+        (is (str/includes? sparql "FILTER (STR(?shout) = \"ALICE\")"))
         (is (str/includes? sparql "ORDER BY DESC(?shout)"))))
     (testing "aggregating and grouping by a custom column"
       (let [dbl    (lib/expression q "double" (lib/* age 2))
@@ -148,4 +148,4 @@
             sparql (->sparql (lib/expression outer "whisper" (lib/lower inner)))]
         (is (str/includes? sparql "BIND(LCASE(STR(?shout)) AS ?whisper)"))
         (is (= ["shout" "whisper"] (take-last 2 (select-vars sparql))))
-        (is (= 8 (count (select-vars sparql))))))))
+        (is (= 9 (count (select-vars sparql))))))))

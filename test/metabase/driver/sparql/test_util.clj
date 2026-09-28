@@ -108,7 +108,10 @@
    (col 103 2 "age" :type/Integer "string")
    (col 104 3 "knows" :type/Text "uri")
    (col 105 4 "birthDate" :type/Date "string")
-   (col 106 5 "updated" :type/DateTime "string")])
+   (col 106 5 "updated" :type/DateTime "string")
+   ;; Language-tagged in the fixture; "langString" is what SHACL sync stamps on
+   ;; rdf:langString properties, which the Default Language filter reads.
+   (col 107 6 "nickname" :type/Text "langString")])
 
 (def provider
   "Minimal MetadataProvider over the fixture's schema. Carries the endpoint and

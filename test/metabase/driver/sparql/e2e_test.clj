@@ -40,7 +40,7 @@
 
 (deftest ^:integration default-projection-includes-subject-test
   (let [{:keys [cols rows]} (tu/run-query (tu/person-query))]
-    (is (= 6 (count cols)))
+    (is (= 7 (count cols)))
     (is (= :type/URL (:base_type (first cols))))
     (is (= #{"https://example.org/alice" "https://example.org/bob"}
            (set (map first rows))))))
@@ -53,6 +53,16 @@
                   (lib/filter (lib/= label "Alice")))
         {:keys [rows]} (tu/run-query q)]
     (is (= [["Alice"]] rows))))
+
+(deftest ^:integration filter-equals-language-tagged-literal-test
+  (testing "a picked value matches the language-tagged literal with that text"
+    (let [q        (tu/person-query)
+          label    (tu/column q tu/rdfs-label)
+          nickname (tu/column q "nickname")
+          rows     #(:rows (tu/run-query (-> q (lib/with-fields [label]) (lib/filter %))))]
+      (is (= [["Alice"]] (rows (lib/= nickname "Ally"))))
+      (is (= [["Alice"]] (rows (lib/!= nickname "Bobby")))
+          "is not also excludes the tagged match"))))
 
 (deftest ^:integration iri-equality-filter-test
   (testing "equality on the subject column matches the IRI node"

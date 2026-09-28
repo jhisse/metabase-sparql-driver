@@ -224,6 +224,15 @@
     (nil? v) ""
     :else (uri/string-literal v)))
 
+(defn- iri-value?
+  "True when the filter value `v` on `field-id` is an IRI: a scheme-carrying
+   value on an IRI-valued column (see [[value->term]])."
+  [field-id v]
+  (and (uri/has-scheme? v)
+       (let [meta (field-id->metadata field-id)]
+         (or (= :type/FK (:semantic-type meta))
+             (= "uri" (:database-type meta))))))
+
 (defn- value->term
   "Render `v`, the right-hand value of an `:=`/`:!=` filter on `field-id`, as a
    SPARQL term.
@@ -244,10 +253,7 @@
   ;; In a derived stage field refs are column-name strings, so
   ;; `field-id->metadata` returns nil and the value stays a literal.
   [field-id v]
-  (if (and (uri/has-scheme? v)
-           (let [meta (field-id->metadata field-id)]
-             (or (= :type/FK (:semantic-type meta))
-                 (= "uri" (:database-type meta)))))
+  (if (iri-value? field-id v)
     (uri/iri-ref v)
     (literal->sparql v)))
 
@@ -368,6 +374,18 @@
                (some? (unwrap-value rhs)))
       (var-for-token lhs field-id->var pair->target-var))))
 
+(defn- equality-expr
+  "Render the equality of `?var` and the filter value `v` on `fid`, with `term`
+   the value rendered by [[value->term]]. A string that is not an IRI compares
+   the text: `\"Paris\"@en = \"Paris\"` and `\"x\"^^xsd:anyURI = \"x\"` are false or
+   a type error in SPARQL, and a value picked from a filter list carries no
+   tag or datatype. `STR(?v) = \"x\"` never raises a type error on a bound
+   variable, so its negation keeps every row that does not match."
+  [var fid v term]
+  (if (and (string? v) (not (iri-value? fid v)))
+    (format "STR(?%s) = %s" var term)
+    (compare-expr var "=" term)))
+
 (defn- compile-filter-expr
   "Compile a filter clause to a SPARQL boolean expression string, or nil for a
    non-clause or an empty `:and`/`:or`. Throws (via [[unsupported-filter!]])
@@ -419,11 +437,11 @@
             (case op
               := (if (nil? v)
                    (format "(!BOUND(?%s))" var)
-                   (str "(" (compare-expr var "=" (term v #(value->term fid %))) ")"))
+                   (str "(" (equality-expr var fid v (term v #(value->term fid %))) ")"))
               ;; A row without the value is "not equal" too, as in the SQL drivers.
               :!= (if (nil? v)
                     (format "(BOUND(?%s))" var)
-                    (format "(!BOUND(?%s) || %s)" var (compare-expr var "!=" (term v #(value->term fid %)))))
+                    (format "(!BOUND(?%s) || !(%s))" var (equality-expr var fid v (term v #(value->term fid %)))))
               (:> :>= :< :<=)
               (and (some? v) (str "(" (compare-expr var (comparison-ops op) (term v literal->sparql)) ")"))
               ;; [:between field min max] — min is rhs (`v`), max is the next arg.
