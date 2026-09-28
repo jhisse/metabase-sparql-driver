@@ -61,6 +61,15 @@
       (is (thrown-with-msg? clojure.lang.ExceptionInfo #"does not support the length\(\) function"
                             (->sparql (lib/filter q (lib/> (lib/length label) 3))))))))
 
+(deftest negated-filters-keep-unbound-rows-test
+  (testing "is not and does not contain keep the rows without a value, as SQL does"
+    (let [q     (tu/person-query)
+          knows (tu/column q "knows")]
+      (is (str/includes? (->sparql (lib/filter q (lib/!= knows "https://example.org/bob")))
+                         "FILTER (!BOUND(?knows) || ?knows != <https://example.org/bob>)"))
+      (is (str/includes? (->sparql (lib/filter q (lib/does-not-contain knows "bob")))
+                         "FILTER (!BOUND(?knows) || !(CONTAINS(STR(?knows), \"bob\")))")))))
+
 (deftest order-by-limit-test
   (let [q      (tu/person-query)
         age    (tu/column q "age")

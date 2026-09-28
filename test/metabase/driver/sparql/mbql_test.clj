@@ -121,7 +121,8 @@
     (is (= "(!BOUND(?naam))"          (f [:= [:field "naam" nil] nil])))
     (is (= "(BOUND(?naam))"           (f [:!= [:field "naam" nil] nil])))
     (is (= "(?leeftijd > 18)"         (f [:> [:field "leeftijd" nil] 18])))
-    (is (= "(?naam != \"Jan\")"       (f [:!= [:field "naam" nil] "Jan"])))
+    (testing "!= keeps the rows without a value, as the SQL drivers do"
+      (is (= "(!BOUND(?naam) || ?naam != \"Jan\")" (f [:!= [:field "naam" nil] "Jan"]))))
     (testing "case-insensitive contains"
       (is (= "(CONTAINS(LCASE(STR(?naam)), LCASE(\"an\")))"
              (f [:contains [:field "naam" nil] "an" {:case-sensitive false}]))))
@@ -131,7 +132,7 @@
       (is (= "((?naam = \"Jan\") || (?naam = \"Piet\"))"
              (f [:or [:= [:field "naam" nil] "Jan"] [:= [:field "naam" nil] "Piet"]]))))
     (testing "boolean combinators keep every condition, not just the first two"
-      (is (= "((?naam = \"Jan\") && (?leeftijd > 18) && (?naam != \"Piet\"))"
+      (is (= "((?naam = \"Jan\") && (?leeftijd > 18) && (!BOUND(?naam) || ?naam != \"Piet\"))"
              (f [:and [:= [:field "naam" nil] "Jan"] [:> [:field "leeftijd" nil] 18] [:!= [:field "naam" nil] "Piet"]])))
       (is (= "((?naam = \"A\") || (?naam = \"B\") || (?naam = \"C\") || (?naam = \"D\"))"
              (f [:or [:= [:field "naam" nil] "A"] [:= [:field "naam" nil] "B"]
@@ -152,7 +153,7 @@
           (is (= (str "(?country = <" iri ">)")
                  (g [:= [:field 5 nil] iri]))
               "FK field + URL value → IRI term")
-          (is (= (str "(?country != <" iri ">)")
+          (is (= (str "(!BOUND(?country) || ?country != <" iri ">)")
                  (g [:!= [:field 5 nil] iri]))
               ":!= routes through the same term rendering")
           (is (= (str "(?subject = <" iri ">)")
@@ -161,7 +162,7 @@
           (is (= (str "(?subject = " (uri/iri-ref "urn:isbn:0451450523") ")")
                  (g [:= [:field 7 nil] "urn:isbn:0451450523"]))
               "urn: values count as IRI-shaped")
-          (is (= (str "(?homepage != " (uri/string-literal iri) ")")
+          (is (= (str "(!BOUND(?homepage) || ?homepage != " (uri/string-literal iri) ")")
                  (g [:!= [:field 6 nil] iri]))
               ":type/URL columns hold literal xsd:anyURI values — they stay literals")
           (is (= "(?country = \"AC-123\")"
@@ -222,9 +223,17 @@
              (f [:starts-with [:field "naam" nil] "ja" {:case-sensitive false}])))
       (is (= "(STRENDS(LCASE(STR(?naam)), LCASE(\"AN\")))"
              (f [:ends-with [:field "naam" nil] "AN" {:case-sensitive false}]))))
-    (testing ":not wraps its inner expression (does-not-contain arrives as [:not [:contains …]])"
-      (is (= "(!(CONTAINS(STR(?naam), \"x\")))"
+    (testing ":not over a string match keeps the rows without a value, as SQL does (does-not-contain arrives as [:not [:contains …]])"
+      (is (= "(!BOUND(?naam) || !(CONTAINS(STR(?naam), \"x\")))"
              (f [:not [:contains [:field "naam" nil] "x"]]))))
+    (testing ":not over anything else is a plain negation, as in SQL: NOT (x > 5) drops rows without x"
+      (is (= "(!(?naam = \"x\"))" (f [:not [:= [:field "naam" nil] "x"]])))
+      (is (= "(!(?naam > 5))" (f [:not [:> [:field "naam" nil] 5]]))))
+    (testing ":not over a null check, a != or a compound clause is a plain negation"
+      (is (= "(!(!BOUND(?naam)))" (f [:not [:is-null [:field "naam" nil]]])))
+      (is (= "(!(!BOUND(?naam) || ?naam != \"x\"))" (f [:not [:!= [:field "naam" nil] "x"]])))
+      (is (= "(!((CONTAINS(STR(?naam), \"a\")) || (CONTAINS(STR(?naam), \"b\"))))"
+             (f [:not [:or [:contains [:field "naam" nil] "a"] [:contains [:field "naam" nil] "b"]]]))))
     (testing ":is-null / :not-null map to BOUND checks"
       (is (= "(!BOUND(?naam))" (f [:is-null [:field "naam" nil]])))
       (is (= "(BOUND(?naam))"  (f [:not-null [:field "naam" nil]]))))

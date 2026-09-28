@@ -74,6 +74,16 @@
           {:keys [rows]} (tu/run-query q)]
       (is (= [["Alice"]] rows)))))
 
+(deftest ^:integration negated-filters-keep-rows-without-the-value-test
+  (let [q     (tu/person-query)
+        label (tu/column q tu/rdfs-label)
+        knows (tu/column q "knows")
+        rows  #(set (:rows (tu/run-query (-> q (lib/with-fields [label]) (lib/filter %)))))]
+    (testing "is not: Bob knows nobody, so he is not someone who knows Bob"
+      (is (= #{["Bob"]} (rows (lib/!= knows "https://example.org/bob")))))
+    (testing "does not contain: Bob has no knows value, so it does not contain \"bob\""
+      (is (= #{["Bob"]} (rows (lib/does-not-contain knows "bob")))))))
+
 (deftest ^:integration filter-between-age-test
   (let [q     (tu/person-query)
         label (tu/column q tu/rdfs-label)
