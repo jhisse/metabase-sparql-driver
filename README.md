@@ -158,7 +158,7 @@ Query-time mapping (every strategy). SHACL sync reads `sh:datatype` instead — 
 
 | XSD / RDF Datatype                                                 | Metabase Base Type | Notes                                                                |
 |:-------------------------------------------------------------------|:-------------------|:---------------------------------------------------------------------|
-| `xsd:integer`, `xsd:int`, `xsd:long`, `xsd:short`, `xsd:byte`      | Integer            | `42`, `-100`                                                          |
+| `xsd:integer`, `xsd:int`, `xsd:long`, `xsd:short`, `xsd:byte`      | Integer            | `42`, `-100`; values past the 64-bit range are kept whole             |
 | `xsd:nonNegativeInteger`, `xsd:positiveInteger`, `xsd:nonPositiveInteger`, `xsd:negativeInteger`, `xsd:unsigned*` | Integer | `0`, `1`, `255`                               |
 | `xsd:decimal`, `xsd:float`, `xsd:double`                           | Float              | `3.14`, `2.718`                                                       |
 | `xsd:boolean`                                                      | Boolean            | `true`, `false`, `1`, `0`; any other value is kept as its string      |

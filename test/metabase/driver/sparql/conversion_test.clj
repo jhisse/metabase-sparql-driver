@@ -48,6 +48,13 @@
       (is (= 42 v))
       (is (instance? Long v))))
 
+  (testing "an integer past Long's range becomes a BigInteger, not a string in an Integer column"
+    (let [v (conversion/convert-value {:value "99999999999999999999" :type "literal" :datatype (str xsd "integer")})]
+      (is (= 99999999999999999999N v))
+      (is (instance? BigInteger v)))
+    (is (= 42 (conversion/convert-value {:value "+42" :type "literal" :datatype (str xsd "integer")}))
+        "a leading + is valid xsd:integer"))
+
   (testing "decimals/doubles are parsed to Double"
     (is (= 3.5 (conversion/convert-value {:value "3.5" :type "typed-literal" :datatype (str xsd "decimal")}))))
 

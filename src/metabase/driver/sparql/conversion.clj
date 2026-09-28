@@ -81,7 +81,8 @@
 
 (defn convert-value
   "Return the value of a SPARQL result `binding` parsed by its datatype:
-   integers to Long, decimals and floats to Double, booleans to Boolean
+   integers to Long (BigInteger past Long's range), decimals and floats to
+   Double, booleans to Boolean
    (`true`/`1` and `false`/`0`, the lexical forms of `xsd:boolean`, in any
    case).
 
@@ -96,8 +97,13 @@
                           (= type-key "literal")))]
     (cond
       ;; Handle integers (both typed-literal and literal)
+      ;; xsd:integer has no size limit, so a value past Long's range (an ID,
+      ;; a population count) becomes a BigInteger rather than staying a
+      ;; string in an Integer column.
       (and typed? (contains? xsd-integer-datatypes datatype))
-      (try (Long/parseLong value)
+      (try (let [s (str/trim value)]
+             (try (Long/parseLong s)
+                  (catch NumberFormatException _ (BigInteger. s))))
            (catch Exception e
              (log/warn "Failed to convert integer:" value "Error:" (.getMessage e))
              value))
