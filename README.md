@@ -161,7 +161,7 @@ Query-time mapping (every strategy). SHACL sync reads `sh:datatype` instead — 
 | `xsd:integer`, `xsd:int`, `xsd:long`, `xsd:short`, `xsd:byte`      | Integer            | `42`, `-100`                                                          |
 | `xsd:nonNegativeInteger`, `xsd:positiveInteger`, `xsd:nonPositiveInteger`, `xsd:negativeInteger`, `xsd:unsigned*` | Integer | `0`, `1`, `255`                               |
 | `xsd:decimal`, `xsd:float`, `xsd:double`                           | Float              | `3.14`, `2.718`                                                       |
-| `xsd:boolean`                                                      | Boolean            | `true`, `false`                                                       |
+| `xsd:boolean`                                                      | Boolean            | `true`, `false`, `1`, `0`; any other value is kept as its string      |
 | `xsd:dateTime`, `xsd:gYear`, `xsd:gYearMonth`                      | DateTime           | `2024-01-15T10:30:00Z`                                                |
 | `xsd:date`, `xsd:gMonthDay`, `xsd:gDay`, `xsd:gMonth`              | Date               | `2024-01-15`                                                          |
 | `xsd:time`                                                         | Time               | `10:30:00`                                                            |

@@ -54,7 +54,12 @@
 
   (testing "booleans are parsed"
     (is (true?  (conversion/convert-value {:value "true"  :type "literal" :datatype (str xsd "boolean")})))
-    (is (false? (conversion/convert-value {:value "false" :type "literal" :datatype (str xsd "boolean")}))))
+    (is (false? (conversion/convert-value {:value "false" :type "literal" :datatype (str xsd "boolean")})))
+    (testing "1 and 0 are xsd:boolean lexical forms too"
+      (is (true?  (conversion/convert-value {:value "1" :type "literal" :datatype (str xsd "boolean")})))
+      (is (false? (conversion/convert-value {:value "0" :type "literal" :datatype (str xsd "boolean")}))))
+    (testing "anything else is not a boolean: kept as the raw string, not read as false"
+      (is (= "yes" (conversion/convert-value {:value "yes" :type "literal" :datatype (str xsd "boolean")})))))
 
   (testing "unparseable numbers fall back to the raw string"
     (is (= "not-a-number"

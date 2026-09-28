@@ -1,7 +1,8 @@
 (ns metabase.driver.sparql.conversion
   "Map SPARQL result terms to Metabase base types and parse their values into
    Clojure numbers and booleans, per column and per cell."
-  (:require [metabase.util.log :as log]))
+  (:require [clojure.string :as str]
+            [metabase.util.log :as log]))
 
 (def ^:private xsd
   "Base URI of the XSD datatype namespace."
@@ -83,10 +84,11 @@
 (defn convert-value
   "Return the value of a SPARQL result `binding` parsed by its datatype:
    integers to Long, decimals and floats to Double, booleans to Boolean
-   (only `\"true\"` in any case is true).
+   (`true`/`1` and `false`/`0`, the lexical forms of `xsd:boolean`, in any
+   case).
 
-   Any other value, or a number that fails to parse (logged), stays the
-   original string."
+   Any other value, or a number or boolean that fails to parse (logged),
+   stays the original string."
   [binding]
   (let [value (:value binding)
         type-key (:type binding)
@@ -111,7 +113,11 @@
 
       ;; Handle booleans (both typed-literal and literal)
       (and typed? (= datatype xsd-boolean))
-      (Boolean/parseBoolean value)
+      (case (str/lower-case (str/trim value))
+        ("true" "1")  true
+        ("false" "0") false
+        (do (log/warn "Failed to convert boolean:" value)
+            value))
 
       ;; Default case - strings and all other types
       :else value)))
