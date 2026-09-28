@@ -169,9 +169,11 @@
                   (lib/expression "older" (lib/case [[(lib/> age 26) "old"]]))
                   (lib/expression "li" (lib/regex-match-first label "l."))
                   ;; 30/7 = 4.29 and 25/7 = 3.57: Bob gets 4 only if it rounds
-                  (lib/expression "sevenths" (lib/integer (lib// age 7))))]
+                  (lib/expression "sevenths" (lib/integer (lib// age 7)))
+                  ;; null, as in SQL, where Virtuoso would fail the whole query
+                  (lib/expression "by-zero" (lib// age 0)))]
     (testing "custom columns come back computed, with null where Metabase gives null"
-      (is (= #{["Alice" "ALICE" 60 "old" "li" 4] ["Bob" "BOB" 50 nil nil 4]}
+      (is (= #{["Alice" "ALICE" 60 "old" "li" 4 nil] ["Bob" "BOB" 50 nil nil 4 nil]}
              (set (:rows (tu/run-query q))))))
     (testing "is-null on a custom column matches its null rows"
       (is (= [["Bob"]]

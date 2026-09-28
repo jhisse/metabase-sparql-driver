@@ -525,7 +525,7 @@ The driver compiles a useful subset of Metabase **custom expressions** ("Custom 
 
 | Category | Functions | Compiles to |
 |:---------|:----------|:------------|
-| Arithmetic | `+` `-` `*` `/`, `abs`, `ceil`, `floor`, `round` | infix / `ABS` `CEIL` `FLOOR` `ROUND`; `/` always divides as decimals (`30 / 7` is `4.29`, not `4`) |
+| Arithmetic | `+` `-` `*` `/`, `abs`, `ceil`, `floor`, `round` | infix / `ABS` `CEIL` `FLOOR` `ROUND`; `/` always divides as decimals (`30 / 7` is `4.29`, not `4`), and a zero divisor gives an empty value |
 | Text | `concat`, `substring`, `length`, `lower`, `upper`, `trim`, `ltrim`, `rtrim`, `replace` | `CONCAT`, `SUBSTR`, `STRLEN`, `LCASE`, `UCASE`, `REPLACE` |
 | Regex | `regexextract` (literal pattern only) | first match via `REPLACE`; null when the pattern does not match |
 | Conditional | `coalesce`, `case` | `COALESCE`, nested `IF`; `case` conditions accept the same operators as filters |

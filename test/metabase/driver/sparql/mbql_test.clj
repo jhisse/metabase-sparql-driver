@@ -387,7 +387,14 @@
       (is (= "(?a * 2)" (f [:* [:field "a" nil] 2]))))
     (testing "division is decimal, left to right, even where the engine would truncate integers"
       (is (= "((?a + 0.0) / 7)" (f [:/ [:field "a" nil] 7])))
-      (is (= "(((?a + 0.0) / ?b) / 2)" (f [:/ [:field "a" nil] [:field "b" nil] 2]))))
+      (is (= "(IF(?b = 0, (?0null), ((?a + 0.0) / ?b)) / 2)" (f [:/ [:field "a" nil] [:field "b" nil] 2]))))
+    (testing "a zero divisor gives null, as in SQL: settled at compile time for a literal, per row otherwise"
+      (doseq [zero [0 0.0 [:value 0 {}]]]
+        (is (= "(?0null)" (f [:/ [:field "a" nil] zero])) (pr-str zero)))
+      (is (= "IF(IF(?a = 0, (?0null), ((?b + 0.0) / ?a)) = 0, (?0null), ((?a + 0.0) / IF(?a = 0, (?0null), ((?b + 0.0) / ?a))))"
+             (f [:/ [:field "a" nil] [:/ [:field "b" nil] [:field "a" nil]]]))
+          "a division inside a divisor is written twice")
+      (is (= "IF(?b = 0, (?0null), ((?a + 0.0) / ?b))" (f [:/ [:field "a" nil] [:field "b" nil]]))))
     (testing "string functions coerce args with STR()"
       (is (= "LCASE(STR(?a))" (f [:lower [:field "a" nil]])))
       (is (= "STRLEN(STR(?a))" (f [:length [:field "a" nil]])))

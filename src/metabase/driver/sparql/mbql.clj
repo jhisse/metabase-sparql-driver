@@ -612,8 +612,19 @@
           :* (str "(" (str/join " * " (map a args)) ")")
           ;; `+ 0.0` makes an integer numerator a decimal: SPARQL divides
           ;; integers as decimals, but Virtuoso truncates (30 / 7 = 4). Each
-          ;; quotient is then a decimal already.
-          :/ (reduce (fn [acc divisor] (format "(%s / %s)" acc (a divisor)))
+          ;; quotient is then a decimal already. A zero divisor gives null, as
+          ;; in the SQL drivers; Virtuoso would fail the whole query on it. A
+          ;; literal divisor is settled here; any other is checked per row.
+          ;; That writes the divisor twice, so a division nested inside a
+          ;; divisor doubles the text per level; fine for hand-written
+          ;; expressions, a BIND per divisor if it ever is not.
+          :/ (reduce (fn [acc divisor]
+                       (let [lit (unwrap-value divisor)
+                             d   (a divisor)]
+                         (cond
+                           (and (number? lit) (zero? lit)) null-term
+                           (number? lit) (format "(%s / %s)" acc d)
+                           :else (format "IF(%s = 0, %s, (%s / %s))" d null-term acc d))))
                      (format "(%s + 0.0)" (a (first args)))
                      (rest args))
           :abs   (format "ABS(%s)" (a (first args)))
