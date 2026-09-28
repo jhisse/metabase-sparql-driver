@@ -610,7 +610,12 @@
                (str "(- " (a (first args)) ")")
                (str "(" (str/join " - " (map a args)) ")"))
           :* (str "(" (str/join " * " (map a args)) ")")
-          :/ (str "(" (str/join " / " (map a args)) ")")
+          ;; `+ 0.0` makes an integer numerator a decimal: SPARQL divides
+          ;; integers as decimals, but Virtuoso truncates (30 / 7 = 4). Each
+          ;; quotient is then a decimal already.
+          :/ (reduce (fn [acc divisor] (format "(%s / %s)" acc (a divisor)))
+                     (format "(%s + 0.0)" (a (first args)))
+                     (rest args))
           :abs   (format "ABS(%s)" (a (first args)))
           :ceil  (format "CEIL(%s)" (a (first args)))
           :floor (format "FLOOR(%s)" (a (first args)))

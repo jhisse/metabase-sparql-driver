@@ -385,6 +385,9 @@
       (is (= "(?a + 1)" (f [:+ [:field "a" nil] 1])))
       (is (= "(?a - ?b)" (f [:- [:field "a" nil] [:field "b" nil]])))
       (is (= "(?a * 2)" (f [:* [:field "a" nil] 2]))))
+    (testing "division is decimal, left to right, even where the engine would truncate integers"
+      (is (= "((?a + 0.0) / 7)" (f [:/ [:field "a" nil] 7])))
+      (is (= "(((?a + 0.0) / ?b) / 2)" (f [:/ [:field "a" nil] [:field "b" nil] 2]))))
     (testing "string functions coerce args with STR()"
       (is (= "LCASE(STR(?a))" (f [:lower [:field "a" nil]])))
       (is (= "STRLEN(STR(?a))" (f [:length [:field "a" nil]])))
