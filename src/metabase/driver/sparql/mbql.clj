@@ -341,6 +341,21 @@
             var var op (:tz term) var var op (:local term))
     (format "?%s %s %s" var op term)))
 
+(defn- unwrap-value
+  "Return `x`, or the value inside a `[:value x …]` wrapper."
+  [x]
+  (if (and (vector? x) (= :value (first x)))
+    (second x)
+    x))
+
+(def ^:private comparison-ops
+  "SPARQL operator of each MBQL ordering comparison."
+  {:> ">" :>= ">=" :< "<" :<= "<="})
+
+(def ^:private string-match-fns
+  "SPARQL function of each MBQL string match."
+  {:starts-with "STRSTARTS" :ends-with "STRENDS" :contains "CONTAINS"})
+
 (defn- compile-filter-expr
   "Compile a filter clause to a SPARQL boolean expression string, or nil for a
    non-clause or an empty `:and`/`:or`. Throws (via [[unsupported-filter!]])
@@ -364,10 +379,7 @@
               var (var-for-token lhs field-id->var pair->target-var)
               opts (when (map? maybe-opts) maybe-opts)
               insensitive? (false? (:case-sensitive opts))
-              v (let [x rhs]
-                  (if (and (vector? x) (= :value (first x)))
-                    (second x)
-                    x))]
+              v (unwrap-value rhs)]
           ;; A field LHS carries `fid`; an `[:expression …]` LHS has none but still
           ;; resolves to a `var` (the custom-column BIND) and must compile.
           (when-not (or fid (expression-token? lhs))
@@ -397,31 +409,20 @@
               :!= (if (nil? v)
                     (format "(BOUND(?%s))" var)
                     (str "(" (compare-expr var "!=" (term v #(value->term fid %))) ")"))
-              :> (and (some? v) (str "(" (compare-expr var ">" (term v literal->sparql)) ")"))
-              :>= (and (some? v) (str "(" (compare-expr var ">=" (term v literal->sparql)) ")"))
-              :< (and (some? v) (str "(" (compare-expr var "<" (term v literal->sparql)) ")"))
-              :<= (and (some? v) (str "(" (compare-expr var "<=" (term v literal->sparql)) ")"))
+              (:> :>= :< :<=)
+              (and (some? v) (str "(" (compare-expr var (comparison-ops op) (term v literal->sparql)) ")"))
               ;; [:between field min max] — min is rhs (`v`), max is the next arg.
-              :between (let [hi (let [x maybe-opts]
-                                  (if (and (vector? x) (= :value (first x))) (second x) x))]
+              :between (let [hi (unwrap-value maybe-opts)]
                          (when (and (some? v) (some? hi))
                            (str "(" (compare-expr var ">=" (term v literal->sparql))
                                 " && " (compare-expr var "<=" (term hi literal->sparql)) ")")))
-              :starts-with (let [needle (let [t (term v literal->sparql)] (if (map? t) (:tz t) t))
-                                 expr (if insensitive?
-                                        (format "STRSTARTS(LCASE(STR(?%s)), LCASE(%s))" var needle)
-                                        (format "STRSTARTS(STR(?%s), %s)" var needle))]
-                             (str "(" expr ")"))
-              :ends-with (let [needle (let [t (term v literal->sparql)] (if (map? t) (:tz t) t))
-                               expr (if insensitive?
-                                      (format "STRENDS(LCASE(STR(?%s)), LCASE(%s))" var needle)
-                                      (format "STRENDS(STR(?%s), %s)" var needle))]
-                           (str "(" expr ")"))
-              :contains (let [needle (let [t (term v literal->sparql)] (if (map? t) (:tz t) t))
-                              expr (if insensitive?
-                                     (format "CONTAINS(LCASE(STR(?%s)), LCASE(%s))" var needle)
-                                     (format "CONTAINS(STR(?%s), %s)" var needle))]
-                          (str "(" expr ")"))
+              (:starts-with :ends-with :contains)
+              (let [needle (let [t (term v literal->sparql)] (if (map? t) (:tz t) t))
+                    fname  (string-match-fns op)]
+                (str "(" (if insensitive?
+                           (format "%s(LCASE(STR(?%s)), LCASE(%s))" fname var needle)
+                           (format "%s(STR(?%s), %s)" fname var needle))
+                     ")"))
               :is-null (format "(!BOUND(?%s))" var)
               :not-null (format "(BOUND(?%s))" var)
               (unsupported-filter! (str "the " (name op) " operator") filter-clause))))))))
