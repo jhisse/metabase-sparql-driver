@@ -120,8 +120,16 @@
   [v lit]
   (format "STR(?%s) = %s" v lit))
 
+(defn- filter-parsed
+  "Return the FILTER expression `e`, asserting it parses inside a query."
+  [e]
+  (when e
+    (let [q (str "SELECT * WHERE { FILTER " e " }")]
+      (is (nil? (tu/sparql-syntax-error q)) q)))
+  e)
+
 (deftest compile-filter-expr-test
-  (let [f #(@#'mbql/compile-filter-expr % {"naam" "naam" "leeftijd" "leeftijd"} {})]
+  (let [f #(filter-parsed (@#'mbql/compile-filter-expr % {"naam" "naam" "leeftijd" "leeftijd"} {}))]
     (testing "a string compares the text, so it also matches a language-tagged or typed literal"
       (is (= (str "(" (text= "naam" "\"Jan\"") ")") (f [:= [:field "naam" nil] "Jan"]))))
     (testing "a wrapped [:value ...] rhs is unwrapped"
@@ -130,16 +138,18 @@
     (is (= "(BOUND(?naam))"           (f [:!= [:field "naam" nil] nil])))
     (is (= "(?leeftijd > 18)"         (f [:> [:field "leeftijd" nil] 18])))
     (is (= "(?leeftijd = 18)"         (f [:= [:field "leeftijd" nil] 18])) "numbers compare plainly")
-    (testing "a comparison with a missing value is unknown, as in SQL: an evaluation error, not a vanished filter"
+    (testing "a comparison with a missing value is unknown, as in SQL: an unbound variable, not a vanished filter"
       (doseq [clause [[:> [:field "leeftijd" nil] nil]
                       [:between [:field "leeftijd" nil] 18 nil]
                       [:contains [:field "naam" nil] nil]]]
-        (is (= "(1/0)" (f clause)) (pr-str clause)))
-      (testing "nested and negated, it keeps SQL's three-valued logic (checked on Oxigraph)"
-        (is (= "(!(1/0))" (f [:not [:> [:field "leeftijd" nil] nil]])))
-        (is (= "(!((?leeftijd > 5) || (1/0)))"
+        (is (= "(?0null)" (f clause)) (pr-str clause)))
+      (testing "nested and negated, it keeps SQL's three-valued logic (checked on Oxigraph, Jena, RDF4J and Virtuoso 7)"
+        (is (= "(!(?0null))" (f [:not [:> [:field "leeftijd" nil] nil]])))
+        (is (= "_0null" (@#'mbql/sanitize-var-name "0null"))
+            "no column can bind the null variable: a leading digit always gets a _ prefix")
+        (is (= "(!((?leeftijd > 5) || (?0null)))"
                (f [:not [:or [:> [:field "leeftijd" nil] 5] [:> [:field "leeftijd" nil] nil]]])))
-        (is (= "(!((?leeftijd > 5) && (1/0)))"
+        (is (= "(!((?leeftijd > 5) && (?0null)))"
                (f [:not [:and [:> [:field "leeftijd" nil] 5] [:> [:field "leeftijd" nil] nil]]])))))
     (testing "!= negates that equality and keeps the rows without a value, as the SQL drivers do"
       (is (= (str "(!BOUND(?naam) || !(" (text= "naam" "\"Jan\"") "))") (f [:!= [:field "naam" nil] "Jan"])))
@@ -228,7 +238,7 @@
                (f [:between [:field "leeftijd" nil] [:value 18 {}] [:value 65 {}]])))))))
 
 (deftest string-match-and-negation-filters-test
-  (let [f #(@#'mbql/compile-filter-expr % {"naam" "naam"} {})]
+  (let [f #(filter-parsed (@#'mbql/compile-filter-expr % {"naam" "naam"} {}))]
     (testing "case-sensitive string matches compare the STR() of the value"
       (is (= "(STRSTARTS(STR(?naam), \"Ja\"))" (f [:starts-with [:field "naam" nil] "Ja"])))
       (is (= "(STRENDS(STR(?naam), \"an\"))"   (f [:ends-with [:field "naam" nil] "an"])))
@@ -383,14 +393,14 @@
       (is (= "REPLACE(STR(?a), \"^\\\\s+|\\\\s+$\", \"\")" (f [:trim [:field "a" nil]]))))
     (testing "regexextract compiles to a first-match REPLACE"
       (is (= (str "IF(REGEX(STR(?a), \"[-0-9.]+\", \"s\"), "
-                  "REPLACE(STR(?a), \"^.*?([-0-9.]+).*$\", \"$1\", \"s\"), (1/0))")
+                  "REPLACE(STR(?a), \"^.*?([-0-9.]+).*$\", \"$1\", \"s\"), (?0null))")
              (f [:regex-match-first [:field "a" nil] "[-0-9.]+"]))))
     (testing "a regexextract pattern taken from a column fails clearly"
       (is (thrown-with-msg? clojure.lang.ExceptionInfo #"regexextract needs a literal pattern"
                             (f [:regex-match-first [:field "a" nil] [:field "b" nil]]))))
     (testing "a missing value and a case without default are null, not \"\""
-      (is (= "COALESCE(?a, (1/0))" (f [:coalesce [:field "a" nil] nil])))
-      (is (= "IF((?a > 5), \"big\", (1/0))"
+      (is (= "COALESCE(?a, (?0null))" (f [:coalesce [:field "a" nil] nil])))
+      (is (= "IF((?a > 5), \"big\", (?0null))"
              (f [:case [[[:> [:field "a" nil] 5] "big"]]]))))
     (testing "substring is 1-based SUBSTR"
       (is (= "SUBSTR(STR(?a), 2, 3)" (f [:substring [:field "a" nil] 2 3])))
@@ -495,7 +505,7 @@
             (compile-stage* {:source-table 100
                              :fields [[:field 1 nil] [:field 2 nil]]
                              :filter [:> [:field 2 nil] nil]})]
-        (is (str/includes? sparql "FILTER (1/0)"))))))
+        (is (str/includes? sparql "FILTER (?0null)"))))))
 
 (deftest compile-base-stage-order-limit-test
   (with-fixture

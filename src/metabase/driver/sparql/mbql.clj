@@ -216,11 +216,17 @@
                  (walk filter-clause)))))
 
 (def ^:private null-term
-  "SPARQL expression that stands in for null, which SPARQL has no literal for.
-   Integer division by zero is an evaluation error, which leaves a BIND
-   unbound, makes IF unbound and is skipped by COALESCE: the same result a SQL
-   NULL gives. Unlike a spare variable, no column can bind it."
-  "(1/0)")
+  "SPARQL expression that stands in for null, which SPARQL has no literal for:
+   `?0null`, a variable nothing binds. Its name starts with a digit, which
+   [[sanitize-var-name]] never produces, so no column can bind it. Evaluating
+   it is an expression error, which leaves a BIND unbound, makes IF unbound,
+   is skipped by COALESCE and behaves like SQL's UNKNOWN under `&&`, `||` and
+   `!`, on every engine tested (Oxigraph, Jena, RDF4J, Virtuoso). `(1/0)`
+   fails the whole query on RDF4J and Virtuoso instead. Parenthesized, so it
+   also stands alone after FILTER."
+  ;; Virtuoso 8 (DBpedia) drops the row for `!(false && unbound)`, where SQL
+  ;; keeps it; it does so for any unbound variable, not only this one.
+  "(?0null)")
 
 (defn- literal->sparql
   "Render `v` as a SPARQL literal: numbers and booleans bare, anything else as
@@ -454,7 +460,7 @@
                     (format "(BOUND(?%s))" var)
                     (format "(!BOUND(?%s) || !(%s))" var (equality-expr var fid v (term v #(value->term fid %)))))
               ;; Comparing with a missing value is unknown, as `x > NULL` is in
-              ;; SQL. The evaluation error of `null-term` behaves like UNKNOWN
+              ;; SQL. The expression error of `null-term` behaves like UNKNOWN
               ;; under `&&`, `||` and `!`, and a FILTER on it matches nothing; a
               ;; nil would drop the FILTER and return every row.
               (:> :>= :< :<=)
