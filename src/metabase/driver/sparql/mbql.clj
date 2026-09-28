@@ -216,11 +216,17 @@
                  (walk filter-clause)))))
 
 (def ^:private null-term
-  "SPARQL expression that stands in for null, which SPARQL has no literal for.
-   Integer division by zero is an evaluation error, which leaves a BIND
-   unbound, makes IF unbound and is skipped by COALESCE: the same result a SQL
-   NULL gives. Unlike a spare variable, no column can bind it."
-  "(1/0)")
+  "SPARQL expression that stands in for null, which SPARQL has no literal for:
+   `?0null`, a variable nothing binds. Its name starts with a digit, which
+   [[sanitize-var-name]] never produces, so no column can bind it. Evaluating
+   it is an expression error, which leaves a BIND unbound, makes IF unbound,
+   is skipped by COALESCE and behaves like SQL's UNKNOWN under `&&`, `||` and
+   `!`, on every engine tested (Oxigraph, Jena, RDF4J, Virtuoso). `(1/0)`
+   fails the whole query on RDF4J and Virtuoso instead. Parenthesized, so it
+   also stands alone after FILTER."
+  ;; Virtuoso 8 (DBpedia) drops the row for `!(false && unbound)`, where SQL
+  ;; keeps it; it does so for any unbound variable, not only this one.
+  "(?0null)")
 
 (defn- literal->sparql
   "Render `v` as a SPARQL literal: numbers and booleans bare, anything else as
@@ -454,7 +460,7 @@
                     (format "(BOUND(?%s))" var)
                     (format "(!BOUND(?%s) || !(%s))" var (equality-expr var fid v (term v #(value->term fid %)))))
               ;; Comparing with a missing value is unknown, as `x > NULL` is in
-              ;; SQL. The evaluation error of `null-term` behaves like UNKNOWN
+              ;; SQL. The expression error of `null-term` behaves like UNKNOWN
               ;; under `&&`, `||` and `!`, and a FILTER on it matches nothing; a
               ;; nil would drop the FILTER and return every row.
               (:> :>= :< :<=)
@@ -571,7 +577,11 @@
 (defn- compile-case
   "Compile a `[:case [[pred val]…] {:default d}]` clause to nested SPARQL `IF()`.
    A predicate is a filter clause and compiles like one; a bare boolean column
-   ref is used as is. Without a `:default`, unmatched rows get [[null-term]]."
+   ref is used as is. Without a `:default`, unmatched rows get [[null-term]].
+
+   Each predicate is wrapped in `COALESCE(…, false)`: on a row where it reads
+   a missing value it is an error, which would make the whole IF unbound,
+   while SQL takes an UNKNOWN WHEN as false and tries the next one."
   [args field-id->var pair->target-var]
   (let [clauses (first args)
         opts    (second args)
@@ -581,7 +591,7 @@
                    (a %)
                    (compile-filter-expr % field-id->var pair->target-var))]
     (reduce (fn [else [p val]]
-              (format "IF(%s, %s, %s)" (pred p) (a val) else))
+              (format "IF(COALESCE(%s, false), %s, %s)" (pred p) (a val) else))
             (if (some? default) (a default) null-term)
             (reverse clauses))))
 
@@ -604,7 +614,23 @@
                (str "(- " (a (first args)) ")")
                (str "(" (str/join " - " (map a args)) ")"))
           :* (str "(" (str/join " * " (map a args)) ")")
-          :/ (str "(" (str/join " / " (map a args)) ")")
+          ;; `+ 0.0` makes an integer numerator a decimal: SPARQL divides
+          ;; integers as decimals, but Virtuoso truncates (30 / 7 = 4). Each
+          ;; quotient is then a decimal already. A zero divisor gives null, as
+          ;; in the SQL drivers; Virtuoso would fail the whole query on it. A
+          ;; literal divisor is settled here; any other is checked per row.
+          ;; That writes the divisor twice, so a division nested inside a
+          ;; divisor doubles the text per level; fine for hand-written
+          ;; expressions, a BIND per divisor if it ever is not.
+          :/ (reduce (fn [acc divisor]
+                       (let [lit (unwrap-value divisor)
+                             d   (a divisor)]
+                         (cond
+                           (and (number? lit) (zero? lit)) null-term
+                           (number? lit) (format "(%s / %s)" acc d)
+                           :else (format "IF(%s = 0, %s, (%s / %s))" d null-term acc d))))
+                     (format "(%s + 0.0)" (a (first args)))
+                     (rest args))
           :abs   (format "ABS(%s)" (a (first args)))
           :ceil  (format "CEIL(%s)" (a (first args)))
           :floor (format "FLOOR(%s)" (a (first args)))
