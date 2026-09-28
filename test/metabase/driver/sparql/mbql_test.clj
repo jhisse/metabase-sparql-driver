@@ -47,7 +47,7 @@
     (is (= "25" (f 25)))
     (is (= "true" (f true)))
     (is (= "false" (f false)))
-    (is (= "" (f nil)))
+    (is (thrown? clojure.lang.ExceptionInfo (f nil)) "nil has no literal")
     (testing "embedded double quotes are escaped"
       (is (= "\"a\\\"b\"" (f "a\"b"))))
     (testing "backslashes are escaped (a trailing one no longer swallows the closing quote)"
@@ -130,6 +130,17 @@
     (is (= "(BOUND(?naam))"           (f [:!= [:field "naam" nil] nil])))
     (is (= "(?leeftijd > 18)"         (f [:> [:field "leeftijd" nil] 18])))
     (is (= "(?leeftijd = 18)"         (f [:= [:field "leeftijd" nil] 18])) "numbers compare plainly")
+    (testing "a comparison with a missing value is unknown, as in SQL: an evaluation error, not a vanished filter"
+      (doseq [clause [[:> [:field "leeftijd" nil] nil]
+                      [:between [:field "leeftijd" nil] 18 nil]
+                      [:contains [:field "naam" nil] nil]]]
+        (is (= "(1/0)" (f clause)) (pr-str clause)))
+      (testing "nested and negated, it keeps SQL's three-valued logic (checked on Oxigraph)"
+        (is (= "(!(1/0))" (f [:not [:> [:field "leeftijd" nil] nil]])))
+        (is (= "(!((?leeftijd > 5) || (1/0)))"
+               (f [:not [:or [:> [:field "leeftijd" nil] 5] [:> [:field "leeftijd" nil] nil]]])))
+        (is (= "(!((?leeftijd > 5) && (1/0)))"
+               (f [:not [:and [:> [:field "leeftijd" nil] 5] [:> [:field "leeftijd" nil] nil]]])))))
     (testing "!= negates that equality and keeps the rows without a value, as the SQL drivers do"
       (is (= (str "(!BOUND(?naam) || !(" (text= "naam" "\"Jan\"") "))") (f [:!= [:field "naam" nil] "Jan"])))
       (is (= "(!BOUND(?leeftijd) || !(?leeftijd = 18))" (f [:!= [:field "leeftijd" nil] 18]))))
@@ -476,6 +487,15 @@
                            :fields [[:field 1 nil] [:field 2 nil]]
                            :filter [:= [:field 2 nil] "Jan"]})]
       (is (str/includes? sparql (str "FILTER (" (text= "naam" "\"Jan\"") ")"))))))
+
+(deftest compile-base-stage-nil-comparison-filter-test
+  (testing "a top-level comparison with a missing value keeps a FILTER that matches nothing"
+    (with-fixture
+      (let [{:keys [sparql]}
+            (compile-stage* {:source-table 100
+                             :fields [[:field 1 nil] [:field 2 nil]]
+                             :filter [:> [:field 2 nil] nil]})]
+        (is (str/includes? sparql "FILTER (1/0)"))))))
 
 (deftest compile-base-stage-order-limit-test
   (with-fixture

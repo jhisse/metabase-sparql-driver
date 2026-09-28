@@ -215,15 +215,24 @@
                  (mapcat walk (collect-expression-tokens expressions))
                  (walk filter-clause)))))
 
+(def ^:private null-term
+  "SPARQL expression that stands in for null, which SPARQL has no literal for.
+   Integer division by zero is an evaluation error, which leaves a BIND
+   unbound, makes IF unbound and is skipped by COALESCE: the same result a SQL
+   NULL gives. Unlike a spare variable, no column can bind it."
+  "(1/0)")
+
 (defn- literal->sparql
   "Render `v` as a SPARQL literal: numbers and booleans bare, anything else as
-   a string literal via [[uri/string-literal]]. nil renders as an empty string."
+   a string literal via [[uri/string-literal]]. Throws on nil, which has no
+   literal: a filter against a missing value compiles to [[null-term]]
+   before reaching here."
   [v]
   (cond
     (string? v) (uri/string-literal v)
     (number? v) (str v)
     (boolean? v) (if v "true" "false")
-    (nil? v) ""
+    (nil? v) (throw (ex-info "A missing value has no SPARQL literal." {}))
     :else (uri/string-literal v)))
 
 (defn- iri-value?
@@ -406,8 +415,8 @@
                (when (seq parts)
                  (str "(" (str/join " || " parts) ")")))
         :not (when-let [inner (compile-filter-expr lhs field-id->var pair->target-var)]
-               (if-let [v (negated-leaf-var lhs field-id->var pair->target-var)]
-                 (format "(!BOUND(?%s) || !%s)" v inner)
+               (if-let [unbound-var (negated-leaf-var lhs field-id->var pair->target-var)]
+                 (format "(!BOUND(?%s) || !%s)" unbound-var inner)
                  (str "(!" inner ")")))
         (let [fid (field-token->id lhs)
               var (var-for-token lhs field-id->var pair->target-var)
@@ -444,20 +453,29 @@
               :!= (if (nil? v)
                     (format "(BOUND(?%s))" var)
                     (format "(!BOUND(?%s) || !(%s))" var (equality-expr var fid v (term v #(value->term fid %)))))
+              ;; Comparing with a missing value is unknown, as `x > NULL` is in
+              ;; SQL. The evaluation error of `null-term` behaves like UNKNOWN
+              ;; under `&&`, `||` and `!`, and a FILTER on it matches nothing; a
+              ;; nil would drop the FILTER and return every row.
               (:> :>= :< :<=)
-              (and (some? v) (str "(" (compare-expr var (comparison-ops op) (term v literal->sparql)) ")"))
+              (if (nil? v)
+                null-term
+                (str "(" (compare-expr var (comparison-ops op) (term v literal->sparql)) ")"))
               ;; [:between field min max] — min is rhs (`v`), max is the next arg.
               :between (let [hi (unwrap-value maybe-opts)]
-                         (when (and (some? v) (some? hi))
+                         (if (or (nil? v) (nil? hi))
+                           null-term
                            (str "(" (compare-expr var ">=" (term v literal->sparql))
                                 " && " (compare-expr var "<=" (term hi literal->sparql)) ")")))
               (:starts-with :ends-with :contains)
-              (let [needle (let [t (term v literal->sparql)] (if (map? t) (:tz t) t))
-                    fname  (string-match-fns op)]
-                (str "(" (if insensitive?
-                           (format "%s(LCASE(STR(?%s)), LCASE(%s))" fname var needle)
-                           (format "%s(STR(?%s), %s)" fname var needle))
-                     ")"))
+              (if (nil? v)
+                null-term
+                (let [needle (let [t (term v literal->sparql)] (if (map? t) (:tz t) t))
+                      fname  (string-match-fns op)]
+                  (str "(" (if insensitive?
+                             (format "%s(LCASE(STR(?%s)), LCASE(%s))" fname var needle)
+                             (format "%s(STR(?%s), %s)" fname var needle))
+                       ")")))
               :is-null (format "(!BOUND(?%s))" var)
               :not-null (format "(BOUND(?%s))" var)
               (unsupported-filter! (str "the " (name op) " operator") filter-clause))))))))
@@ -522,13 +540,6 @@
 ;; ---------------------------------------------------------------------------
 ;; Custom expressions (Metabase "custom columns") → SPARQL
 ;; ---------------------------------------------------------------------------
-
-(def ^:private null-term
-  "SPARQL expression that stands in for null, which SPARQL has no literal for.
-   Integer division by zero is an evaluation error, which leaves a BIND
-   unbound, makes IF unbound and is skipped by COALESCE: the same result a SQL
-   NULL gives. Unlike a spare variable, no column can bind it."
-  "(1/0)")
 
 (defn- regex-escape
   "Escape regex metacharacters so `s` matches literally inside a SPARQL REPLACE pattern."
