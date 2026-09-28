@@ -577,7 +577,11 @@
 (defn- compile-case
   "Compile a `[:case [[pred val]…] {:default d}]` clause to nested SPARQL `IF()`.
    A predicate is a filter clause and compiles like one; a bare boolean column
-   ref is used as is. Without a `:default`, unmatched rows get [[null-term]]."
+   ref is used as is. Without a `:default`, unmatched rows get [[null-term]].
+
+   Each predicate is wrapped in `COALESCE(…, false)`: on a row where it reads
+   a missing value it is an error, which would make the whole IF unbound,
+   while SQL takes an UNKNOWN WHEN as false and tries the next one."
   [args field-id->var pair->target-var]
   (let [clauses (first args)
         opts    (second args)
@@ -587,7 +591,7 @@
                    (a %)
                    (compile-filter-expr % field-id->var pair->target-var))]
     (reduce (fn [else [p val]]
-              (format "IF(%s, %s, %s)" (pred p) (a val) else))
+              (format "IF(COALESCE(%s, false), %s, %s)" (pred p) (a val) else))
             (if (some? default) (a default) null-term)
             (reverse clauses))))
 

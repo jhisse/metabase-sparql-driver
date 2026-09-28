@@ -410,7 +410,7 @@
                             (f [:regex-match-first [:field "a" nil] [:field "b" nil]]))))
     (testing "a missing value and a case without default are null, not \"\""
       (is (= "COALESCE(?a, (?0null))" (f [:coalesce [:field "a" nil] nil])))
-      (is (= "IF((?a > 5), \"big\", (?0null))"
+      (is (= "IF(COALESCE((?a > 5), false), \"big\", (?0null))"
              (f [:case [[[:> [:field "a" nil] 5] "big"]]]))))
     (testing "substring is 1-based SUBSTR"
       (is (= "SUBSTR(STR(?a), 2, 3)" (f [:substring [:field "a" nil] 2 3])))
@@ -425,12 +425,15 @@
              (f [:integer [:field "a" nil]]))))
     (testing "coalesce / case"
       (is (= "COALESCE(?a, \"x\")" (f [:coalesce [:field "a" nil] "x"])))
-      (is (= "IF((?a > 5), \"big\", \"small\")"
+      (is (= "IF(COALESCE((?a > 5), false), \"big\", \"small\")"
              (f [:case [[[:> [:field "a" nil] 5] "big"]] {:default "small"}]))))
     (testing "case predicates compile like filters, and a bare boolean column is used as is"
-      (is (= "IF(?a, 1, 0)" (f [:case [[[:field "a" nil] 1]] {:default 0}])))
-      (is (= "IF((CONTAINS(LCASE(STR(?a)), LCASE(\"x\"))), 1, 0)"
+      (is (= "IF(COALESCE(?a, false), 1, 0)" (f [:case [[[:field "a" nil] 1]] {:default 0}])))
+      (is (= "IF(COALESCE((CONTAINS(LCASE(STR(?a)), LCASE(\"x\"))), false), 1, 0)"
              (f [:case [[[:contains [:field "a" nil] "x" {:case-sensitive false}] 1]] {:default 0}]))))
+    (testing "a case whose WHEN reads a missing value tries the next WHEN, as SQL takes UNKNOWN as false"
+      (is (= "IF(COALESCE((?a > 5), false), \"a\", IF(COALESCE((STR(?b) = \"ok\"), false), \"b\", (?0null)))"
+             (f [:case [[[:> [:field "a" nil] 5] "a"] [[:= [:field "b" nil] "ok"] "b"]]]))))
     (testing "an unsupported function throws a clear error"
       (is (thrown-with-msg? clojure.lang.ExceptionInfo #"Unsupported expression function"
                             (f [:totally-bogus [:field "a" nil]])))

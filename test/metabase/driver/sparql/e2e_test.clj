@@ -136,6 +136,17 @@
     (testing "a timezoned value is compared against the offset bound"
       (is (= [["Alice"]] (run (lib/>= upd "2024-01-01")))))))
 
+(deftest ^:integration case-skips-a-when-on-a-missing-value-test
+  (testing "Bob has no knows: the first WHEN is unknown, so the second one decides, as in SQL"
+    (let [q     (tu/person-query)
+          label (tu/column q tu/rdfs-label)
+          knows (tu/column q "knows")
+          q     (-> q
+                    (lib/with-fields [label])
+                    (lib/expression "tag" (lib/case [[(lib/contains knows "alice") "knows alice"]
+                                                     [(lib/= label "Bob") "is bob"]])))]
+      (is (= #{["Alice" nil] ["Bob" "is bob"]} (set (:rows (tu/run-query q))))))))
+
 (deftest ^:integration relative-date-filter-test
   (testing "a relative preset (desugared by the QP) runs on the endpoint"
     (let [q     (tu/person-query)
