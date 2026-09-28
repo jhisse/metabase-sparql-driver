@@ -10,6 +10,7 @@
             [clojure.test :refer :all]
             [metabase.driver-api.core :as driver-api]
             [metabase.driver.sparql.database :as database]
+            [metabase.driver.sparql.mbql :as mbql]
             [metabase.driver.sparql.test-util :as tu]
             [metabase.lib.core :as lib]))
 
@@ -40,7 +41,7 @@
 
 (deftest ^:integration default-projection-includes-subject-test
   (let [{:keys [cols rows]} (tu/run-query (tu/person-query))]
-    (is (= 6 (count cols)))
+    (is (= 7 (count cols)))
     (is (= :type/URL (:base_type (first cols))))
     (is (= #{"https://example.org/alice" "https://example.org/bob"}
            (set (map first rows))))))
@@ -53,6 +54,25 @@
                   (lib/filter (lib/= label "Alice")))
         {:keys [rows]} (tu/run-query q)]
     (is (= [["Alice"]] rows))))
+
+(deftest ^:integration filter-equals-language-tagged-literal-test
+  (testing "a picked value matches the language-tagged literal with that text"
+    (let [q        (tu/person-query)
+          label    (tu/column q tu/rdfs-label)
+          nickname (tu/column q "nickname")
+          rows     #(:rows (tu/run-query (-> q (lib/with-fields [label]) (lib/filter %))))]
+      (is (= [["Alice"]] (rows (lib/= nickname "Ally"))))
+      (is (= [["Alice"]] (rows (lib/!= nickname "Bobby")))
+          "is not also excludes the tagged match"))))
+
+(deftest ^:integration default-language-keeps-rows-without-that-language-test
+  (testing "with Default Language en, Bob (only a @fr nickname) keeps his row, nickname empty"
+    (with-redefs [mbql/database-default-language (constantly "en")]
+      (let [q        (tu/person-query)
+            label    (tu/column q tu/rdfs-label)
+            nickname (tu/column q "nickname")]
+        (is (= #{["Alice" "Ally"] ["Bob" nil]}
+               (set (:rows (tu/run-query (lib/with-fields q [label nickname]))))))))))
 
 (deftest ^:integration iri-equality-filter-test
   (testing "equality on the subject column matches the IRI node"
@@ -73,6 +93,16 @@
                     (lib/filter (lib/= knows "https://example.org/bob")))
           {:keys [rows]} (tu/run-query q)]
       (is (= [["Alice"]] rows)))))
+
+(deftest ^:integration negated-filters-keep-rows-without-the-value-test
+  (let [q     (tu/person-query)
+        label (tu/column q tu/rdfs-label)
+        knows (tu/column q "knows")
+        rows  #(set (:rows (tu/run-query (-> q (lib/with-fields [label]) (lib/filter %)))))]
+    (testing "is not: Bob knows nobody, so he is not someone who knows Bob"
+      (is (= #{["Bob"]} (rows (lib/!= knows "https://example.org/bob")))))
+    (testing "does not contain: Bob has no knows value, so it does not contain \"bob\""
+      (is (= #{["Bob"]} (rows (lib/does-not-contain knows "bob")))))))
 
 (deftest ^:integration filter-between-age-test
   (let [q     (tu/person-query)

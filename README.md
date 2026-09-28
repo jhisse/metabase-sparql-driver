@@ -213,13 +213,15 @@ This mirrors RDF/Turtle "base IRI" semantics: only URIs *under* the configured b
 
 ### Language Handling
 
-If a property is declared as `sh:datatype rdf:langString` in a SHACL document (so the driver knows it is language-tagged) **and** a **Default Language** is configured, every reference to that variable in the compiled SPARQL gets:
+If a property is declared as `sh:datatype rdf:langString` in a SHACL document (so the driver knows it is language-tagged) **and** a **Default Language** is configured, the pattern that reads that property filters its values:
 
 ```sparql
-FILTER(!BOUND(?var) || LANG(?var) = "nl" || LANG(?var) = "")
+OPTIONAL { ?subject <property> ?var . FILTER(LANGMATCHES(LANG(?var), "nl") || LANG(?var) = "") }
 ```
 
-This keeps each row to the configured language (plus any untagged literals) and avoids the row fan-out that multilingual datasets otherwise produce. The `!BOUND(...)` guard preserves left-join semantics. Leaving **Default Language** blank disables this entirely — the driver behaves exactly as before.
+This keeps each value to the configured language, its regional variants such as `nl-BE`, and untagged literals, and avoids the row fan-out that multilingual datasets otherwise produce. An entity without a value in that language keeps its row, with the value empty. Leaving **Default Language** blank disables this entirely.
+
+Equality filters on text compare the text itself: filtering a label on `Paris` matches `"Paris"@en` and typed literals such as `"Paris"^^xsd:anyURI`, which a plain SPARQL `=` does not.
 
 ### Native Query Parameters
 
@@ -436,7 +438,7 @@ Read the FK property out loud: *"`birthPlace` is a foreign key to `Place`. When 
 1. The property you name must be declared on the target NodeShape (directly, or via `sh:node` inheritance). If the driver can't find a synced field by that name on the target table, no `Dimension` row is written — the next sync resolves it once the field appears.
 2. The target property must actually carry triples on the linked instances. If it's declared but empty in the data, the display column will simply come back blank.
 
-**Note on `langString` targets.** When the display property is `rdf:langString` and a **Default Language** is configured, the per-row `FILTER(LANG(?x) = "nl" || LANG(?x) = "")` still applies, so multilingual labels resolve to the right language automatically.
+**Note on `langString` targets.** When the display property is `rdf:langString` and a **Default Language** is configured, the language filter sits inside the pattern that reads the label, so labels resolve to that language, and an entity without one shows an empty label. It does not apply yet when the question's source is a saved question or a summarized stage.
 
 ### Foreign Keys
 
@@ -509,7 +511,7 @@ With **Default Graph URI** = `http://dbpedia.org/ontology/` and **Default Langua
 
 - A table **Place** with columns `subject`, `label`, `populationTotal`.
 - A table **Person** with columns `subject`, `wikiPageID` (inherited from Agent), `birthName`, `birthPlace`.
-- `birthName` is `langString`, so queries get `FILTER(... LANG(?birthName) = "nl" || LANG(?birthName) = "")`.
+- `birthName` is `langString`, so the pattern that reads it gets `FILTER(LANGMATCHES(LANG(?birthName), "nl") || LANG(?birthName) = "")`.
 - `birthPlace` is marked **Foreign Key** pointing to `Place.subject`. After sync the driver writes a `Dimension` row pairing `Person.birthPlace` → `Place.label`, so the FK column renders as the place's Dutch label automatically — no manual "Display values" click in the column-settings panel.
 - `wikiPageRevisionID` is absent (`metabase:hide`).
 - The synced Dutch description ("Wikipedia-pagina-ID") is preferred over the English one.
@@ -544,9 +546,9 @@ float(regexextract([code], "[0-9]+"))
 - **Aggregations**: Basic aggregations in Query Builder's "Summarize" are supported — **Count**, **Count distinct**, **Sum**, **Average**, **Minimum**, **Maximum** — with an optional group-by (breakout). `Count` compiles to `COUNT(DISTINCT ?subject)`, so grouping by a multi-valued property counts *entities* per group rather than fanned-out solution rows. A date group-by can use year, quarter, month, day, hour or minute, or month of year, quarter of year, day of month, hour of day or minute of hour; each value is bucketed in the timezone it is written in. Week and day-of-week / day-of-year groupings have no SPARQL 1.1 function and fail with a "not supported" error. Cumulative sum/count work (Metabase accumulates the grouped rows), and so does filtering on an aggregation (it becomes an outer stage). Standard deviation, median/percentiles and expression aggregations (`count-where`, `sum-where`, `share`, …) are not supported and fail with an error.
 - **Joins**: Implicit foreign-key joins (the "Display values" remap on a FK column) are emitted as `OPTIONAL` patterns that repeat the FK path from the row, so a row without the FK keeps an empty display value. Multi-hop chains (e.g. `Item → Provider → Owner → owner_name`) are supported, and so is the display value of a FK column inside an explicit left join (not yet when the question's source is a saved question or model). A column reached through a field that is not a foreign key fails with an error. Explicit inner/right/full joins from Query Builder are not supported — only `:left-join` is enabled.
 - **Saved cards / models as a source**: When a saved card or model is used as the source of another question, the inner query is compiled as a SPARQL sub-`SELECT` and the outer stage's FK display-value remaps wrap it. The outer stage can add its own filter, breakout or aggregation (e.g. drilling into a count). Known issue: an aggregation over an aggregation (e.g. "Minimum of Count") re-binds `?ag_0`, which RDF4J and Jena reject; Oxigraph accepts it.
-- **Auto-mode language tagging**: The `FILTER(LANG(?x) = …)` clause only fires for columns whose `rdf:langString` datatype was declared in SHACL. The `auto` sync strategy can't see datatypes by sampling alone, so multilingual fan-out can still happen there.
+- **Auto-mode language tagging**: The Default Language filter only fires for columns whose `rdf:langString` datatype was declared in SHACL. The `auto` sync strategy can't see datatypes by sampling alone, so multilingual fan-out can still happen there.
 - **Performance**: Fetching large result sets or performing metadata discovery on extensive endpoints can be resource-intensive. Use **Configurable Limits** (Class/Property/Sample Size) in `auto`, or move to `shacl` / `explicit` / `none` for control.
-- **Filter Support**: Basic filtering works in Query Builder (comparisons, `between`, `contains` / `starts-with` / `ends-with`, empty / not empty, `and` / `or` / `not`, and date filters such as "Previous 30 days" or "Between two dates", resolved in the results timezone and compared as typed `xsd:date` / `xsd:dateTime` literals, for values with or without a timezone; date filters need a SHACL `xsd:date` / `xsd:dateTime` column whose values match that datatype). Date filters that need a grouped unit (e.g. "Exclude months") are not supported. Custom-expression functions in filters (e.g. `lower()`, `integer()`) and other operators are not translated: the query fails with a "not supported" error instead of running without the filter.
+- **Filter Support**: Basic filtering works in Query Builder (comparisons, `between`, `contains` / `starts-with` / `ends-with`, empty / not empty, `and` / `or` / `not`, and date filters such as "Previous 30 days" or "Between two dates", resolved in the results timezone and compared as typed `xsd:date` / `xsd:dateTime` literals, for values with or without a timezone; date filters need a SHACL `xsd:date` / `xsd:dateTime` column whose values match that datatype). "Is not" and "does not contain" keep the rows that have no value, as on SQL databases. Date filters that need a grouped unit (e.g. "Exclude months") are not supported. Custom-expression functions in filters (e.g. `lower()`, `integer()`) and other operators are not translated: the query fails with a "not supported" error instead of running without the filter.
 - **Authentication**: HTTP Basic (username/password) and Bearer token (`Authorization: Bearer <token>`) are supported via the **Authentication** field. The bearer token is static — paste a long-lived JWT or API key that the SPARQL endpoint accepts. Per-user / per-session token forwarding (e.g. propagating the signed-in user's Google or OIDC `id_token`) is **not** supported: Metabase discards the upstream OIDC tokens after creating its own session, so they are not reachable from the driver. OAuth client-credentials refresh and Metabase's `auth-provider` framework (enterprise) are not wired in yet.
 
 ## :building_construction: Build Locally From Source

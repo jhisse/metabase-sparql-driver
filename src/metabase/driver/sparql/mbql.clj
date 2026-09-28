@@ -100,13 +100,15 @@
   [field-id]
   (= "langString" (:database-type (field-id->metadata field-id))))
 
-(defn- lang-filter-line
-  "Render the LANG filter clause for one variable. Guards against unbound
-   variables (left joins) and accepts untagged literals alongside the target
-   language."
+(defn- lang-filter
+  "Render the LANG filter for one variable, accepting untagged literals
+   alongside the target language. LANGMATCHES ignores case and accepts
+   subtags, so `en` also keeps `@en-GB`. It goes inside the OPTIONAL that binds
+   the variable, so an entity without a value in that language keeps its row
+   with the value unbound, instead of losing the row."
   [var-name lang]
-  (format "  FILTER(!BOUND(?%s) || LANG(?%s) = \"%s\" || LANG(?%s) = \"\")"
-          var-name var-name (uri/escape-string lang) var-name))
+  (format "FILTER(LANGMATCHES(LANG(?%s), %s) || LANG(?%s) = \"\")"
+          var-name (uri/string-literal lang) var-name))
 
 (defn- table-id->class-uri
   "Return the RDF class URI of table `table-id`: its name, expanded to a full
@@ -213,16 +215,34 @@
                  (mapcat walk (collect-expression-tokens expressions))
                  (walk filter-clause)))))
 
+(def ^:private null-term
+  "SPARQL expression that stands in for null, which SPARQL has no literal for.
+   Integer division by zero is an evaluation error, which leaves a BIND
+   unbound, makes IF unbound and is skipped by COALESCE: the same result a SQL
+   NULL gives. Unlike a spare variable, no column can bind it."
+  "(1/0)")
+
 (defn- literal->sparql
   "Render `v` as a SPARQL literal: numbers and booleans bare, anything else as
-   a string literal via [[uri/string-literal]]. nil renders as an empty string."
+   a string literal via [[uri/string-literal]]. Throws on nil, which has no
+   literal: a filter against a missing value compiles to [[null-term]]
+   before reaching here."
   [v]
   (cond
     (string? v) (uri/string-literal v)
     (number? v) (str v)
     (boolean? v) (if v "true" "false")
-    (nil? v) ""
+    (nil? v) (throw (ex-info "A missing value has no SPARQL literal." {}))
     :else (uri/string-literal v)))
+
+(defn- iri-value?
+  "True when the filter value `v` on `field-id` is an IRI: a scheme-carrying
+   value on an IRI-valued column (see [[value->term]])."
+  [field-id v]
+  (and (uri/has-scheme? v)
+       (let [meta (field-id->metadata field-id)]
+         (or (= :type/FK (:semantic-type meta))
+             (= "uri" (:database-type meta))))))
 
 (defn- value->term
   "Render `v`, the right-hand value of an `:=`/`:!=` filter on `field-id`, as a
@@ -244,10 +264,7 @@
   ;; In a derived stage field refs are column-name strings, so
   ;; `field-id->metadata` returns nil and the value stays a literal.
   [field-id v]
-  (if (and (uri/has-scheme? v)
-           (let [meta (field-id->metadata field-id)]
-             (or (= :type/FK (:semantic-type meta))
-                 (= "uri" (:database-type meta)))))
+  (if (iri-value? field-id v)
     (uri/iri-ref v)
     (literal->sparql v)))
 
@@ -341,6 +358,45 @@
             var var op (:tz term) var var op (:local term))
     (format "?%s %s %s" var op term)))
 
+(defn- unwrap-value
+  "Return `x`, or the value inside a `[:value x …]` wrapper."
+  [x]
+  (if (and (vector? x) (= :value (first x)))
+    (second x)
+    x))
+
+(def ^:private comparison-ops
+  "SPARQL operator of each MBQL ordering comparison."
+  {:> ">" :>= ">=" :< "<" :<= "<="})
+
+(def ^:private string-match-fns
+  "SPARQL function of each MBQL string match."
+  {:starts-with "STRSTARTS" :ends-with "STRENDS" :contains "CONTAINS"})
+
+(defn- negated-leaf-var
+  "Return the variable of the string match `clause` when negating it must keep
+   the rows where that variable is unbound, or nil. The match fails on an
+   unbound variable, and `!` of that failure drops the row, while the SQL
+   drivers keep it: \"does not contain\" keeps NULLs. As there, only string
+   matches get this; `NOT (x > 5)` still drops rows without a value."
+  [clause field-id->var pair->target-var]
+  (let [[op lhs rhs] (when (sequential? clause) clause)]
+    (when (and (contains? #{:starts-with :ends-with :contains} op)
+               (some? (unwrap-value rhs)))
+      (var-for-token lhs field-id->var pair->target-var))))
+
+(defn- equality-expr
+  "Render the equality of `?var` and the filter value `v` on `fid`, with `term`
+   the value rendered by [[value->term]]. A string that is not an IRI compares
+   the text: `\"Paris\"@en = \"Paris\"` and `\"x\"^^xsd:anyURI = \"x\"` are false or
+   a type error in SPARQL, and a value picked from a filter list carries no
+   tag or datatype. `STR(?v) = \"x\"` never raises a type error on a bound
+   variable, so its negation keeps every row that does not match."
+  [var fid v term]
+  (if (and (string? v) (not (iri-value? fid v)))
+    (format "STR(?%s) = %s" var term)
+    (compare-expr var "=" term)))
+
 (defn- compile-filter-expr
   "Compile a filter clause to a SPARQL boolean expression string, or nil for a
    non-clause or an empty `:and`/`:or`. Throws (via [[unsupported-filter!]])
@@ -359,15 +415,14 @@
                (when (seq parts)
                  (str "(" (str/join " || " parts) ")")))
         :not (when-let [inner (compile-filter-expr lhs field-id->var pair->target-var)]
-               (str "(!" inner ")"))
+               (if-let [unbound-var (negated-leaf-var lhs field-id->var pair->target-var)]
+                 (format "(!BOUND(?%s) || !%s)" unbound-var inner)
+                 (str "(!" inner ")")))
         (let [fid (field-token->id lhs)
               var (var-for-token lhs field-id->var pair->target-var)
               opts (when (map? maybe-opts) maybe-opts)
               insensitive? (false? (:case-sensitive opts))
-              v (let [x rhs]
-                  (if (and (vector? x) (= :value (first x)))
-                    (second x)
-                    x))]
+              v (unwrap-value rhs)]
           ;; A field LHS carries `fid`; an `[:expression …]` LHS has none but still
           ;; resolves to a `var` (the custom-column BIND) and must compile.
           (when-not (or fid (expression-token? lhs))
@@ -393,35 +448,34 @@
             (case op
               := (if (nil? v)
                    (format "(!BOUND(?%s))" var)
-                   (str "(" (compare-expr var "=" (term v #(value->term fid %))) ")"))
+                   (str "(" (equality-expr var fid v (term v #(value->term fid %))) ")"))
+              ;; A row without the value is "not equal" too, as in the SQL drivers.
               :!= (if (nil? v)
                     (format "(BOUND(?%s))" var)
-                    (str "(" (compare-expr var "!=" (term v #(value->term fid %))) ")"))
-              :> (and (some? v) (str "(" (compare-expr var ">" (term v literal->sparql)) ")"))
-              :>= (and (some? v) (str "(" (compare-expr var ">=" (term v literal->sparql)) ")"))
-              :< (and (some? v) (str "(" (compare-expr var "<" (term v literal->sparql)) ")"))
-              :<= (and (some? v) (str "(" (compare-expr var "<=" (term v literal->sparql)) ")"))
+                    (format "(!BOUND(?%s) || !(%s))" var (equality-expr var fid v (term v #(value->term fid %)))))
+              ;; Comparing with a missing value is unknown, as `x > NULL` is in
+              ;; SQL. The evaluation error of `null-term` behaves like UNKNOWN
+              ;; under `&&`, `||` and `!`, and a FILTER on it matches nothing; a
+              ;; nil would drop the FILTER and return every row.
+              (:> :>= :< :<=)
+              (if (nil? v)
+                null-term
+                (str "(" (compare-expr var (comparison-ops op) (term v literal->sparql)) ")"))
               ;; [:between field min max] — min is rhs (`v`), max is the next arg.
-              :between (let [hi (let [x maybe-opts]
-                                  (if (and (vector? x) (= :value (first x))) (second x) x))]
-                         (when (and (some? v) (some? hi))
+              :between (let [hi (unwrap-value maybe-opts)]
+                         (if (or (nil? v) (nil? hi))
+                           null-term
                            (str "(" (compare-expr var ">=" (term v literal->sparql))
                                 " && " (compare-expr var "<=" (term hi literal->sparql)) ")")))
-              :starts-with (let [needle (let [t (term v literal->sparql)] (if (map? t) (:tz t) t))
-                                 expr (if insensitive?
-                                        (format "STRSTARTS(LCASE(STR(?%s)), LCASE(%s))" var needle)
-                                        (format "STRSTARTS(STR(?%s), %s)" var needle))]
-                             (str "(" expr ")"))
-              :ends-with (let [needle (let [t (term v literal->sparql)] (if (map? t) (:tz t) t))
-                               expr (if insensitive?
-                                      (format "STRENDS(LCASE(STR(?%s)), LCASE(%s))" var needle)
-                                      (format "STRENDS(STR(?%s), %s)" var needle))]
-                           (str "(" expr ")"))
-              :contains (let [needle (let [t (term v literal->sparql)] (if (map? t) (:tz t) t))
-                              expr (if insensitive?
-                                     (format "CONTAINS(LCASE(STR(?%s)), LCASE(%s))" var needle)
-                                     (format "CONTAINS(STR(?%s), %s)" var needle))]
-                          (str "(" expr ")"))
+              (:starts-with :ends-with :contains)
+              (if (nil? v)
+                null-term
+                (let [needle (let [t (term v literal->sparql)] (if (map? t) (:tz t) t))
+                      fname  (string-match-fns op)]
+                  (str "(" (if insensitive?
+                             (format "%s(LCASE(STR(?%s)), LCASE(%s))" fname var needle)
+                             (format "%s(STR(?%s), %s)" fname var needle))
+                       ")")))
               :is-null (format "(!BOUND(?%s))" var)
               :not-null (format "(BOUND(?%s))" var)
               (unsupported-filter! (str "the " (name op) " operator") filter-clause))))))))
@@ -448,14 +502,6 @@
   [patterns]
   (str "  OPTIONAL { " (str/join " " patterns) " }"))
 
-(defn- emit-optional-triple
-  "Render a SPARQL `OPTIONAL { ?source <property> ?target . }` line.
-   The two-argument form reads off the synthetic subject (`?subject`)."
-  ([property-uri target-var]
-   (emit-optional-triple "subject" property-uri target-var))
-  ([source-var property-uri target-var]
-   (emit-optional-group [(triple-pattern source-var property-uri target-var)])))
-
 (defn- emit-remap-optional
   "Render the OPTIONAL that reads `property` off `fk-var`, a variable bound by a
    sub-SELECT. `fk-var` is unbound on rows without the FK, and a plain
@@ -478,9 +524,10 @@
 
 (defn- ensure-triple-for-field
   "Return the OPTIONAL line that binds `?var-alias` to `property-uri` of
-   `?subject`."
-  [property-uri var-alias]
-  (let [triple (emit-optional-triple property-uri var-alias)]
+   `?subject`, with the [[lang-filter]] `lang-filter` (or nil) inside it."
+  [property-uri var-alias lang-filter]
+  (let [triple (emit-optional-group (cond-> [(triple-pattern "subject" property-uri var-alias)]
+                                      lang-filter (conj lang-filter)))]
     (log/debugf "[mbql] OPTIONAL triple: property=%s var=?%s" property-uri var-alias)
     triple))
 
@@ -493,13 +540,6 @@
 ;; ---------------------------------------------------------------------------
 ;; Custom expressions (Metabase "custom columns") → SPARQL
 ;; ---------------------------------------------------------------------------
-
-(def ^:private null-term
-  "SPARQL expression that stands in for null, which SPARQL has no literal for.
-   Integer division by zero is an evaluation error, which leaves a BIND
-   unbound, makes IF unbound and is skipped by COALESCE: the same result a SQL
-   NULL gives. Unlike a spare variable, no column can bind it."
-  "(1/0)")
 
 (defn- regex-escape
   "Escape regex metacharacters so `s` matches literally inside a SPARQL REPLACE pattern."
@@ -875,7 +915,8 @@
 
    Returns `{:vars [...] :triples [...]}`."
   [expected-cols {:keys [field-id->var pair->target-var alias->intermediate-var
-                         fk-fid->alias join-path naming joined-field-vars]}]
+                         fk-fid->alias join-path naming joined-field-vars lang-guard]
+                  :or   {lang-guard (constantly nil)}}]
   (let [placeholder (atom 0)
         seen        (atom {})]
     (reduce
@@ -908,8 +949,8 @@
                      (update :vars conj v)
                      (update :triples conj
                              (emit-optional-group
-                              (conj (vec (join-path alias))
-                                    (triple-pattern inter prop v))))))))
+                              (cond-> (conj (vec (join-path alias)) (triple-pattern inter prop v))
+                                (lang-guard fid v) (conj (lang-guard fid v)))))))))
 
            ;; Direct column the compiler missed: bind it off ?subject.
            (and fid (not alias) (not (id-field? fid)) (:name (field-id->metadata fid)))
@@ -919,7 +960,7 @@
              (-> acc
                  (update :vars conj v)
                  (update :triples conj
-                         (emit-optional-triple prop v))))
+                         (ensure-triple-for-field prop v (lang-guard fid v)))))
 
            (and fid (id-field? fid))
            (update acc :vars conj "subject")
@@ -1111,6 +1152,10 @@
                                [fid (uri/absolute-uri nm naming)]))
         field-id->var  (build-var-aliases field-ids)
         token->var     (fn [tok] (var-for-token tok field-id->var pair->target-var))
+        ;; With a Default Language, `rdf:langString` columns only take values in
+        ;; that language (or untagged), filtered inside their OPTIONAL.
+        lang           (let [l (database-default-language)] (when-not (str/blank? l) l))
+        lang-guard     (fn [fid var] (when (and lang var (lang-string-field? fid)) (lang-filter var lang)))
         triples-for-fields (->> output-tokens
                                 (keep (fn [tok]
                                         (let [fid   (field-token->id tok)
@@ -1120,7 +1165,8 @@
                                                      (not (id-field? fid))
                                                      (get field-id->prop fid))
                                             (ensure-triple-for-field (get field-id->prop fid)
-                                                                     (get field-id->var fid)))))))
+                                                                     (get field-id->var fid)
+                                                                     (lang-guard fid (get field-id->var fid))))))))
         ;; Field tokens appearing in order-by/filter but not in fields (still need their triple).
         extra-direct-fids (letfn [(collect-field-tokens [x]
                                     (cond
@@ -1140,7 +1186,7 @@
                                  :let [prop (get field-id->prop fid)
                                        var  (get field-id->var fid)]
                                  :when (and prop var)]
-                             (ensure-triple-for-field prop var))
+                             (ensure-triple-for-field prop var (lang-guard fid var)))
         ;; OPTIONAL triples introduced by left-joins.
         join-fk-triples (for [j joins
                               :let [path (join-path (:alias j))]
@@ -1161,25 +1207,12 @@
                               (emit-optional-group
                                (concat path
                                        (when hop [(triple-pattern inter-var (:prop hop) (:var hop))])
-                                       (when-not id? [(triple-pattern (:var hop inter-var) prop target-var)]))))
+                                       (when-not id?
+                                         (cond-> [(triple-pattern (:var hop inter-var) prop target-var)]
+                                           (lang-guard fid target-var) (conj (lang-guard fid target-var)))))))
         _ (log/debugf "[mbql] Triples: fields=%d extras=%d join-fk=%d join-targets=%d"
                       (count triples-for-fields) (count triples-for-extras)
                       (count join-fk-triples) (count join-target-triples))
-        ;; LANG filters for `rdf:langString` columns, when a default-language is configured.
-        ;; One per referenced variable; covers direct fields, extras, and joined targets.
-        lang-filter-lines
-        (let [lang (database-default-language)]
-          (when-not (str/blank? lang)
-            (let [direct-lang-vars (->> (concat (keep field-token->id (remove field-token->join-alias output-tokens))
-                                                extra-direct-fids)
-                                        (filter lang-string-field?)
-                                        (keep #(get field-id->var %)))
-                  joined-lang-vars (->> joined-keys
-                                        (filter (fn [[fid]] (lang-string-field? fid)))
-                                        (keep pair->target-var))]
-              (mapv #(lang-filter-line % lang)
-                    (distinct (concat direct-lang-vars joined-lang-vars))))))
-        _ (log/debugf "[mbql] LANG filter lines: %d" (count (or lang-filter-lines [])))
         filters (when filter-clause
                   (or (compile-basic-filter filter-clause field-id->var pair->target-var)
                       []))
@@ -1244,7 +1277,8 @@
                         :fk-fid->alias           fk-fid->alias
                         :join-path               join-path
                         :naming                  naming
-                        :joined-field-vars       joined-field-vars}))
+                        :joined-field-vars       joined-field-vars
+                        :lang-guard              lang-guard}))
         result-vars (cond
                       agg?       (vec (concat breakout-vars (keep :var agg-projections)))
                       reconciled (vec (:vars reconciled))
@@ -1267,7 +1301,6 @@
                                  (or (:triples reconciled) [])
                                  expr-bind-lines
                                  (:binds bucketed)
-                                 (or lang-filter-lines [])
                                  filters)
                          (str/join "\n"))
         where-part  (str "WHERE {\n" where-body "\n}")

@@ -5,6 +5,8 @@
 # discovers several "tables", with typed properties and IRI links between them
 # (knows, worksFor, headquarters) that smoke-shapes.ttl declares as SHACL FKs. `updated` is timezoned for Alice and local for Bob,
 # so temporal filters must compare each value against the matching bound form.
+# `nickname` is language-tagged, Alice's in English and Bob's in French, for the
+# equality and Default Language filters.
 # The ex: namespace is the dataset's graph IRI; bin/smoke-test.sh (SPARQL_TEST_GRAPH,
 # default https://example.org/) seeds these triples into that named graph and the
 # test queries it. Keep this prefix equal to that default.
@@ -17,6 +19,7 @@ ex:alice a ex:Person ;
     ex:age 30 ;
     ex:birthDate "1994-03-10"^^xsd:date ;
     ex:updated "2024-06-01T10:00:00Z"^^xsd:dateTime ;
+    ex:nickname "Ally"@en ;
     ex:knows ex:bob ;
     ex:worksFor ex:acme .
 
@@ -25,6 +28,7 @@ ex:bob a ex:Person ;
     ex:age 25 ;
     ex:birthDate "2001-07-22"^^xsd:date ;
     ex:updated "2023-12-31T23:00:00"^^xsd:dateTime ;
+    ex:nickname "Bobby"@fr ;
     ex:worksFor ex:globex .
 
 ex:acme a ex:Company ;

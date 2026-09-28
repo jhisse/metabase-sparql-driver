@@ -47,7 +47,7 @@
     (is (= "25" (f 25)))
     (is (= "true" (f true)))
     (is (= "false" (f false)))
-    (is (= "" (f nil)))
+    (is (thrown? clojure.lang.ExceptionInfo (f nil)) "nil has no literal")
     (testing "embedded double quotes are escaped"
       (is (= "\"a\\\"b\"" (f "a\"b"))))
     (testing "backslashes are escaped (a trailing one no longer swallows the closing quote)"
@@ -113,31 +113,48 @@
              (try (f [:count-where [:> [:field "amount" nil] 1]] 0 (constantly "amount"))
                   (catch clojure.lang.ExceptionInfo e (:type (ex-data e)))))))))
 
+(defn- text=
+  "Return the SPARQL that a string equality on `?v` compiles to: a comparison
+   of the text, so it also matches language-tagged and typed literals. `lit` is
+   the rendered literal."
+  [v lit]
+  (format "STR(?%s) = %s" v lit))
+
 (deftest compile-filter-expr-test
   (let [f #(@#'mbql/compile-filter-expr % {"naam" "naam" "leeftijd" "leeftijd"} {})]
-    (is (= "(?naam = \"Jan\")"        (f [:= [:field "naam" nil] "Jan"])))
+    (testing "a string compares the text, so it also matches a language-tagged or typed literal"
+      (is (= (str "(" (text= "naam" "\"Jan\"") ")") (f [:= [:field "naam" nil] "Jan"]))))
     (testing "a wrapped [:value ...] rhs is unwrapped"
-      (is (= "(?naam = \"Jan\")"      (f [:= [:field "naam" nil] [:value "Jan" {}]]))))
+      (is (= (str "(" (text= "naam" "\"Jan\"") ")") (f [:= [:field "naam" nil] [:value "Jan" {}]]))))
     (is (= "(!BOUND(?naam))"          (f [:= [:field "naam" nil] nil])))
     (is (= "(BOUND(?naam))"           (f [:!= [:field "naam" nil] nil])))
     (is (= "(?leeftijd > 18)"         (f [:> [:field "leeftijd" nil] 18])))
-    (is (= "(?naam != \"Jan\")"       (f [:!= [:field "naam" nil] "Jan"])))
+    (is (= "(?leeftijd = 18)"         (f [:= [:field "leeftijd" nil] 18])) "numbers compare plainly")
+    (testing "a comparison with a missing value is unknown, as in SQL: an evaluation error, not a vanished filter"
+      (doseq [clause [[:> [:field "leeftijd" nil] nil]
+                      [:between [:field "leeftijd" nil] 18 nil]
+                      [:contains [:field "naam" nil] nil]]]
+        (is (= "(1/0)" (f clause)) (pr-str clause)))
+      (testing "nested and negated, it keeps SQL's three-valued logic (checked on Oxigraph)"
+        (is (= "(!(1/0))" (f [:not [:> [:field "leeftijd" nil] nil]])))
+        (is (= "(!((?leeftijd > 5) || (1/0)))"
+               (f [:not [:or [:> [:field "leeftijd" nil] 5] [:> [:field "leeftijd" nil] nil]]])))
+        (is (= "(!((?leeftijd > 5) && (1/0)))"
+               (f [:not [:and [:> [:field "leeftijd" nil] 5] [:> [:field "leeftijd" nil] nil]]])))))
+    (testing "!= negates that equality and keeps the rows without a value, as the SQL drivers do"
+      (is (= (str "(!BOUND(?naam) || !(" (text= "naam" "\"Jan\"") "))") (f [:!= [:field "naam" nil] "Jan"])))
+      (is (= "(!BOUND(?leeftijd) || !(?leeftijd = 18))" (f [:!= [:field "leeftijd" nil] 18]))))
     (testing "case-insensitive contains"
       (is (= "(CONTAINS(LCASE(STR(?naam)), LCASE(\"an\")))"
              (f [:contains [:field "naam" nil] "an" {:case-sensitive false}]))))
-    (testing "boolean combinators"
-      (is (= "((?naam = \"Jan\") && (?leeftijd > 18))"
-             (f [:and [:= [:field "naam" nil] "Jan"] [:> [:field "leeftijd" nil] 18]])))
-      (is (= "((?naam = \"Jan\") || (?naam = \"Piet\"))"
-             (f [:or [:= [:field "naam" nil] "Jan"] [:= [:field "naam" nil] "Piet"]]))))
     (testing "boolean combinators keep every condition, not just the first two"
-      (is (= "((?naam = \"Jan\") && (?leeftijd > 18) && (?naam != \"Piet\"))"
-             (f [:and [:= [:field "naam" nil] "Jan"] [:> [:field "leeftijd" nil] 18] [:!= [:field "naam" nil] "Piet"]])))
-      (is (= "((?naam = \"A\") || (?naam = \"B\") || (?naam = \"C\") || (?naam = \"D\"))"
-             (f [:or [:= [:field "naam" nil] "A"] [:= [:field "naam" nil] "B"]
-                 [:= [:field "naam" nil] "C"] [:= [:field "naam" nil] "D"]]))))
+      (is (= "((?leeftijd > 18) && (?leeftijd < 65) && (?leeftijd >= 21))"
+             (f [:and [:> [:field "leeftijd" nil] 18] [:< [:field "leeftijd" nil] 65] [:>= [:field "leeftijd" nil] 21]])))
+      (is (= "((?leeftijd = 1) || (?leeftijd = 2) || (?leeftijd = 3) || (?leeftijd = 4))"
+             (f [:or [:= [:field "leeftijd" nil] 1] [:= [:field "leeftijd" nil] 2]
+                 [:= [:field "leeftijd" nil] 3] [:= [:field "leeftijd" nil] 4]]))))
     (testing "a dangerous rhs (quote + backslash) is routed through the shared escaper, so the emitted SPARQL literal stays well-formed"
-      (is (= (str "(?naam = " (uri/string-literal "a\"b\\") ")")
+      (is (= (str "(" (text= "naam" (uri/string-literal "a\"b\\")) ")")
              (f [:= [:field "naam" nil] "a\"b\\"]))))
     (testing "a dangerous :contains needle is escaped inside STR() too"
       (is (= (str "(CONTAINS(STR(?naam), " (uri/string-literal "a\"b") "))")
@@ -152,7 +169,7 @@
           (is (= (str "(?country = <" iri ">)")
                  (g [:= [:field 5 nil] iri]))
               "FK field + URL value → IRI term")
-          (is (= (str "(?country != <" iri ">)")
+          (is (= (str "(!BOUND(?country) || !(?country = <" iri ">))")
                  (g [:!= [:field 5 nil] iri]))
               ":!= routes through the same term rendering")
           (is (= (str "(?subject = <" iri ">)")
@@ -161,10 +178,10 @@
           (is (= (str "(?subject = " (uri/iri-ref "urn:isbn:0451450523") ")")
                  (g [:= [:field 7 nil] "urn:isbn:0451450523"]))
               "urn: values count as IRI-shaped")
-          (is (= (str "(?homepage != " (uri/string-literal iri) ")")
+          (is (= (str "(!BOUND(?homepage) || !(" (text= "homepage" (uri/string-literal iri)) "))")
                  (g [:!= [:field 6 nil] iri]))
               ":type/URL columns hold literal xsd:anyURI values — they stay literals")
-          (is (= "(?country = \"AC-123\")"
+          (is (= (str "(" (text= "country" "\"AC-123\"") ")")
                  (g [:= [:field 5 nil] "AC-123"]))
               "FK field + schemeless value stays a string literal")
           (is (= (str "(?country = " (uri/iri-ref "HTTPS://EX.ORG/X") ")")
@@ -176,31 +193,30 @@
           (is (= (str "(?country = " (uri/iri-ref "Ref: 123") ")")
                  (g [:= [:field 5 nil] "Ref: 123"]))
               "on an IRI-valued field any scheme-shaped value becomes an IRI term (garbage matches nothing either way)")
-          (is (= (str "(?name = \"" iri "\")")
+          (is (= (str "(" (text= "name" (str "\"" iri "\"")) ")")
                  (g [:= [:field 2 nil] iri]))
               "plain string field + IRI-shaped value stays a string literal")
           (is (= (str "(?country = " (uri/iri-ref "https://x.example/> } UNION { ?s ?p ?o . #") ")")
                  (g [:= [:field 5 nil] "https://x.example/> } UNION { ?s ?p ?o . #"]))
               "a hostile value cannot close the IRIREF — forbidden chars are percent-encoded"))))))
 
-(deftest emit-optional-triple-escapes-iri-test
-  (let [emit @#'mbql/emit-optional-triple]
+(deftest ensure-triple-for-field-escapes-iri-test
+  (let [emit @#'mbql/ensure-triple-for-field]
     (testing "the property IRI is routed through uri/iri-ref, so an illegal char is percent-encoded"
       (is (= (str "  OPTIONAL { ?subject " (uri/iri-ref "http://example.org/a b") " ?t . }")
-             (emit "http://example.org/a b" "t")))
-      ;; a normal property URI is unchanged (iri-ref is a no-op)
-      (is (= "  OPTIONAL { ?s <http://example.org/name> ?t . }"
-             (emit "s" "http://example.org/name" "t"))))))
+             (emit "http://example.org/a b" "t" nil))))
+    (testing "a language filter goes inside the OPTIONAL"
+      (is (= "  OPTIONAL { ?subject <http://example.org/name> ?t . FILTER(x) }"
+             (emit "http://example.org/name" "t" "FILTER(x)"))))))
 
-(deftest lang-filter-line-escapes-tag-test
-  (let [lang-line @#'mbql/lang-filter-line]
+(deftest lang-filter-escapes-tag-test
+  (let [lang-filter @#'mbql/lang-filter]
     (testing "an escapable char in the language tag is escaped, not leaked raw into the FILTER literal"
-      (is (= (str "  FILTER(!BOUND(?naam) || LANG(?naam) = \""
-                  (uri/escape-string "en\"") "\" || LANG(?naam) = \"\")")
-             (lang-line "naam" "en\""))))
+      (is (= (str "FILTER(LANGMATCHES(LANG(?naam), " (uri/string-literal "en\"") ") || LANG(?naam) = \"\")")
+             (lang-filter "naam" "en\""))))
     (testing "a normal BCP-47 tag is unchanged"
-      (is (= "  FILTER(!BOUND(?naam) || LANG(?naam) = \"pt-BR\" || LANG(?naam) = \"\")"
-             (lang-line "naam" "pt-BR"))))))
+      (is (= "FILTER(LANGMATCHES(LANG(?naam), \"pt-BR\") || LANG(?naam) = \"\")"
+             (lang-filter "naam" "pt-BR"))))))
 
 (deftest between-filter-test
   (let [f #(@#'mbql/compile-filter-expr % {"leeftijd" "leeftijd"} {})]
@@ -222,9 +238,17 @@
              (f [:starts-with [:field "naam" nil] "ja" {:case-sensitive false}])))
       (is (= "(STRENDS(LCASE(STR(?naam)), LCASE(\"AN\")))"
              (f [:ends-with [:field "naam" nil] "AN" {:case-sensitive false}]))))
-    (testing ":not wraps its inner expression (does-not-contain arrives as [:not [:contains …]])"
-      (is (= "(!(CONTAINS(STR(?naam), \"x\")))"
+    (testing ":not over a string match keeps the rows without a value, as SQL does (does-not-contain arrives as [:not [:contains …]])"
+      (is (= "(!BOUND(?naam) || !(CONTAINS(STR(?naam), \"x\")))"
              (f [:not [:contains [:field "naam" nil] "x"]]))))
+    (testing ":not over anything else is a plain negation, as in SQL: NOT (x > 5) drops rows without x"
+      (is (= (str "(!(" (text= "naam" "\"x\"") "))") (f [:not [:= [:field "naam" nil] "x"]])))
+      (is (= "(!(?naam > 5))" (f [:not [:> [:field "naam" nil] 5]]))))
+    (testing ":not over a null check, a != or a compound clause is a plain negation"
+      (is (= "(!(!BOUND(?naam)))" (f [:not [:is-null [:field "naam" nil]]])))
+      (is (= (str "(!(!BOUND(?naam) || !(" (text= "naam" "\"x\"") ")))") (f [:not [:!= [:field "naam" nil] "x"]])))
+      (is (= "(!((CONTAINS(STR(?naam), \"a\")) || (CONTAINS(STR(?naam), \"b\"))))"
+             (f [:not [:or [:contains [:field "naam" nil] "a"] [:contains [:field "naam" nil] "b"]]]))))
     (testing ":is-null / :not-null map to BOUND checks"
       (is (= "(!BOUND(?naam))" (f [:is-null [:field "naam" nil]])))
       (is (= "(BOUND(?naam))"  (f [:not-null [:field "naam" nil]]))))
@@ -462,7 +486,16 @@
           (compile-stage* {:source-table 100
                            :fields [[:field 1 nil] [:field 2 nil]]
                            :filter [:= [:field 2 nil] "Jan"]})]
-      (is (str/includes? sparql "FILTER (?naam = \"Jan\")")))))
+      (is (str/includes? sparql (str "FILTER (" (text= "naam" "\"Jan\"") ")"))))))
+
+(deftest compile-base-stage-nil-comparison-filter-test
+  (testing "a top-level comparison with a missing value keeps a FILTER that matches nothing"
+    (with-fixture
+      (let [{:keys [sparql]}
+            (compile-stage* {:source-table 100
+                             :fields [[:field 1 nil] [:field 2 nil]]
+                             :filter [:> [:field 2 nil] nil]})]
+        (is (str/includes? sparql "FILTER (1/0)"))))))
 
 (deftest compile-base-stage-order-limit-test
   (with-fixture
@@ -551,7 +584,7 @@
                              :filter [:= [:field 10 nil] "Jan"]})]
         (is (= ["subject" "label" "Kent__label"] vars))
         (is (str/includes? sparql (str "OPTIONAL { ?subject <" base "label> ?label . }")))
-        (is (str/includes? sparql "FILTER (?label = \"Jan\")"))))))
+        (is (str/includes? sparql (str "FILTER (" (text= "label" "\"Jan\"") ")")))))))
 
 (deftest compile-base-stage-remap-inside-explicit-join-test
   (testing "the display value of a FK column inside an explicit join follows that FK"
@@ -852,14 +885,14 @@
                                     :aggregation  [[:count]]
                                     :filter [:= [:field "geboorte-datum" nil] "x"]})]
         (is (= reused-agg-alias-error (tu/sparql-syntax-error sparql)))
-        (is (str/includes? sparql "FILTER (?geboorte_datum = \"x\")"))))
+        (is (str/includes? sparql (str "FILTER (" (text= "geboorte_datum" "\"x\"") ")")))))
     (testing "an outer filter on a saved card is applied around the sub-SELECT"
       (let [card {:source-table 100 :aggregation [[:count]] :breakout [[:field 2 nil]]}
             {:keys [sparql vars]}
             (compile-stage* {:source-query card
                              :filter [:= [:field "naam" nil] "Jan"]})]
         (is (= ["naam" "ag_0"] vars))
-        (is (str/includes? sparql "FILTER (?naam = \"Jan\")"))))))
+        (is (str/includes? sparql (str "FILTER (" (text= "naam" "\"Jan\"") ")")))))))
 
 (deftest compile-derived-stage-outer-count-test
   (with-fixture
@@ -912,7 +945,7 @@
               :filter [:= [:field "Birthplace" nil] "Leuven"]}
              expected)]
         (is (= ["Place__label" "ag_0"] vars))
-        (is (str/includes? sparql "FILTER (?Place__label = \"Leuven\")")
+        (is (str/includes? sparql (str "FILTER (" (text= "Place__label" "\"Leuven\"") ")"))
             "the Lib column name resolves to the joined SPARQL variable")))
     (testing "columns match inner vars by name when an FK remap reorders the sub-SELECT"
       ;; The FK remap puts the joined label first in the sub-SELECT, while Lib
@@ -1020,6 +1053,9 @@
         (is (= {:vars    ["subject" "Plaats__naam"]
                 :triples [(str "  OPTIONAL { ?subject <" base "geboorteplaats> ?Plaats_subject . ?Plaats_subject <" base "naam> ?Plaats__naam . }")]}
                (f [{:id 1} {:id 2 :lib/join-alias "Plaats"}] ctx))))
+      (testing "a synthesized column carries the Default Language filter inside its OPTIONAL"
+        (is (= [(str "  OPTIONAL { ?subject <" base "geboorteplaats> ?Plaats_subject . ?Plaats_subject <" base "naam> ?Plaats__naam . FILTER(lang) }")]
+               (:triples (f [{:id 2 :lib/join-alias "Plaats"}] (assoc ctx :lang-guard (fn [_ _] "FILTER(lang)")))))))
       (testing "an unresolvable column still gets a (placeholder) variable"
         (is (= {:vars ["undefined_1"] :triples []}
                (f [{:lib/join-alias "Nope"}] ctx)))))))
@@ -1080,10 +1116,12 @@
               (compile-stage* {:source-table 100
                                :fields [[:field 1 nil] [:field 2 nil] [:field 2 {:join-alias "P"}]]
                                :joins  [{:alias "P" :fk-field-id 4}]})]
-          (is (str/includes?
-               sparql
-               "FILTER(!BOUND(?naam) || LANG(?naam) = \"nl\" || LANG(?naam) = \"\")"))
-          (testing "also on a joined column"
+          (testing "inside the OPTIONAL that binds the column, so the row survives without a value"
             (is (str/includes?
                  sparql
-                 "FILTER(!BOUND(?P__naam) || LANG(?P__naam) = \"nl\" || LANG(?P__naam) = \"\")"))))))))
+                 (str "OPTIONAL { ?subject <" base "naam> ?naam . "
+                      "FILTER(LANGMATCHES(LANG(?naam), \"nl\") || LANG(?naam) = \"\") }")))
+            (is (not (re-find #"(?m)^  FILTER\((LANG|LANGMATCHES)" sparql)) "no group-level LANG filter"))
+          (testing "also on a joined column"
+            (is (re-find #"OPTIONAL \{[^}]*\?P__naam \. FILTER\(LANGMATCHES\(LANG\(\?P__naam\), \"nl\"\) \|\| LANG\(\?P__naam\) = \"\"\) \}"
+                         sparql))))))))
