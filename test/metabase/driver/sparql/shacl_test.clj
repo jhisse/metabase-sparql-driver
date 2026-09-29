@@ -18,7 +18,8 @@
    "@prefix sh:  <http://www.w3.org/ns/shacl#> .\n"
    "@prefix xsd: <http://www.w3.org/2001/XMLSchema#> .\n"
    "@prefix rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .\n"
-   "@prefix mb:  <https://data.metabase.com/> .\n"
+   "@prefix sban: <https://w3id.org/sban/ns#> .\n"
+   "@prefix dash: <http://datashapes.org/dash#> .\n"
    "@prefix ex:  <https://example.org/> .\n"
    "\n"
    "ex:EntiteitShape a sh:NodeShape ;\n"
@@ -30,7 +31,7 @@
    "  sh:targetClass ex:Persoon ;\n"
    "  sh:description \"Een persoon\"@nl ;\n"
    "  sh:node ex:EntiteitShape ;\n"
-   "  sh:property ex:p_naam , ex:p_leeftijd , ex:p_geboorteplaats , ex:p_website , ex:p_secret .\n"
+   "  sh:property ex:p_naam , ex:p_leeftijd , ex:p_geboorteplaats , ex:p_website , ex:p_secret , ex:p_intern .\n"
    "ex:p_naam a sh:PropertyShape ;\n"
    "  sh:path ex:naam ; sh:datatype rdf:langString ;\n"
    "  sh:name \"Naam\"@nl , \"Name\"@en ; sh:order 1 .\n"
@@ -41,7 +42,9 @@
    "ex:p_website a sh:PropertyShape ;\n"
    "  sh:path ex:website ; sh:nodeKind sh:IRI ; sh:order 4 .\n"
    "ex:p_secret a sh:PropertyShape ;\n"
-   "  sh:path ex:secret ; sh:datatype xsd:string ; mb:hide true .\n"
+   "  sh:path ex:secret ; sh:datatype xsd:string ; sban:hide true .\n"
+   "ex:p_intern a sh:PropertyShape ;\n"
+   "  sh:path ex:intern ; sh:datatype xsd:string ; dash:hidden true .\n"
    "\n"
    "ex:PlaatsShape a sh:NodeShape ;\n"
    "  sh:targetClass ex:Plaats ;\n"
@@ -111,8 +114,9 @@
       (is (= "Een persoon" (:description persoon)))
       (is (false? (:hidden? persoon))))
 
-    (testing "metabase:hide properties are pruned"
-      (is (not (contains? p-props (str base "secret")))))
+    (testing "sban:hide and dash:hidden properties are pruned"
+      (is (not (contains? p-props (str base "secret"))))
+      (is (not (contains? p-props (str base "intern")))))
 
     (testing "sh:node inheritance flattens parent properties into the child"
       (is (contains? p-props (str base "bron"))))

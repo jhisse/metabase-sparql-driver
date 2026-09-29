@@ -7,8 +7,9 @@
    - extracts property shapes (one per Metabase column),
    - flattens `sh:node` inheritance,
    - resolves foreign-key relationships declared via `sh:class`,
-   - honors a small `metabase:` vocabulary for sync-time overrides
-     (`hide`, `semanticType`, `displayValueProperty`).
+   - honors the `sban:` vocabulary (https://w3id.org/sban/ns#) for
+     sync-time overrides (`hide`, `semanticType`, `displayValueProperty`),
+     and `dash:hidden` as `sban:hide`.
 
    The public entry point is [[metadata]] which returns a fully-resolved
    intermediate description that [[metabase.driver.sparql.database]] turns
@@ -29,7 +30,8 @@
 (def ^:private sh   "http://www.w3.org/ns/shacl#")
 (def ^:private rdf  "http://www.w3.org/1999/02/22-rdf-syntax-ns#")
 (def ^:private xsd  "http://www.w3.org/2001/XMLSchema#")
-(def ^:private mb   "https://data.metabase.com/")
+(def ^:private sban "https://w3id.org/sban/ns#")
+(def ^:private dash "http://datashapes.org/dash#")
 
 (def ^:private lang-string-datatype (str rdf "langString"))
 
@@ -335,6 +337,12 @@
         any           (first lits)]
     (some-> (or match-lang untagged any) :value)))
 
+(defn- hidden?
+  "True when `node` is flagged `sban:hide true` or `dash:hidden true`."
+  [spo node]
+  (boolean (some #(literal-truthy? (single spo node %))
+                 [(str sban "hide") (str dash "hidden")])))
+
 (defn- property-shape
   "Return the property descriptor (see [[shacl->metadata]]) of the
    property-shape node `prop-node`, or nil when its `sh:path` is not a single
@@ -350,16 +358,15 @@
         desc-text   (pick-localized (objects spo prop-node (str sh "description")) lang)
         order-lit   (single spo prop-node (str sh "order"))
         min-count   (single spo prop-node (str sh "minCount"))
-        mb-hide     (single spo prop-node (str mb "hide"))
-        mb-sem      (single spo prop-node (str mb "semanticType"))
-        mb-display  (single spo prop-node (str mb "displayValueProperty"))
+        sem-lit     (single spo prop-node (str sban "semanticType"))
+        display     (single spo prop-node (str sban "displayValueProperty"))
         datatype-iri (when (iri? datatype) (:value datatype))
         lang-string? (= datatype-iri lang-string-datatype)
         base-type   (or (xsd-base-type datatype-iri)
                         (when lang-string? :type/Text)
                         (when (iri? target-cls) :type/Text)
                         :type/Text)
-        sem-type    (or (coerce-semantic-type mb-sem)
+        sem-type    (or (coerce-semantic-type sem-lit)
                         (when (iri? target-cls) :type/FK)
                         (semantic-type-from-datatype datatype-iri))
         descr       (->> [name-text desc-text]
@@ -377,10 +384,10 @@
                                        (and (iri? node-kind)
                                             (= (:value node-kind) (str sh "IRI")))))
        :fk-target-class   (when (iri? target-cls) (:value target-cls))
-       :display-value-property (when (iri? mb-display) (:value mb-display))
+       :display-value-property (when (iri? display) (:value display))
        :database-required (boolean (some-> (parse-long-literal min-count) pos?))
        :lang-string?      lang-string?
-       :hidden?           (literal-truthy? mb-hide)})))
+       :hidden?           (hidden? spo prop-node)})))
 
 (defn- shape
   "Return the shape descriptor of `shape-node`, or nil for a shape without an
@@ -390,7 +397,6 @@
    [[resolve-inheritance]] can flatten parent properties into the child."
   [spo shape-node lang]
   (let [target-cls   (single spo shape-node (str sh "targetClass"))
-        mb-hide      (single spo shape-node (str mb "hide"))
         desc-text    (pick-localized (objects spo shape-node (str sh "description")) lang)
         prop-nodes   (objects spo shape-node (str sh "property"))
         parent-iris  (->> (objects spo shape-node (str sh "node"))
@@ -400,7 +406,7 @@
     (when (iri? target-cls)
       {:node-iri          (when (iri? shape-node) (:value shape-node))
        :class-uri         (:value target-cls)
-       :hidden?           (literal-truthy? mb-hide)
+       :hidden?           (hidden? spo shape-node)
        :description       desc-text
        :parent-shape-iris parent-iris
        :properties        (vec (keep #(property-shape spo % lang) prop-nodes))})))
@@ -409,7 +415,7 @@
   "Return `shapes` with each shape's properties merged recursively with those
    of the parents it references via `sh:node`. Child wins for any property
    that shares a path with a parent. A parent that is not itself one of
-   `shapes` (no `sh:targetClass`, flagged `metabase:hide`, or an `sh:node`
+   `shapes` (no `sh:targetClass`, flagged `sban:hide`, or an `sh:node`
    pointing at a class IRI instead of a shape) is silently ignored. Cycles
    are broken with a visited set."
   [shapes]
@@ -468,8 +474,8 @@
                       :hidden? false}
                      ...)}
 
-   Shapes flagged `metabase:hide true` are pruned. Properties flagged
-   `metabase:hide true` are pruned from their parent shape. Properties
+   Shapes flagged `sban:hide true` are pruned. Properties flagged
+   `sban:hide true` are pruned from their parent shape. Properties
    inherited via `sh:node` are flattened in, and shapes targeting the same
    class are merged into one. `lang` (a BCP-47
    tag, may be blank) drives the language-preferred selection of

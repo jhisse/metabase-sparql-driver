@@ -1,7 +1,7 @@
 (ns metabase.driver.sparql.dimensions
   "Post-sync hook that writes what `describe-table` cannot:
 
-     - Metabase `dimension` rows from SHACL `metabase:displayValueProperty`
+     - Metabase `dimension` rows from SHACL `sban:displayValueProperty`
        declarations;
      - readable display names for fields named by a full URI (see
        [[sync-display-names!]]).
@@ -68,7 +68,7 @@
 
 (defn sync-display-dimensions!
   "Upsert a `Dimension` row for every SHACL property of `database` that
-   declares `metabase:displayValueProperty` and points at an `sh:class`
+   declares `sban:displayValueProperty` and points at an `sh:class`
    target. No-op outside the `shacl` sync strategy, or when the document
    cannot be loaded. Fields not synced yet are skipped at debug level (the
    next sync resolves them); a failed upsert is logged and skipped."
