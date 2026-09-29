@@ -385,7 +385,7 @@ The driver reads SBAN, SHACL annotations for BI tools ([`docs/ns.ttl`](docs/ns.t
 @prefix sban: <https://w3id.org/sban/ns#> .
 ```
 
-The driver understands three predicates from this namespace. `dash:hidden true` works as `sban:hide true`.
+The driver understands three predicates from this namespace. On a PropertyShape, [DASH](https://datashapes.org/dash)'s `dash:hidden true` (`@prefix dash: <http://datashapes.org/dash#> .`) also hides the column, unless the shape sets `sban:hide`, which wins: `dash:hidden true ; sban:hide false` keeps the column.
 
 | Predicate                       | Where             | Effect                                                                                                                                                   |
 |:--------------------------------|:------------------|:---------------------------------------------------------------------------------------------------------------------------------------------------------|
