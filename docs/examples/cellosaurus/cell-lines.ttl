@@ -1,7 +1,7 @@
 @prefix sh:       <http://www.w3.org/ns/shacl#> .
 @prefix xsd:      <http://www.w3.org/2001/XMLSchema#> .
 @prefix rdfs:     <http://www.w3.org/2000/01/rdf-schema#> .
-@prefix metabase: <https://data.metabase.com/> .
+@prefix sban:     <https://w3id.org/sban/ns#> .
 @prefix cello:    <https://purl.expasy.org/cellosaurus/rdf/ontology/> .
 @prefix ex:       <https://example.org/cellosaurus-shapes#> .
 
@@ -23,9 +23,9 @@ ex:CancerCellLineShape a sh:NodeShape ;
   sh:property [ sh:path cello:primaryAccession ; sh:datatype xsd:string ; sh:order 2 ;
                 sh:description "Cellosaurus accession (CVCL_…)" ] ;
   sh:property [ sh:path cello:derivedFromIndividualWithDisease ; sh:class cello:Disease ; sh:order 3 ;
-                metabase:displayValueProperty rdfs:label ] ;
+                sban:displayValueProperty rdfs:label ] ;
   sh:property [ sh:path cello:derivedFromIndividualWithSex ; sh:class cello:Sex ; sh:order 4 ;
-                metabase:displayValueProperty rdfs:label ] ;
+                sban:displayValueProperty rdfs:label ] ;
   sh:property [ sh:path cello:derivedFromIndividualAtAge ; sh:datatype xsd:string ; sh:order 5 ] ;
   sh:property [ sh:path cello:created ; sh:datatype xsd:date ; sh:order 6 ;
                 sh:description "Date the entry was added to Cellosaurus" ] .

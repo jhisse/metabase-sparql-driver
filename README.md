@@ -126,7 +126,7 @@ Life-science data from the [SIB Swiss Institute of Bioinformatics](https://sib-s
 
 ### 1. Describe the schema in SHACL
 
-[`cell-lines.ttl`](docs/examples/cellosaurus/cell-lines.ttl) declares three tables: cancer cell lines, diseases and sexes. The donor's disease and sex are foreign keys, and `metabase:displayValueProperty rdfs:label` shows their labels instead of URIs. Sync reads the shapes and sends no sampling query to the endpoint. Tables and columns sync with prefixed names (`cello__CancerCellLine`, `cello__recommendedName`…), which you can rename in **Admin → Table Metadata**.
+[`cell-lines.ttl`](docs/examples/cellosaurus/cell-lines.ttl) declares three tables: cancer cell lines, diseases and sexes. The donor's disease and sex are foreign keys, and `sban:displayValueProperty rdfs:label` shows their labels instead of URIs. Sync reads the shapes and sends no sampling query to the endpoint. Tables and columns sync with prefixed names (`cello__CancerCellLine`, `cello__recommendedName`…), which you can rename in **Admin → Table Metadata**.
 
 ### 2. Filter in the query builder
 
@@ -377,25 +377,25 @@ A property of every table is added automatically:
 
 - **`subject`** (`pk?`, `database-type: uri`) — the synthetic primary key holding the RDF subject URI of each row. It maps to the SPARQL `?subject` variable in every compiled query.
 
-### Custom `metabase:` vocabulary
+### The `sban:` vocabulary
 
-Add the namespace `https://data.metabase.com/` to your SHACL prefixes:
+The driver reads SBAN, SHACL annotations for BI tools ([`docs/ns.ttl`](docs/ns.ttl)). Add its namespace to your SHACL prefixes:
 
 ```turtle
-@prefix metabase: <https://data.metabase.com/> .
+@prefix sban: <https://w3id.org/sban/ns#> .
 ```
 
-The driver understands three predicates from this namespace:
+The driver understands three predicates from this namespace. On a PropertyShape, [DASH](https://datashapes.org/dash)'s `dash:hidden true` (`@prefix dash: <http://datashapes.org/dash#> .`) also hides the column, unless the shape sets `sban:hide`, which wins: `dash:hidden true ; sban:hide false` keeps the column.
 
 | Predicate                       | Where             | Effect                                                                                                                                                   |
 |:--------------------------------|:------------------|:---------------------------------------------------------------------------------------------------------------------------------------------------------|
-| `metabase:hide true`            | NodeShape *or* PropertyShape | Skip the shape (table) or the property (column) entirely during sync.                                                                                  |
-| `metabase:semanticType "type/URL"` | PropertyShape | Override Metabase's semantic type. Accepts any valid `type/…` keyword (`type/URL`, `type/Category`, `type/Email`, `type/Description`, …).                |
-| `metabase:displayValueProperty <P>` | PropertyShape (on a FK property, i.e. one that also has `sh:class`) | Marks the property on the target shape that should display as the FK's human-readable label. After every metadata sync the driver writes (and idempotently updates) the matching external-remap `Dimension` row, so Metabase automatically renders the human label without any click-through in the column-settings panel. |
+| `sban:hide true`            | NodeShape *or* PropertyShape | Skip the shape (table) or the property (column) entirely during sync.                                                                                  |
+| `sban:semanticType "type/URL"` | PropertyShape | Override Metabase's semantic type. Accepts any valid `type/…` keyword (`type/URL`, `type/Category`, `type/Email`, `type/Description`, …).                |
+| `sban:displayValueProperty <P>` | PropertyShape (on a FK property, i.e. one that also has `sh:class`) | Marks the property on the target shape that should display as the FK's human-readable label. After every metadata sync the driver writes (and idempotently updates) the matching external-remap `Dimension` row, so Metabase automatically renders the human label without any click-through in the column-settings panel. |
 
-#### `metabase:displayValueProperty` — picking the human-readable label
+#### `sban:displayValueProperty` — picking the human-readable label
 
-`metabase:displayValueProperty` answers one question: *when a row points at a related entity via a foreign key, which property of the target should Metabase show instead of the raw URI?*
+`sban:displayValueProperty` answers one question: *when a row points at a related entity via a foreign key, which property of the target should Metabase show instead of the raw URI?*
 
 It belongs on the **FK property** (the one with `sh:class`), and its value is the URI of a property defined on the **target shape**. It is not a magic keyword — it's just a regular property URI that exists on the target class.
 
@@ -416,12 +416,12 @@ dbo:PersonShape a sh:NodeShape ;
   sh:targetClass dbo:Person ;
   sh:property [ sh:path  dbo:birthPlace ;
                 sh:class dbo:Place ;
-                metabase:displayValueProperty rdfs:label ] .   # ← points at Place.label
+                sban:displayValueProperty rdfs:label ] .   # ← points at Place.label
 ```
 
 Read the FK property out loud: *"`birthPlace` is a foreign key to `Place`. When you display a value, show `rdfs:label`."* The driver writes a `Dimension` row at sync time so Metabase renders `?birthPlace` as the joined `?Place__via__birthPlace__label` value, no manual click in the column-settings panel. The displayed column is headed with the FK column's display name, so a rename in **Admin → Table Metadata** shows up after the next sync.
 
-##### What can go in `metabase:displayValueProperty`?
+##### What can go in `sban:displayValueProperty`?
 
 **Any property URI defined on the FK target shape** (or one inherited via `sh:node`). `rdfs:label` is just the most common choice; pick whatever your ontology actually uses for the human-readable form:
 
@@ -460,7 +460,7 @@ dbo:PersonShape    a sh:NodeShape ; sh:targetClass dbo:Person    ; sh:node dbo:A
 dbo:ScientistShape a sh:NodeShape ; sh:targetClass dbo:Scientist ; sh:node dbo:PersonShape .
 ```
 
-`ScientistShape` ends up with **all** properties from `PersonShape` and `AgentShape`, plus its own. If the child redefines a `sh:path` that a parent already defined, the child's declaration wins (different `sh:description`, different `sh:minCount`, etc.). Cycles are broken with a visited set. `sh:node` references that don't resolve to another visible NodeShape with its own `sh:targetClass` (e.g. an abstract parent shape without `sh:targetClass`, a shape flagged `metabase:hide`, or the class IRI itself) are silently ignored — their properties are **not** inherited. A parent NodeShape needs an IRI (not a blank node) so `sh:node` can reference it.
+`ScientistShape` ends up with **all** properties from `PersonShape` and `AgentShape`, plus its own. If the child redefines a `sh:path` that a parent already defined, the child's declaration wins (different `sh:description`, different `sh:minCount`, etc.). Cycles are broken with a visited set. `sh:node` references that don't resolve to another visible NodeShape with its own `sh:targetClass` (e.g. an abstract parent shape without `sh:targetClass`, a shape flagged `sban:hide`, or the class IRI itself) are silently ignored — their properties are **not** inherited. A parent NodeShape needs an IRI (not a blank node) so `sh:node` can reference it.
 
 ### Worked example
 
@@ -469,7 +469,7 @@ dbo:ScientistShape a sh:NodeShape ; sh:targetClass dbo:Scientist ; sh:node dbo:P
 @prefix xsd:      <http://www.w3.org/2001/XMLSchema#> .
 @prefix rdf:      <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
 @prefix rdfs:     <http://www.w3.org/2000/01/rdf-schema#> .
-@prefix metabase: <https://data.metabase.com/> .
+@prefix sban:     <https://w3id.org/sban/ns#> .
 @prefix dbo:      <http://dbpedia.org/ontology/> .
 
 dbo:AgentShape a sh:NodeShape ;
@@ -501,11 +501,11 @@ dbo:PersonShape a sh:NodeShape ;
                 sh:order 2 ] ;
   sh:property [ sh:path  dbo:birthPlace ;
                 sh:class dbo:Place ;
-                metabase:displayValueProperty rdfs:label ;   # ← Place.label, declared in PlaceShape above
+                sban:displayValueProperty rdfs:label ;   # ← Place.label, declared in PlaceShape above
                 sh:order 3 ] ;
   sh:property [ sh:path dbo:wikiPageRevisionID ;
                 sh:datatype xsd:anyURI ;
-                metabase:hide true ] .
+                sban:hide true ] .
 ```
 
 With **Default Graph URI** = `http://dbpedia.org/ontology/` and **Default Language** = `nl`, this produces:
@@ -514,7 +514,7 @@ With **Default Graph URI** = `http://dbpedia.org/ontology/` and **Default Langua
 - A table **Person** with columns `subject`, `wikiPageID` (inherited from Agent), `birthName`, `birthPlace`.
 - `birthName` is `langString`, so the pattern that reads it gets `FILTER(LANGMATCHES(LANG(?birthName), "nl") || LANG(?birthName) = "")`.
 - `birthPlace` is marked **Foreign Key** pointing to `Place.subject`. After sync the driver writes a `Dimension` row pairing `Person.birthPlace` → `Place.label`, so the FK column renders as the place's Dutch label automatically — no manual "Display values" click in the column-settings panel.
-- `wikiPageRevisionID` is absent (`metabase:hide`).
+- `wikiPageRevisionID` is absent (`sban:hide`).
 - The synced Dutch description ("Wikipedia-pagina-ID") is preferred over the English one.
 
 ## :triangular_ruler: Custom Columns (Expressions)
