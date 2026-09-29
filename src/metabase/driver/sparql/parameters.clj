@@ -14,7 +14,10 @@
        `IN(...)` / `VALUES`; template authors must wrap accordingly)
      - `[[ … ]]` clauses → dropped when one of their parameters has no value;
        anywhere else a `{{…}}` without a value stays as written, which keeps a
-       commented-out tag (`# … {{x}}`) intact"
+       commented-out tag (`# … {{x}}`) intact
+     - a value inside quotes → an error, unless it is a bare number or
+       boolean: the quotes of a text or date term would close the literal
+       around it"
   (:require
    [clojure.string :as str]
    [metabase.driver-api.core :as driver-api]
@@ -86,18 +89,82 @@
                                            (class v))
                                 (uri/string-literal v)))))
 
+(defn- part-text
+  "Return the query text of a [[substitute]] part: a fragment, or a term."
+  [part]
+  (if (map? part) (::term part) part))
+
+(defn- lex-states
+  "Return an array with, at every index of `s` where a lexer step starts (and
+   at the end of `s`), the lexer state there, and nil inside a step. States are
+   `:code`, `:comment`, `:iri`, or the delimiter (`\"`, `'`, `\"\"\"`, `'''`)
+   of the string literal being read. Follows SPARQL's tokens: a backslash
+   escapes the next character (in strings, and in prefixed names such as
+   `ex:it\\'s`), `#` starts a comment, and `<` opens an IRI only when a whole
+   IRIREF follows."
+  ^objects [^String s]
+  (let [n      (count s)
+        states (object-array (inc n))]
+    (loop [i 0, state :code]
+      (if (>= i n)
+        (do (when (= i n) (aset states n state))
+            states)
+        (let [c (.charAt s i)]
+          (aset states i state)
+          (case state
+            :comment (recur (inc i) (if (#{\newline \return} c) :code :comment))
+            :iri     (recur (inc i) (if (= c \>) :code :iri))
+            :code    (cond
+                       (= c \\)                            (recur (+ i 2) :code)
+                       (= c \#)                            (recur (inc i) :comment)
+                       (#{\" \'} c)                        (let [delim (if (.regionMatches s i (str c c c) 0 3) (str c c c) (str c))]
+                                                             (recur (+ i (count delim)) delim))
+                       (and (= c \<) (uri/iriref-at? s i)) (recur (inc i) :iri)
+                       :else                               (recur (inc i) :code))
+            (cond
+              (= c \\)                                           (recur (+ i 2) state)
+              (.regionMatches s i ^String state 0 (count state)) (recur (+ i (count state)) :code)
+              :else                                              (recur (inc i) state))))))))
+
+(defn- unsafe-term
+  "Return the first term in `parts` (query fragments, and terms as
+   `{::term s ::k tag}`, joined as `text`) that the text around it could turn
+   into query code, else nil. `text` is lexed once, and each term must start
+   and end where a lexer step does, in the same state: in code, or in a
+   comment. Inside a string literal only a bare number or boolean (or a list
+   of them) is safe, since any other term brings the quotes that would close
+   it. A text term inside `<...>` holds a `\"` or `<`, so the `<` before it
+   is no IRI: the term stays one quoted literal and the endpoint rejects the
+   broken IRI."
+  [parts ^String text]
+  ;; The query text is the question author's, who can write any SPARQL: this
+  ;; catches an author's slip (a tag written inside quotes) that would let a
+  ;; viewer's value rewrite the query, not a template built to fool the lexer
+  ;; (endpoints differ on `\uXXXX` escapes and on `<` in a FILTER).
+  (let [states (lex-states text)]
+    (some (fn [[start part]]
+            (when-let [term (::term part)]
+              (let [state (aget states start)]
+                (when-not (and state
+                               (= state (aget states (+ start (count term))))
+                               (or (#{:code :comment} state)
+                                   (re-matches #"[\w.+-]+(?:, [\w.+-]+)*" term)))
+                  part))))
+          (map vector (reductions + 0 (map (comp count part-text) parts)) parts))))
+
 (defn- substitute
   "Render parsed query tokens (strings, `Param`s, `Optional`s) as
-   `[fragments missing]`: the query fragments, and the names of parameters
-   without a value, which stay as written. An `[[ … ]]` clause is dropped whole
-   when any of its parameters is missing."
+   `[parts missing]`: the query fragments with each rendered term as
+   `{::term s ::k tag}`, and the names of parameters without a value, which
+   stay as written. An `[[ … ]]` clause is dropped whole when any of its
+   parameters is missing."
   [param->value tokens]
   (reduce
    (fn [[acc missing] token]
      (cond
        (string? token)         [(conj acc token) missing]
        (params/Param? token)   (if-let [term (->sparql-term (get param->value (:k token)))]
-                                 [(conj acc term) missing]
+                                 [(conj acc {::term term ::k (:k token)}) missing]
                                  [(conj acc (str "{{" (:k token) "}}")) (conj missing (:k token))])
        (params/Optional? token) (let [[opt opt-missing] (substitute param->value (:args token))]
                                   [(cond-> acc (empty? opt-missing) (into opt)) missing])
@@ -110,15 +177,22 @@
   "Return `inner-query` with the `{{tag}}` placeholders in its `:query`
    replaced by their parameter values, and `[[ … ]]` clauses dropped when one
    of their parameters has no value. Any other tag without a value stays as
-   written, with a logged warning."
+   written, with a logged warning. Throws when a value could become query
+   code: a value other than a bare number or boolean inside quotes, or one
+   glued to a quote that would merge with its own (`\"\"{{x}}`), see
+   [[unsafe-term]]."
   [_driver inner-query]
   #_{:clj-kondo/ignore [:unresolved-var]}
   (let [param->value      (params.values/query->params-map inner-query)
         ;; false: SPARQL comments are `#`, which the parser does not know;
         ;; a tag in one is left as written when it has no value.
-        [parts missing]   (substitute param->value (params.parse/parse (:query inner-query) false))]
+        [parts missing]   (substitute param->value (params.parse/parse (:query inner-query) false))
+        substituted       (str/join (map part-text parts))]
+    (when-let [{::keys [k]} (when (some map? parts) (unsafe-term parts substituted))]
+      (throw (ex-info (format "The {{%s}} variable is inside quotes, or glued to a quote next to it. Write it on its own, with spaces around it: the driver quotes text values and brackets IRIs itself."
+                              k)
+                      {:type driver-api/qp.error-type.invalid-query})))
     (when (seq missing)
       (log/warnf "[sparql.params] No value for %s; left as written" (vec (distinct missing))))
-    (let [substituted (str/join parts)]
-      (log/debugf "[sparql.params] Substituted query: %s" substituted)
-      (assoc inner-query :query substituted))))
+    (log/debugf "[sparql.params] Substituted query: %s" substituted)
+    (assoc inner-query :query substituted)))

@@ -145,3 +145,107 @@
   (testing "a Field Filter fails with a clear message instead of a generic endpoint 400"
     (is (thrown-with-msg? clojure.lang.ExceptionInfo #"does not support Field Filter variables"
                           (#'parameters/->sparql-term (params/map->FieldFilter {:field {} :value "x"}))))))
+
+(deftest tag-value-inside-quotes-is-an-error
+  (letfn [(subst-tags [q values]
+            (subst {:query         q
+                    :template-tags (into {} (for [k (keys values)] [k {:name k :display-name k :type :text}]))
+                    :parameters    (for [[k v] values :when (some? v)]
+                                     {:type "category" :target [:variable [:template-tag k]] :value v})}))
+          (subst-x [q value] (subst-tags q {"x" value}))
+          (rejected? [q values]
+            (try (subst-tags q values) false
+                 (catch clojure.lang.ExceptionInfo e
+                   (boolean (and (re-find #"variable is inside quotes, or glued to a quote" (ex-message e))
+                                 (= :invalid-query (:type (ex-data e))))))))]
+    (testing "a text value inside quotes would let it close them and inject"
+      (doseq [q ["SELECT * WHERE { ?s ?p ?o FILTER(?o = '{{x}}') }"
+                 "SELECT * WHERE { ?s ?p ?o FILTER(?o = \"{{x}}\") }"
+                 "SELECT * WHERE { ?s ?p ?o FILTER(?o = \"Hello {{x}}\") }"
+                 "SELECT * WHERE { ?s ?p ?o FILTER(?o = \"\"\"a\n{{x}}\"\"\") }"
+                 "SELECT * WHERE { ?s ?p ?o FILTER(?o = '''{{x}}''') }"
+                 "SELECT * WHERE { ?s ?p ?o FILTER(?o = '''it's {{x}}''') }"
+                 "SELECT * WHERE { ?s ?p ?o FILTER(?o = \"\"\"say \"hi {{x}}\"\"\") }"
+                 "SELECT * WHERE { ?s ?p ?o FILTER(?o = \"\"\"say \"\"{{x}}\"\"\") }"
+                 "SELECT * WHERE { ?s ?p ?o FILTER(?o = \"a\\\"{{x}}\") }"
+                 "SELECT * WHERE { ?s ?p ?o FILTER(?o = 'a\\{{x}}') }"
+                 "SELECT * WHERE { ?s ?p ?o FILTER(?o<'{{x}}') }"
+                 "SELECT * WHERE { ?s ?p ?o FILTER(?o = \"\"{{x}}) }"
+                 "SELECT * WHERE { ?s ex:it\\'s ?o FILTER(?o = '{{x}}') }"
+                 "SELECT * WHERE { ?s ex:a\\#b \"{{x}}\" }"
+                 "SELECT * WHERE { ?s ?p ?o [[FILTER(?o = '{{x}}')]] }"
+                 "SELECT * WHERE { ?s <https://example.org/o'b/{{x}}> ?o }"
+                 "SELECT * WHERE { ?s ?p ?o FILTER(STRSTARTS(STR(?s), \"{{x}}\")) }"
+                 "SELECT * WHERE { ?s ?p ?n FILTER(?n<=5) ?s ?q ?l FILTER(?l = 'x>y' || ?l = '{{x}}') }"]]
+        (is (rejected? q {"x" "' || true || '"}) q)))
+    (testing "text around a dropped `[[ … ]]` clause, or another value, is lexed as the endpoint reads it"
+      (is (rejected? "SELECT * WHERE { ?s ?p \"a\\[[{{y}}]]\" . ?s ?q {{x}} }" {"x" ") || true || (" "y" nil}))
+      (is (rejected? "SELECT * WHERE { VALUES ?o { \"[[{{y}}]]\"{{x}} } }" {"x" "v" "y" nil}))
+      (is (rejected? "SELECT * WHERE { ?s ?p ?o FILTER(?o = {{a}}{{x}}) }" {"a" "" "x" "v"})))
+    (testing "a number or boolean cannot close quotes or brackets, so it is still substituted"
+      (letfn [(n-subst [q v]
+                (subst {:query         q
+                        :template-tags {"n" {:name "n" :display-name "N" :type :number}}
+                        :parameters    [{:type "number/=" :target [:variable [:template-tag "n"]] :value v}]}))]
+        (doseq [[q v expected] [["SELECT * WHERE { <https://example.org/item/{{n}}> ?p ?o }" 5
+                                 "SELECT * WHERE { <https://example.org/item/5> ?p ?o }"]
+                                ["SELECT * WHERE { ?s ?p \"{{n}}\" }" -1.5
+                                 "SELECT * WHERE { ?s ?p \"-1.5\" }"]
+                                ["SELECT * WHERE { ?s ?p ?o FILTER(?o<{{n}}) }" 5
+                                 "SELECT * WHERE { ?s ?p ?o FILTER(?o<5) }"]]]
+          (let [out (n-subst q v)]
+            (is (= expected out))
+            (is (nil? (tu/sparql-syntax-error out)) out)))))
+    (testing "a tag without a value stays as written, wherever it is"
+      (let [q "SELECT * WHERE { ?s ?p '{{x}}' }"]
+        (is (= q (subst-x q nil)))
+        (is (nil? (tu/sparql-syntax-error q)) q)))
+    (testing "a quoted tag in a `[[ … ]]` clause that is dropped does not fail"
+      (let [out (subst-tags "SELECT * WHERE { ?s ?p ?o [[FILTER(?o = '{{x}}' && ?p = {{y}})]] }" {"x" "a" "y" nil})]
+        (is (= "SELECT * WHERE { ?s ?p ?o  }" out))
+        (is (nil? (tu/sparql-syntax-error out)) out)))
+    (testing "text that is already closed before the tag, and compact comparisons, are fine"
+      (doseq [[q expected] [["SELECT * WHERE { ?s ?p \"it's\" . ?s ?q {{x}} }"
+                             "SELECT * WHERE { ?s ?p \"it's\" . ?s ?q \"v\" }"]
+                            ["SELECT * WHERE { ?s <https://example.org/o'b> ?o FILTER(?o = {{x}}) }"
+                             "SELECT * WHERE { ?s <https://example.org/o'b> ?o FILTER(?o = \"v\") }"]
+                            ["SELECT * WHERE {\n# don't quote\n?s ?p {{x}} }"
+                             "SELECT * WHERE {\n# don't quote\n?s ?p \"v\" }"]
+                            ["SELECT * WHERE {\n# C:\\\\u000A don't\n?s ?p {{x}} }"
+                             "SELECT * WHERE {\n# C:\\\\u000A don't\n?s ?p \"v\" }"]
+                            ["SELECT * WHERE { ?s ?p \"\"\"say \"hi\" \"\"\" . ?s ?q {{x}} }"
+                             "SELECT * WHERE { ?s ?p \"\"\"say \"hi\" \"\"\" . ?s ?q \"v\" }"]
+                            ["SELECT * WHERE { VALUES ?o { \"\"\"abc\"\"\"{{x}} } }"
+                             "SELECT * WHERE { VALUES ?o { \"\"\"abc\"\"\"\"v\" } }"]
+                            ["SELECT * WHERE { ?s ?p \"a\\\\\" . ?s ?q {{x}} }"
+                             "SELECT * WHERE { ?s ?p \"a\\\\\" . ?s ?q \"v\" }"]
+                            ["SELECT * WHERE { ?s ?p \"\\u00e9\" . ?s ?q {{x}} }"
+                             "SELECT * WHERE { ?s ?p \"\\u00e9\" . ?s ?q \"v\" }"]
+                            ["SELECT * WHERE { ?s ?p ?d FILTER(?d<{{x}}&&?d>\"a\") }"
+                             "SELECT * WHERE { ?s ?p ?d FILTER(?d<\"v\"&&?d>\"a\") }"]
+                            ["SELECT * WHERE { ?s ?p ?d FILTER(?d<={{x}}) }"
+                             "SELECT * WHERE { ?s ?p ?d FILTER(?d<=\"v\") }"]
+                            ["SELECT * WHERE { ?s ?p ?d FILTER(?d<STR({{x}})) }"
+                             "SELECT * WHERE { ?s ?p ?d FILTER(?d<STR(\"v\")) }"]]]
+        (let [out (subst-x q "v")]
+          (is (= expected out))
+          (is (nil? (tu/sparql-syntax-error out)) out))))
+    (testing "an IRI value holding a `'` is one IRI term"
+      (let [out (subst-x "SELECT * WHERE { ?s ?p {{x}} . ?s ?q ?o FILTER(?o = {{x}}) }" "https://example.org/resource/Guns_N'_Roses")]
+        (is (= "SELECT * WHERE { ?s ?p <https://example.org/resource/Guns_N'_Roses> . ?s ?q ?o FILTER(?o = <https://example.org/resource/Guns_N'_Roses>) }" out))
+        (is (nil? (tu/sparql-syntax-error out)) out)))
+    (testing "a list of numbers is as safe as one"
+      (let [out (subst {:query         "SELECT * WHERE { ?s ?p ?o FILTER(CONTAINS(\"{{ids}}\", STR(?o))) }"
+                        :template-tags {"ids" {:name "ids" :display-name "Ids" :type :number}}
+                        :parameters    [{:type "number/=" :target [:variable [:template-tag "ids"]] :value [1 2]}]})]
+        (is (= "SELECT * WHERE { ?s ?p ?o FILTER(CONTAINS(\"1, 2\", STR(?o))) }" out))
+        (is (nil? (tu/sparql-syntax-error out)) out)))
+    (testing "a tag with a value in a `#` comment is substituted, and stays commented out"
+      (let [out (subst-x "SELECT * WHERE { ?s ?p ?o\n# FILTER(?o = \"{{x}}\")\n}" "' || true || '")]
+        (is (= "SELECT * WHERE { ?s ?p ?o\n# FILTER(?o = \"\"' || true || '\"\")\n}" out))
+        (is (nil? (tu/sparql-syntax-error out)) out)))
+    (testing "a long literal before the tag does not overflow the stack"
+      (let [long-literal (str/join (repeat 100000 "a"))
+            out          (subst-x (str "SELECT * WHERE { ?s ?p \"" long-literal "\" . ?s ?q {{x}} }") "v")]
+        (is (str/ends-with? out "?s ?q \"v\" }"))
+        (is (nil? (tu/sparql-syntax-error out)))))))

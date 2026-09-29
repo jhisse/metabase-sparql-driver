@@ -279,6 +279,21 @@
    (when (string? s)
      (re-find #"^(?:https?://|urn:)" s))))
 
+(def ^:private iri-illegal-chars
+  "The characters the IRIREF grammar forbids inside `<...>`, as a regex
+   character class body."
+  "\\x00-\\x20<>\"{}|^`\\\\")
+
+(def ^:private iri-illegal-char (re-pattern (str "[" iri-illegal-chars "]")))
+
+(def ^:private iriref (re-pattern (str "<[^" iri-illegal-chars "]*>")))
+
+(defn iriref-at?
+  "True when a whole SPARQL IRIREF `<...>` starts at index `i` of `s`, so the
+   `<` there opens an IRI rather than a comparison."
+  [^String s i]
+  (.lookingAt (doto (re-matcher iriref s) (.region (int i) (count s)))))
+
 (defn iri-ref
   "Render `v` as a SPARQL IRIREF `<...>`. Percent-encodes every character the
    IRIREF grammar forbids inside the brackets, so a value cannot close the
@@ -287,7 +302,7 @@
    well-formed IRI passes through unchanged."
   [v]
   (let [encoded (str/replace (str v)
-                             #"[\x00-\x20<>\"{}|^`\\]"
+                             iri-illegal-char
                              (fn [m] (format "%%%02X" (int (first m)))))]
     (str "<" encoded ">")))
 
