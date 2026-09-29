@@ -9,7 +9,7 @@
    - resolves foreign-key relationships declared via `sh:class`,
    - honors the `sban:` vocabulary (https://w3id.org/sban/ns#) for
      sync-time overrides (`hide`, `semanticType`, `displayValueProperty`),
-     and `dash:hidden` as `sban:hide`.
+     and `dash:hidden` on property shapes as `sban:hide`.
 
    The public entry point is [[metadata]] which returns a fully-resolved
    intermediate description that [[metabase.driver.sparql.database]] turns
@@ -338,10 +338,12 @@
     (some-> (or match-lang untagged any) :value)))
 
 (defn- hidden?
-  "True when `node` is flagged `sban:hide true` or `dash:hidden true`."
-  [spo node]
-  (boolean (some #(literal-truthy? (single spo node %))
-                 [(str sban "hide") (str dash "hidden")])))
+  "True when `node` is flagged `sban:hide true`. Without `sban:hide`, a
+   property shape (`property?`) is also hidden by `dash:hidden true`: DASH
+   defines it for property shapes only, and `sban:hide false` overrides it."
+  [spo node property?]
+  (boolean (literal-truthy? (or (single spo node (str sban "hide"))
+                                (when property? (single spo node (str dash "hidden")))))))
 
 (defn- property-shape
   "Return the property descriptor (see [[shacl->metadata]]) of the
@@ -387,7 +389,7 @@
        :display-value-property (when (iri? display) (:value display))
        :database-required (boolean (some-> (parse-long-literal min-count) pos?))
        :lang-string?      lang-string?
-       :hidden?           (hidden? spo prop-node)})))
+       :hidden?           (hidden? spo prop-node true)})))
 
 (defn- shape
   "Return the shape descriptor of `shape-node`, or nil for a shape without an
@@ -406,7 +408,7 @@
     (when (iri? target-cls)
       {:node-iri          (when (iri? shape-node) (:value shape-node))
        :class-uri         (:value target-cls)
-       :hidden?           (hidden? spo shape-node)
+       :hidden?           (hidden? spo shape-node false)
        :description       desc-text
        :parent-shape-iris parent-iris
        :properties        (vec (keep #(property-shape spo % lang) prop-nodes))})))
@@ -475,7 +477,8 @@
                      ...)}
 
    Shapes flagged `sban:hide true` are pruned. Properties flagged
-   `sban:hide true` are pruned from their parent shape. Properties
+   `sban:hide true`, or `dash:hidden true` without `sban:hide`, are pruned
+   from their parent shape. Properties
    inherited via `sh:node` are flattened in, and shapes targeting the same
    class are merged into one. `lang` (a BCP-47
    tag, may be blank) drives the language-preferred selection of

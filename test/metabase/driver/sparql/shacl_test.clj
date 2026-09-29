@@ -97,6 +97,30 @@
              order)
           "exact: a double would turn 9007199254740993 into 9007199254740992"))))
 
+(deftest sban-annotations-test
+  (let [ttl    (str "@prefix sh:   <http://www.w3.org/ns/shacl#> .\n"
+                    "@prefix sban: <https://w3id.org/sban/ns#> .\n"
+                    "@prefix dash: <http://datashapes.org/dash#> .\n"
+                    "@prefix ex:   <https://example.org/> .\n"
+                    "ex:S a sh:NodeShape ; sh:targetClass ex:C ;\n"
+                    "  sh:property ex:url , ex:fk , ex:kept , ex:gone .\n"
+                    "ex:url a sh:PropertyShape ; sh:path ex:url ; sban:semanticType \"type/URL\" .\n"
+                    "ex:fk a sh:PropertyShape ; sh:path ex:fk ; sh:class ex:T ; sban:displayValueProperty ex:name .\n"
+                    "ex:kept a sh:PropertyShape ; sh:path ex:kept ; dash:hidden true ; sban:hide false .\n"
+                    "ex:gone a sh:PropertyShape ; sh:path ex:gone ; dash:hidden false ; sban:hide true .\n"
+                    "ex:Hidden a sh:NodeShape ; sh:targetClass ex:H ; sban:hide true .\n"
+                    "ex:DashHidden a sh:NodeShape ; sh:targetClass ex:D ; dash:hidden true .\n")
+        shapes (shacl->metadata (shacl/parse-turtle ttl base) "")
+        props  (props-by-uri (first (filter #(= (str base "C") (:class-uri %)) shapes)))]
+    (testing "sban:semanticType and sban:displayValueProperty are read"
+      (is (= :type/URL (:semantic-type (props (str base "url")))))
+      (is (= (str base "name") (:display-value-property (props (str base "fk"))))))
+    (testing "sban:hide wins over dash:hidden on a property"
+      (is (contains? props (str base "kept")))
+      (is (not (contains? props (str base "gone")))))
+    (testing "sban:hide hides a node shape; dash:hidden, defined for property shapes only, does not"
+      (is (= #{(str base "C") (str base "D")} (set (map :class-uri shapes)))))))
+
 (deftest shacl->metadata-test
   (let [shapes  (shacl->metadata (shacl/parse-turtle turtle base) "nl")
         by-cls  (into {} (map (juxt :class-uri identity)) shapes)
