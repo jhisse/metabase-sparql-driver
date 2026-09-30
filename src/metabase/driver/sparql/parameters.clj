@@ -14,7 +14,9 @@
        `IN(...)` / `VALUES`; template authors must wrap accordingly)
      - `[[ … ]]` clauses → dropped when one of their parameters has no value;
        anywhere else a `{{…}}` without a value stays as written, which keeps a
-       commented-out tag (`# … {{x}}`) intact"
+       commented-out tag (`# … {{x}}`) intact
+     - a tag with a value written inside quotes (`'{{x}}'`) → an error, since
+       its term would close them"
   (:require
    [clojure.string :as str]
    [metabase.driver-api.core :as driver-api]
@@ -86,31 +88,45 @@
                                            (class v))
                                 (uri/string-literal v)))))
 
+(defn- quoted?
+  "True when the query text `before` a tag ends in a quote, or the text
+   `after` it starts with one: the tag is written inside a string literal."
+  [before after]
+  (boolean (or (and (string? before) (re-find #"[\"']$" before))
+               (and (string? after) (re-find #"^[\"']" after)))))
+
 (defn- substitute
   "Render parsed query tokens (strings, `Param`s, `Optional`s) as
    `[fragments missing]`: the query fragments, and the names of parameters
    without a value, which stay as written. An `[[ … ]]` clause is dropped whole
-   when any of its parameters is missing."
+   when any of its parameters is missing. Throws when a tag with a value is
+   written inside quotes (`'{{x}}'`): its term brings its own quotes, which
+   would close the literal and let the value rewrite the query."
   [param->value tokens]
   (reduce
-   (fn [[acc missing] token]
+   (fn [[acc missing] [before token after]]
      (cond
        (string? token)         [(conj acc token) missing]
        (params/Param? token)   (if-let [term (->sparql-term (get param->value (:k token)))]
-                                 [(conj acc term) missing]
+                                 (if (quoted? before after)
+                                   (throw (ex-info (format "The {{%s}} variable is written inside quotes. Remove them: the driver quotes text values itself."
+                                                           (:k token))
+                                                   {:type driver-api/qp.error-type.invalid-query}))
+                                   [(conj acc term) missing])
                                  [(conj acc (str "{{" (:k token) "}}")) (conj missing (:k token))])
        (params/Optional? token) (let [[opt opt-missing] (substitute param->value (:args token))]
                                   [(cond-> acc (empty? opt-missing) (into opt)) missing])
        :else                   (throw (ex-info (str "The SPARQL driver cannot substitute " (pr-str token))
                                                {:type driver-api/qp.error-type.unsupported-feature}))))
    [[] []]
-   tokens))
+   (map vector (cons nil tokens) tokens (concat (rest tokens) [nil]))))
 
 (defn substitute-native-parameters
   "Return `inner-query` with the `{{tag}}` placeholders in its `:query`
    replaced by their parameter values, and `[[ … ]]` clauses dropped when one
    of their parameters has no value. Any other tag without a value stays as
-   written, with a logged warning."
+   written, with a logged warning. Throws when a tag with a value is written
+   inside quotes."
   [_driver inner-query]
   #_{:clj-kondo/ignore [:unresolved-var]}
   (let [param->value      (params.values/query->params-map inner-query)
