@@ -164,6 +164,20 @@
       (let [q "SELECT * WHERE { ?s ?p '{{x}}' }"]
         (is (= q (subst-tags q {"x" nil})))
         (is (nil? (tu/sparql-syntax-error q)) q)))
+    (testing "a number cannot close the quotes, so it is still substituted"
+      (let [out (subst {:query         "SELECT * WHERE { ?s ?p ?y FILTER(?y = \"{{year}}\"^^<http://www.w3.org/2001/XMLSchema#gYear>) }"
+                        :template-tags {"year" {:name "year" :display-name "Year" :type :number}}
+                        :parameters    [{:type "number/=" :target [:variable [:template-tag "year"]] :value 2020}]})]
+        (is (= "SELECT * WHERE { ?s ?p ?y FILTER(?y = \"2020\"^^<http://www.w3.org/2001/XMLSchema#gYear>) }" out))
+        (is (nil? (tu/sparql-syntax-error out)) out)))
+    (testing "a tag at the start of a line, after a line ending in a quote, is not quoted"
+      (let [out (subst-tags "SELECT * WHERE { VALUES ?o { \"a\"\n{{x}} } }" {"x" "b"})]
+        (is (= "SELECT * WHERE { VALUES ?o { \"a\"\n\"b\" } }" out))
+        (is (nil? (tu/sparql-syntax-error out)) out)))
+    (testing "a quoted tag on a `#` comment line stays in the comment"
+      (let [out (subst-tags "SELECT * WHERE { ?s ?p ?o\n  # FILTER(?o = \"{{x}}\")\n}" {"x" "' || true || '"})]
+        (is (= "SELECT * WHERE { ?s ?p ?o\n  # FILTER(?o = \"\"' || true || '\"\")\n}" out))
+        (is (nil? (tu/sparql-syntax-error out)) out)))
     (testing "tags next to other tags or to text that is not a quote are fine"
       (let [out (subst-tags "SELECT * WHERE { ?s ?p ?o FILTER(?o IN ({{x}},{{y}})) }" {"x" "a" "y" "b"})]
         (is (= "SELECT * WHERE { ?s ?p ?o FILTER(?o IN (\"a\",\"b\")) }" out))
