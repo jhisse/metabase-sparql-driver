@@ -14,7 +14,9 @@
        `IN(...)` / `VALUES`; template authors must wrap accordingly)
      - `[[ … ]]` clauses → dropped when one of their parameters has no value;
        anywhere else a `{{…}}` without a value stays as written, which keeps a
-       commented-out tag (`# … {{x}}`) intact"
+       commented-out tag (`# … {{x}}`) intact
+     - a text or date tag written right inside quotes (`'{{x}}'`) → an error,
+       since its term would close them"
   (:require
    [clojure.string :as str]
    [metabase.driver-api.core :as driver-api]
@@ -86,31 +88,55 @@
                                            (class v))
                                 (uri/string-literal v)))))
 
+(defn- quoted?
+  "True when a tag is written right inside quotes: the query text `before` it
+   ends with a quote, or the text `after` it starts with one. A tag on a `#`
+   comment line never is, since its value stays in the comment."
+  [before after]
+  ;; Only a quote touching the tag counts: a tag further inside a string
+  ;; (`"Hello {{x}}"`, or `'[[{{x}}]]'` across a clause edge) is not caught.
+  ;; Catching it needs a SPARQL lexer over the query (closed #75), weighed
+  ;; against a slip that already returns wrong rows for any normal value.
+  (let [before  (if (string? before) before "")
+        after   (if (string? after) after "")
+        line    (subs before (inc (or (str/last-index-of before "\n") -1)))
+        quotes  ["\"" "'"]]
+    (and (not (str/starts-with? (str/triml line) "#"))
+         (boolean (or (some #(str/ends-with? before %) quotes)
+                      (some #(str/starts-with? after %) quotes))))))
+
 (defn- substitute
   "Render parsed query tokens (strings, `Param`s, `Optional`s) as
    `[fragments missing]`: the query fragments, and the names of parameters
    without a value, which stay as written. An `[[ … ]]` clause is dropped whole
-   when any of its parameters is missing."
+   when any of its parameters is missing. Throws when a tag whose term brings
+   its own quotes (text, dates) is written right inside quotes (`'{{x}}'`):
+   they would close the literal and let the value rewrite the query."
   [param->value tokens]
   (reduce
-   (fn [[acc missing] token]
+   (fn [[acc missing] [before token after]]
      (cond
        (string? token)         [(conj acc token) missing]
        (params/Param? token)   (if-let [term (->sparql-term (get param->value (:k token)))]
-                                 [(conj acc term) missing]
+                                 (if (and (re-find #"[\"']" term) (quoted? before after))
+                                   (throw (ex-info (format "The {{%s}} variable is written inside quotes. Remove them: the driver quotes text values itself."
+                                                           (:k token))
+                                                   {:type driver-api/qp.error-type.invalid-query}))
+                                   [(conj acc term) missing])
                                  [(conj acc (str "{{" (:k token) "}}")) (conj missing (:k token))])
        (params/Optional? token) (let [[opt opt-missing] (substitute param->value (:args token))]
                                   [(cond-> acc (empty? opt-missing) (into opt)) missing])
        :else                   (throw (ex-info (str "The SPARQL driver cannot substitute " (pr-str token))
                                                {:type driver-api/qp.error-type.unsupported-feature}))))
    [[] []]
-   tokens))
+   (partition 3 1 (concat [nil] tokens [nil]))))
 
 (defn substitute-native-parameters
   "Return `inner-query` with the `{{tag}}` placeholders in its `:query`
    replaced by their parameter values, and `[[ … ]]` clauses dropped when one
    of their parameters has no value. Any other tag without a value stays as
-   written, with a logged warning."
+   written, with a logged warning. Throws when a tag with a value is written
+   inside quotes."
   [_driver inner-query]
   #_{:clj-kondo/ignore [:unresolved-var]}
   (let [param->value      (params.values/query->params-map inner-query)
