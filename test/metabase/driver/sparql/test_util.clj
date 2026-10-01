@@ -132,20 +132,38 @@
                       :base-type :type/Integer :effective-type :type/Integer}]})
 
 (def native-cards
-  "[[native-card]], plus cards with the same columns over other SPARQL: an
-  ASK query (id 2), and a prologue with a comment and BASE ahead of a SELECT
-  that ends in a comment (id 3)."
-  (let [with-query (fn [id sparql]
-                     (-> native-card
-                         (assoc :id id)
-                         (assoc-in [:dataset-query :native :query] sparql)))]
+  "[[native-card]], plus cards over other SPARQL: an ASK query (id 2); a
+  prologue with a comment and BASE ahead of a SELECT that ends in a comment
+  (id 3); FROM and FROM NAMED clauses (id 4); a non-ASCII variable (id 5);
+  a Virtuoso DEFINE pragma (id 6); no recorded columns (id 7)."
+  (let [with-query (fn [id sparql & [cols]]
+                     (cond-> (-> native-card
+                                 (assoc :id id)
+                                 (assoc-in [:dataset-query :native :query] sparql))
+                       cols (assoc :result-metadata cols)))
+        person     (str "?s a ex:Person ; <" rdfs-label "> ?name ; ex:age ?age")]
     [native-card
      (with-query 2 "ASK { ?s a <https://example.org/Person> }")
      (with-query 3 (str "# people and their ages\n"
                         "BASE <https://example.org/>\n"
                         "PREFIX ex: <https://example.org/>\n"
                         "SELECT ?name ?age WHERE { ?s a ex:Person ; "
-                        "<" rdfs-label "> ?name ; ex:age ?age } # no LIMIT"))]))
+                        "<" rdfs-label "> ?name ; ex:age ?age } # no LIMIT"))
+     (with-query 4 (str "PREFIX ex: <https://example.org/>\n"
+                        "SELECT ?name ?age FROM <https://example.org/g> FROM NAMED <https://example.org/h> "
+                        "WHERE { " person " }"))
+     (with-query 5 (str "PREFIX ex: <https://example.org/>\n"
+                        "SELECT ?name (?age AS ?idade_média) WHERE { " person " }")
+       [{:lib/type :metadata/column :name "name" :display-name "name"
+         :base-type :type/Text :effective-type :type/Text}
+        {:lib/type :metadata/column :name "idade_média" :display-name "idade_média"
+         :base-type :type/Integer :effective-type :type/Integer}])
+     (with-query 6 (str "DEFINE input:inference \"r\"\n"
+                        "PREFIX ex: <https://example.org/>\n"
+                        "SELECT ?name ?age WHERE { " person " }"))
+     (with-query 7 (str "PREFIX ex: <https://example.org/>\n"
+                        "SELECT ?name ?age WHERE { " person " }")
+       [])]))
 
 (def provider
   "Minimal MetadataProvider over the fixture's schema. Carries the endpoint and

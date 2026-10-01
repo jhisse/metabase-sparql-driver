@@ -115,9 +115,7 @@
    URI through [[database-naming-context]]. Throws when it resolves to nothing,
    which `?subject a <>` would silently match no rows for."
   [table-id]
-  (let [nm  (when table-id
-              (some-> (driver-api/table (driver-api/metadata-provider) table-id)
-                      :name))
+  (let [nm  (some->> table-id (driver-api/table (driver-api/metadata-provider)) :name)
         uri (uri/absolute-uri nm (database-naming-context))]
     (log/debugf "[mbql] Resolved class URI for table-id %s: %s" table-id uri)
     (when (str/blank? uri)
@@ -1362,28 +1360,42 @@
 
 (def ^:private prologue-re
   "Match the prologue at the start of a SPARQL query: whitespace, `#` comments,
-   and `PREFIX` and `BASE` declarations."
-  #"^(?:\s+|#[^\n]*|(?i:PREFIX)\s+[^\s:]*:\s*<[^>]*>|(?i:BASE)\s*<[^>]*>)*")
+   `PREFIX` and `BASE` declarations, and Virtuoso's `DEFINE` pragmas."
+  #"^(?:\s+|#[^\n\r]*|(?i:PREFIX)\s+[^\s:]*:\s*<[^>]*>|(?i:BASE)\s*<[^>]*>|(?i:DEFINE)\s+\S+\s+(?:\"[^\"]*\"|\S+))*")
+
+(def ^:private dataset-clause-re
+  "Match a `FROM <g>` or `FROM NAMED <g>` dataset clause."
+  #"(?i)\bFROM\s+(?:NAMED\s+)?<[^>]*>")
 
 (defn- compile-native-stage
   "Compile a saved native question used as the source of an MBQL stage: its
    SPARQL, with `{{tag}}`s already substituted, becomes the sub-`SELECT`.
    `source-metadata` (the outer stage's view of the native columns) names its
-   variables, which also covers `SELECT *`. A sub-`SELECT` cannot hold a
-   prologue, so the `PREFIX` and `BASE` lines come back apart, as `:prologue`,
-   for [[mbql->native]] to put at the top of the query. Throws when the source
-   is not a `SELECT`.
+   variables, which also covers `SELECT *`. A sub-`SELECT` can hold neither a
+   prologue nor a dataset clause, so the `PREFIX`, `BASE` and `DEFINE` lines
+   come back apart as `:prologue`, and the `FROM` clauses before the first `{`
+   as `:dataset`, for [[mbql->native]] to put back around the whole query.
+   Throws when the source is not a `SELECT`, or when Metabase has not recorded
+   its columns yet.
 
-   Returns `{:sparql … :vars … :prologue …}` (see [[compile-base-stage]])."
+   Returns `{:sparql … :vars … :prologue … :dataset …}` (see
+   [[compile-base-stage]] for the first two)."
   [native source-metadata]
-  (let [prologue (re-find prologue-re native)
-        body     (subs native (count prologue))]
+  (let [native   (str/replace native #"^\uFEFF" "")
+        prologue (re-find prologue-re native)
+        body     (subs native (count prologue))
+        head-end (or (str/index-of body "{") (count body))
+        head     (subs body 0 head-end)]
     (when-not (re-find #"(?i)^SELECT\b" body)
       (throw (ex-info "A question built on a saved native SPARQL question needs a SELECT query as its source."
                       {:type driver-api/qp.error-type.unsupported-feature})))
-    {:sparql   body
+    (when (empty? source-metadata)
+      (throw (ex-info "Metabase has not recorded the columns of this saved native SPARQL question yet. Run it once, then try again."
+                      {:type driver-api/qp.error-type.invalid-query})))
+    {:sparql   (str (str/replace head dataset-clause-re "") (subs body head-end))
      :vars     (mapv :name source-metadata)
-     :prologue (str/trim prologue)}))
+     :prologue (str/trim prologue)
+     :dataset  (str/join "\n" (re-seq dataset-clause-re head))}))
 
 (defn- compile-derived-stage
   "Compile a derived MBQL stage (one with `:source-query`). These arise e.g.
@@ -1403,11 +1415,13 @@
    driver's column count and order always match what the `annotate` middleware
    expects.
 
-   Returns `{:sparql … :vars … :aliases …}` (see [[compile-base-stage]])."
+   Returns `{:sparql … :vars … :aliases …}` (see [[compile-base-stage]]), plus
+   the `:prologue` and `:dataset` of a native source ([[compile-native-stage]])."
   [stage expected-cols]
   (let [naming        (database-naming-context)
         source        (:source-query stage)
-        inner         (if (string? (:native source))
+        native?       (string? (:native source))
+        inner         (if native?
                         (compile-native-stage (:native source) (:source-metadata stage))
                         (compile-stage source))
         joins         (:joins stage)
@@ -1429,12 +1443,14 @@
         ;; Columns visible to the outer stage: inner sub-SELECT vars + remapped vars.
         passthrough-vars (vec (concat (:vars inner) (map :var remap-entries)))
         ;; The sub-SELECT already projects these by name, so resolving an outer
-        ;; field token (a string-named source-query column) is just sanitizing it.
+        ;; field token (a string-named source-query column) is just sanitizing it;
+        ;; a native source's names are its own SPARQL variables, kept as they are
+        ;; (`?idade_média` is a valid variable that sanitizing would rename).
         ;; Aggregation results are the exception: the inner stage names them `ag_N`,
         ;; but a later stage references them by Lib's name (`count`, `sum`, …), so we
         ;; add those aliases (drilling on an aggregation value relies on this).
-        field-id->var    (merge (into {} (for [v passthrough-vars] [v (sanitize-var-name v)]))
-                                (aggregation-name->var (:aggregation (:source-query stage)))
+        field-id->var    (merge (into {} (for [v passthrough-vars] [v (if native? v (sanitize-var-name v))]))
+                                (aggregation-name->var (:aggregation source))
                                 ;; a temporal bucket keeps its raw column name in Lib
                                 (:aliases inner))
         pair->target-var (into {} (for [{:keys [tid alias var]} remap-entries]
@@ -1563,7 +1579,8 @@
     {:sparql   query
      :vars     result-vars
      :aliases  (:aliases bucketed)
-     :prologue (:prologue inner)}))
+     :prologue (:prologue inner)
+     :dataset  (:dataset inner)}))
 
 (defn- compile-stage
   "Compile one MBQL stage, recursing through `:source-query` wrappers.
@@ -1599,12 +1616,16 @@
    can never drift from what the `annotate` middleware expects.
 
    Multi-stage queries are compiled stage by stage (inner stage → sub-`SELECT`).
+   The prologue and dataset clauses of a saved native source go back at the top
+   and before the outer `WHERE` (see [[compile-native-stage]]).
    See [[compile-base-stage]] and [[compile-derived-stage]]."
   [_driver outer-query]
   (let [expected-cols    (expected-result-columns outer-query)
         legacy-query     (driver-api/->legacy-MBQL outer-query)
-        {:keys [sparql vars prologue]} (compile-stage (:query legacy-query) expected-cols)
-        sparql           (if (seq prologue) (str prologue "\n" sparql) sparql)]
+        {:keys [sparql vars prologue dataset]} (compile-stage (:query legacy-query) expected-cols)
+        sparql           (cond->> sparql
+                           (seq dataset)  (#(str/replace-first % "\nWHERE {" (str "\n" dataset "\nWHERE {")))
+                           (seq prologue) (str prologue "\n"))]
     (log/debugf "[sparql.mbql->native] Compiled query (%d projected columns): %s"
                 (count vars) sparql)
     {:query sparql

@@ -172,6 +172,22 @@
     (let [sparql (->sparql (tu/native-card-query 3))]
       (is (str/starts-with? sparql "# people and their ages\nBASE <https://example.org/>\nPREFIX ex:") sparql)
       (is (str/includes? sparql "# no LIMIT\n") sparql)))
+  (testing "FROM clauses move out of the sub-SELECT, before the outer WHERE"
+    (let [sparql (->sparql (tu/native-card-query 4))]
+      (is (re-find #"(?m)^FROM <https://example.org/g>\nFROM NAMED <https://example.org/h>\nWHERE \{" sparql) sparql)
+      (is (= 2 (count (re-seq #"FROM" sparql))) sparql)))
+  (testing "a non-ASCII native variable keeps its name"
+    (let [q      (tu/native-card-query 5)
+          idade  (tu/column q lib/filterable-columns "idade_média")
+          sparql (->sparql (-> q (lib/aggregate (lib/count)) (lib/breakout idade)))]
+      (is (str/includes? sparql "GROUP BY ?idade_média") sparql)))
+  (testing "a DEFINE pragma stays in the prologue"
+    ;; not parse-checked: DEFINE is Virtuoso's, not SPARQL 1.1
+    (let [sparql (:query (tu/compile-query (tu/native-card-query 6)))]
+      (is (str/starts-with? sparql "DEFINE input:inference \"r\"\nPREFIX ex:") sparql)))
+  (testing "a source without recorded columns fails with a clear error"
+    (is (thrown-with-msg? clojure.lang.ExceptionInfo #"has not recorded the columns"
+                          (tu/compile-query (tu/native-card-query 7)))))
   (testing "a non-SELECT source fails with a clear error"
     (is (thrown-with-msg? clojure.lang.ExceptionInfo #"needs a SELECT query as its source"
                           (tu/compile-query (tu/native-card-query 2))))))

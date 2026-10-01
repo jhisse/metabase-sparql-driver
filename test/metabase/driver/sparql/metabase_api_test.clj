@@ -199,6 +199,8 @@
                   {:name                   "Cities (e2e)"
                    :display                :table
                    :visualization_settings {}
+                   ;; given, so the test does not depend on Metabase recording it in time
+                   :result_metadata        [{:name "label" :display_name "label" :base_type "type/Text"}]
                    :dataset_query          {:database (db-id :auto)
                                             :type     :native
                                             :native   {:query "PREFIX ex: <https://example.org/>
