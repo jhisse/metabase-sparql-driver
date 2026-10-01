@@ -181,6 +181,12 @@
           idade  (tu/column q lib/filterable-columns "idade_média")
           sparql (->sparql (-> q (lib/aggregate (lib/count)) (lib/breakout idade)))]
       (is (str/includes? sparql "GROUP BY ?idade_média") sparql)))
+  (testing "a non-ASCII native variable keeps its name two stages up"
+    (let [q      (tu/native-card-query 8)
+          idade  (tu/column q lib/filterable-columns "idade_média")
+          sparql (->sparql (-> q (lib/filter (lib/> idade 3)) (lib/aggregate (lib/count)) (lib/breakout idade)))]
+      (is (not (str/includes? sparql "idade_m_dia")) sparql)
+      (is (str/includes? sparql "?idade_média > 3") sparql)))
   (testing "a DEFINE pragma stays in the prologue"
     ;; not parse-checked: DEFINE is Virtuoso's, not SPARQL 1.1
     (let [sparql (:query (tu/compile-query (tu/native-card-query 6)))]

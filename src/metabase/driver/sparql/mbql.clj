@@ -1421,8 +1421,7 @@
   [stage expected-cols]
   (let [naming        (database-naming-context)
         source        (:source-query stage)
-        native?       (string? (:native source))
-        inner         (if native?
+        inner         (if (string? (:native source))
                         (compile-native-stage (:native source) (:source-metadata stage))
                         (compile-stage source))
         joins         (:joins stage)
@@ -1443,14 +1442,14 @@
                          :alias    alias})
         ;; Columns visible to the outer stage: inner sub-SELECT vars + remapped vars.
         passthrough-vars (vec (concat (:vars inner) (map :var remap-entries)))
-        ;; The sub-SELECT already projects these by name, so resolving an outer
-        ;; field token (a string-named source-query column) is just sanitizing it;
-        ;; a native source's names are its own SPARQL variables, kept as they are
-        ;; (`?idade_média` is a valid variable that sanitizing would rename).
+        ;; The sub-SELECT already projects these by name, so an outer field token
+        ;; (a string-named source-query column) resolves to the name itself, at
+        ;; every nesting level: sanitizing would rename a native `?idade_média`
+        ;; to a variable no stage projects.
         ;; Aggregation results are the exception: the inner stage names them `ag_N`,
         ;; but a later stage references them by Lib's name (`count`, `sum`, …), so we
         ;; add those aliases (drilling on an aggregation value relies on this).
-        field-id->var    (merge (into {} (for [v passthrough-vars] [v (if native? v (sanitize-var-name v))]))
+        field-id->var    (merge (into {} (for [v passthrough-vars] [v v]))
                                 (aggregation-name->var (:aggregation source))
                                 ;; a temporal bucket keeps its raw column name in Lib
                                 (:aliases inner))
