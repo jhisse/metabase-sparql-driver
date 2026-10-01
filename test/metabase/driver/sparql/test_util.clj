@@ -113,6 +113,62 @@
    ;; rdf:langString properties, which the Default Language filter reads.
    (col 107 6 "nickname" :type/Text "langString")])
 
+(def native-card
+  "A saved native question over the fixture: a question built on it compiles
+  the SPARQL below as the source of its MBQL stage."
+  {:lib/type        :metadata/card
+   :id              1
+   :database-id     1
+   :name            "People by age"
+   :type            :question
+   :dataset-query   {:database 1
+                     :type     :native
+                     :native   {:query (str "PREFIX ex: <https://example.org/>\n"
+                                            "SELECT ?name ?age WHERE { ?s a ex:Person ; "
+                                            "<" rdfs-label "> ?name ; ex:age ?age }")}}
+   :result-metadata [{:lib/type :metadata/column :name "name" :display-name "name"
+                      :base-type :type/Text :effective-type :type/Text}
+                     {:lib/type :metadata/column :name "age" :display-name "age"
+                      :base-type :type/Integer :effective-type :type/Integer}]})
+
+(def native-cards
+  "[[native-card]], plus cards over other SPARQL: an ASK query (id 2); a
+  prologue with a comment and BASE ahead of a SELECT that ends in a comment
+  (id 3); FROM and FROM NAMED clauses, with a full and a prefixed IRI (id 4); a non-ASCII variable (id 5);
+  a Virtuoso DEFINE pragma (id 6); SELECT * with no recorded columns (id 7); a saved MBQL
+  question on card 5, so a question on it nests two stages (id 8)."
+  (let [with-query (fn [id sparql & [cols]]
+                     (cond-> (-> native-card
+                                 (assoc :id id)
+                                 (assoc-in [:dataset-query :native :query] sparql))
+                       cols (assoc :result-metadata cols)))
+        person     (str "?s a ex:Person ; <" rdfs-label "> ?name ; ex:age ?age")
+        idade-cols [{:lib/type :metadata/column :name "name" :display-name "name"
+                     :base-type :type/Text :effective-type :type/Text}
+                    {:lib/type :metadata/column :name "idade_média" :display-name "idade_média"
+                     :base-type :type/Integer :effective-type :type/Integer}]]
+    [native-card
+     (with-query 2 "ASK { ?s a <https://example.org/Person> }")
+     (with-query 3 (str "# people and their ages\n"
+                        "BASE <https://example.org/>\n"
+                        "PREFIX ex: <https://example.org/>\n"
+                        "SELECT ?name ?age WHERE { ?s a ex:Person ; "
+                        "<" rdfs-label "> ?name ; ex:age ?age } # no LIMIT"))
+     (with-query 4 (str "PREFIX ex: <https://example.org/>\n"
+                        "SELECT ?name ?age FROM <https://example.org/g> FROM NAMED ex:h "
+                        "WHERE { " person " }"))
+     (with-query 5 (str "PREFIX ex: <https://example.org/>\n"
+                        "SELECT ?name (?age AS ?idade_média) WHERE { " person " }")
+       idade-cols)
+     (with-query 6 (str "DEFINE input:inference \"r\"\n"
+                        "PREFIX ex: <https://example.org/>\n"
+                        "SELECT ?name ?age WHERE { " person " }"))
+     (with-query 7 (str "PREFIX ex: <https://example.org/>\n"
+                        "SELECT * WHERE { " person " }")
+       [])
+     (-> (with-query 8 "" idade-cols)
+         (assoc :dataset-query {:database 1 :type :query :query {:source-table "card__5"}}))]))
+
 (def provider
   "Minimal MetadataProvider over the fixture's schema. Carries the endpoint and
   default graph in the database :details, which is where both mbql->native and
@@ -128,6 +184,7 @@
       (let [objects (case (:lib/type metadata-spec)
                       :metadata/table  [person-table]
                       :metadata/column person-fields
+                      :metadata/card   native-cards
                       [])]
         (into []
               (lib.metadata.protocols/default-spec-filter-xform metadata-spec)
@@ -138,6 +195,12 @@
   "A fresh pMBQL query over the Person table."
   []
   (lib/query provider (lib.metadata/table provider (:id person-table))))
+
+(defn native-card-query
+  "A fresh pMBQL query whose source is the card `id` of [[native-cards]],
+  [[native-card]] by default."
+  ([] (native-card-query (:id native-card)))
+  ([id] (lib/query provider (lib.metadata/card provider id))))
 
 (defn column
   "The column named col-name among (columns-fn q); columns-fn defaults to

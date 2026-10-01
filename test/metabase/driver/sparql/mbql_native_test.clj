@@ -149,3 +149,58 @@
         (is (str/includes? sparql "BIND(LCASE(STR(?shout)) AS ?whisper)"))
         (is (= ["shout" "whisper"] (take-last 2 (select-vars sparql))))
         (is (= 9 (count (select-vars sparql))))))))
+
+(deftest saved-native-question-as-source-test
+  (testing "the saved SPARQL is the sub-SELECT, with its prologue at the top"
+    (let [q   (tu/native-card-query)
+          age (tu/column q lib/filterable-columns "age")]
+      (doseq [[label query] {"no outer clauses"  q
+                             "filter and limit"  (-> q (lib/filter (lib/between age 20 40)) (lib/limit 10))
+                             "count by a column" (-> q (lib/aggregate (lib/count)) (lib/breakout age))}]
+        (testing label
+          (let [sparql (->sparql query)]
+            (is (not (str/includes? sparql "<>")) sparql)
+            (is (str/includes? sparql "?s a ex:Person") sparql)
+            (is (str/starts-with? sparql "PREFIX ex:") sparql))))))
+  (testing "the outer clauses read the native columns"
+    (let [q      (tu/native-card-query)
+          age    (tu/column q lib/filterable-columns "age")
+          sparql (->sparql (-> q (lib/filter (lib/between age 20 40)) (lib/limit 10)))]
+      (is (str/includes? sparql "?age >= 20") sparql)
+      (is (= ["name" "age"] (select-vars sparql)))))
+  (testing "a comment and BASE in the prologue, and a comment ending the query"
+    (let [sparql (->sparql (tu/native-card-query 3))]
+      (is (str/starts-with? sparql "# people and their ages\nBASE <https://example.org/>\nPREFIX ex:") sparql)
+      (is (str/includes? sparql "# no LIMIT\n") sparql)))
+  (testing "FROM clauses move out of the sub-SELECT, before the outer WHERE"
+    (let [sparql (->sparql (tu/native-card-query 4))]
+      (is (re-find #"(?m)^FROM <https://example.org/g>\nFROM NAMED ex:h\nWHERE \{" sparql) sparql)
+      (is (= 2 (count (re-seq #"FROM" sparql))) sparql)))
+  (testing "a non-ASCII native variable keeps its name"
+    (let [q      (tu/native-card-query 5)
+          idade  (tu/column q lib/filterable-columns "idade_média")
+          sparql (->sparql (-> q (lib/aggregate (lib/count)) (lib/breakout idade)))]
+      (is (str/includes? sparql "GROUP BY ?idade_média") sparql)))
+  (testing "a non-ASCII native variable keeps its name two stages up"
+    (let [q      (tu/native-card-query 8)
+          idade  (tu/column q lib/filterable-columns "idade_média")
+          sparql (->sparql (-> q (lib/filter (lib/> idade 3)) (lib/aggregate (lib/count)) (lib/breakout idade)))]
+      (is (not (str/includes? sparql "idade_m_dia")) sparql)
+      (is (str/includes? sparql "?idade_média > 3") sparql)))
+  (testing "a DEFINE pragma stays in the prologue"
+    ;; not parse-checked: DEFINE is Virtuoso's, not SPARQL 1.1
+    (let [sparql (:query (tu/compile-query (tu/native-card-query 6)))]
+      (is (str/starts-with? sparql "DEFINE input:inference \"r\"\nPREFIX ex:") sparql)))
+  (testing "without recorded columns, as the tile map runs it, the SELECT clause names the variables"
+    (let [stage #'metabase.driver.sparql.mbql/compile-native-stage]
+      (is (= ["whs" "latitude" "longitude"]
+             (:vars (stage (str "SELECT DISTINCT ?whs (SAMPLE(STR(?lat)) AS ?latitude) ( SAMPLE(?lon) AS ?longitude )"
+                                " FROM <https://example.org/g> WHERE { ?s ?p ?o } GROUP BY ?whs")
+                           nil))))
+      (is (= ["idade_média"] (:vars (stage "SELECT ?idade_média WHERE { ?s ?p ?idade_média }" []))))))
+  (testing "a SELECT * source without recorded columns fails with a clear error"
+    (is (thrown-with-msg? clojure.lang.ExceptionInfo #"has not recorded the columns"
+                          (tu/compile-query (tu/native-card-query 7)))))
+  (testing "a non-SELECT source fails with a clear error"
+    (is (thrown-with-msg? clojure.lang.ExceptionInfo #"needs a SELECT query as its source"
+                          (tu/compile-query (tu/native-card-query 2))))))
