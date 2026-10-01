@@ -191,7 +191,14 @@
     ;; not parse-checked: DEFINE is Virtuoso's, not SPARQL 1.1
     (let [sparql (:query (tu/compile-query (tu/native-card-query 6)))]
       (is (str/starts-with? sparql "DEFINE input:inference \"r\"\nPREFIX ex:") sparql)))
-  (testing "a source without recorded columns fails with a clear error"
+  (testing "without recorded columns, as the tile map runs it, the SELECT clause names the variables"
+    (let [stage #'metabase.driver.sparql.mbql/compile-native-stage]
+      (is (= ["whs" "latitude" "longitude"]
+             (:vars (stage (str "SELECT DISTINCT ?whs (SAMPLE(STR(?lat)) AS ?latitude) ( SAMPLE(?lon) AS ?longitude )"
+                                " FROM <https://example.org/g> WHERE { ?s ?p ?o } GROUP BY ?whs")
+                           nil))))
+      (is (= ["idade_média"] (:vars (stage "SELECT ?idade_média WHERE { ?s ?p ?idade_média }" []))))))
+  (testing "a SELECT * source without recorded columns fails with a clear error"
     (is (thrown-with-msg? clojure.lang.ExceptionInfo #"has not recorded the columns"
                           (tu/compile-query (tu/native-card-query 7)))))
   (testing "a non-SELECT source fails with a clear error"

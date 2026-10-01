@@ -1368,16 +1368,34 @@
    prefixed (`ex:g`) graph IRI."
   #"(?i)\bFROM\s+(?:NAMED\s+)?(?:<[^>]*>|[^\s<>{}()]*:[^\s<>{}()]*)")
 
+(defn- select-clause-vars
+  "Return the variables the SELECT clause `head` projects, in order: each bare
+   `?v`, and the `?v` of each `(… AS ?v)`. Empty for `SELECT *`."
+  [head]
+  (let [{:keys [tokens cur]}
+        (reduce (fn [{:keys [depth cur] :as acc} c]
+                  (let [depth' (case c \( (inc depth) \) (dec depth) depth)]
+                    (if (and (zero? depth') (Character/isWhitespace ^char c))
+                      (-> acc (update :tokens conj cur) (assoc :cur ""))
+                      (assoc acc :depth depth' :cur (str cur c)))))
+                {:depth 0 :cur "" :tokens []}
+                head)]
+    (into []
+          (keep #(or (second (re-find #"^[?$](\S+)$" %))
+                     (second (re-find #"(?i)\bAS\s+[?$]([^\s)]+)\s*\)$" %))))
+          (conj tokens cur))))
+
 (defn- compile-native-stage
   "Compile a saved native question used as the source of an MBQL stage: its
    SPARQL, with `{{tag}}`s already substituted, becomes the sub-`SELECT`.
    `source-metadata` (the outer stage's view of the native columns) names its
-   variables, which also covers `SELECT *`. A sub-`SELECT` can hold neither a
+   variables, which also covers `SELECT *`. Without it (the tile map stacks a
+   stage on the card's own native query), the SELECT clause names them. A sub-`SELECT` can hold neither a
    prologue nor a dataset clause, so the `PREFIX`, `BASE` and `DEFINE` lines
    come back apart as `:prologue`, and the `FROM` clauses before the first `{`
    as `:dataset`, for [[mbql->native]] to put back around the whole query.
-   Throws when the source is not a `SELECT`, or when Metabase has not recorded
-   its columns yet.
+   Throws when the source is not a `SELECT`, or when neither names its
+   variables (`SELECT *` with no recorded columns).
 
    Returns `{:sparql … :vars … :prologue … :dataset …}` (see
    [[compile-base-stage]] for the first two)."
@@ -1386,15 +1404,18 @@
         prologue (re-find prologue-re native)
         body     (subs native (count prologue))
         head-end (or (str/index-of body "{") (count body))
-        head     (subs body 0 head-end)]
+        head     (subs body 0 head-end)
+        vars     (if (seq source-metadata)
+                   (mapv :name source-metadata)
+                   (select-clause-vars (str/replace head dataset-clause-re "")))]
     (when-not (re-find #"(?i)^SELECT\b" body)
       (throw (ex-info "A question built on a saved native SPARQL question needs a SELECT query as its source."
                       {:type driver-api/qp.error-type.unsupported-feature})))
-    (when (empty? source-metadata)
-      (throw (ex-info "Metabase has not recorded the columns of this saved native SPARQL question yet. Run it once, then try again."
+    (when (empty? vars)
+      (throw (ex-info "Metabase has not recorded the columns of this saved native SPARQL question yet. Run it once, or list its variables instead of SELECT *."
                       {:type driver-api/qp.error-type.invalid-query})))
     {:sparql   (str (str/replace head dataset-clause-re "") (subs body head-end))
-     :vars     (mapv :name source-metadata)
+     :vars     vars
      :prologue (str/trim prologue)
      :dataset  (str/join "\n" (re-seq dataset-clause-re head))}))
 
