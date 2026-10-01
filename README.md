@@ -56,19 +56,28 @@ Native SPARQL, maps, variables and dashboards on the largest open knowledge grap
 
 Add a database, pick **SPARQL**, and fill in the settings above. Wikidata is too large to sample, and its items use `wdt:P31` instead of `rdf:type`, so the query builder has no tables to offer there: this tour is written in SPARQL.
 
-![Connection form for Wikidata](./images/wikidata/connection.webp)
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="./images/wikidata/connection-dark.webp">
+  <img alt="Connection form for Wikidata" src="./images/wikidata/connection-light.webp">
+</picture>
 
 ### 2. Ask in SPARQL
 
 Wikidata's prefixes (`wd:`, `wdt:`, `p:`…) are predefined by the endpoint. Numeric columns come back typed, so `?latitude` and `?longitude` feed a pin map right away. Query: [`heritage-map.rq`](docs/examples/wikidata/heritage-map.rq).
 
-![Native SPARQL query with a pin map of World Heritage Sites](./images/wikidata/native-query-map.webp)
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="./images/wikidata/native-query-map-dark.webp">
+  <img alt="Native SPARQL query with a pin map of World Heritage Sites" src="./images/wikidata/native-query-map-light.webp">
+</picture>
 
 ### 3. Add a variable
 
 A `{{country}}` tag turns into a filter widget, and the driver renders its value as an escaped SPARQL literal (see [Native Query Parameters](#native-query-parameters)). Here it shows Iceland's three sites. Query: [`heritage-in-country.rq`](docs/examples/wikidata/heritage-in-country.rq).
 
-![Native SPARQL query with a country variable set to Iceland](./images/wikidata/native-parameter.webp)
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="./images/wikidata/native-parameter-dark.webp">
+  <img alt="Native SPARQL query with a country variable set to Iceland" src="./images/wikidata/native-parameter-light.webp">
+</picture>
 
 ### 4. Build a dashboard
 
@@ -89,19 +98,28 @@ Save the questions and put them on a dashboard. A dashboard filter mapped to the
 
 Add a database, pick **SPARQL**, and fill in the settings above. The Default Graph URI names the graph DBpedia keeps its data in.
 
-![Connection form for DBpedia](./images/dbpedia/connection.webp)
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="./images/dbpedia/connection-dark.webp">
+  <img alt="Connection form for DBpedia" src="./images/dbpedia/connection-light.webp">
+</picture>
 
 ### 2. Ask in SPARQL
 
 `STRDT(…, xsd:date)` turns DBpedia's date strings into dates, which Metabase then formats, sorts and filters as dates. Query: [`brazilian-scientists.rq`](docs/examples/dbpedia/brazilian-scientists.rq).
 
-![Native SPARQL query listing Brazilian scientists with birth and death dates](./images/dbpedia/native-query-table.webp)
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="./images/dbpedia/native-query-table-dark.webp">
+  <img alt="Native SPARQL query listing Brazilian scientists with birth and death dates" src="./images/dbpedia/native-query-table-light.webp">
+</picture>
 
 ### 3. Ask a yes/no question
 
 An `ASK` query returns one `boolean` column. Query: [`einstein-is-scientist.rq`](docs/examples/dbpedia/einstein-is-scientist.rq).
 
-![ASK query answering true](./images/dbpedia/ask-query.webp)
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="./images/dbpedia/ask-query-dark.webp">
+  <img alt="ASK query answering true" src="./images/dbpedia/ask-query-light.webp">
+</picture>
 
 ### 4. Chart it
 
@@ -132,7 +150,10 @@ Life-science data from the [SIB Swiss Institute of Bioinformatics](https://sib-s
 
 Open the cancer cell lines table and filter on **Disease → Label** is `Melanoma`. The driver compiles the filter to SPARQL, and the **Sex** column shows `Female` rather than the IRI `cello:Female`.
 
-![Query builder table of melanoma cell lines with name, accession, sex, age and date](./images/cellosaurus/melanoma-table.webp)
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="./images/cellosaurus/melanoma-table-dark.webp">
+  <img alt="Query builder table of melanoma cell lines with name, accession, sex, age and date" src="./images/cellosaurus/melanoma-table-light.webp">
+</picture>
 
 ### 3. Follow two foreign keys in a Sankey
 
