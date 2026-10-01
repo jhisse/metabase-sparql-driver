@@ -365,7 +365,12 @@
     (is (nil? (ob [])))
     (testing "aggregation order-by can reference an aggregation by index"
       (is (= "ORDER BY DESC(?ag_0)" (agg-ob [[:desc [:aggregation 0]]])))
-      (is (= "ORDER BY ASC(?naam)"  (agg-ob [[:asc [:field "naam" nil]]]))))))
+      (is (= "ORDER BY ASC(?naam)"  (agg-ob [[:asc [:field "naam" nil]]]))))
+    (testing "a term that resolves to no variable throws instead of leaving the rows unsorted"
+      (is (thrown-with-msg? clojure.lang.ExceptionInfo #"cannot sort by"
+                            (ob [[:asc [:field "onbekend" nil]]])))
+      (is (thrown-with-msg? clojure.lang.ExceptionInfo #"cannot sort by"
+                            (agg-ob [[:asc [:field "onbekend" nil]]]))))))
 
 (deftest var-for-token-test
   (let [f @#'mbql/var-for-token]

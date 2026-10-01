@@ -737,20 +737,25 @@
     (str "LIMIT " items " OFFSET " (* items (dec page)))
     (when (number? limit) (str "LIMIT " limit))))
 
+(defn- order-term
+  "One `ORDER BY` term, `DIR(?var)`. Throws when `token` resolved to no `var`:
+   dropping the term would silently return the rows unsorted."
+  [dir var token]
+  (when-not var
+    (throw (ex-info (str "The SPARQL driver cannot sort by " (pr-str token) ": it is not a column of this query.")
+                    {:type driver-api/qp.error-type.driver :token token})))
+  (str (str/upper-case (name dir)) "(?" var ")"))
+
 (defn- compile-order-by
   "Compile a non-aggregation `order-by` to an `ORDER BY` clause string, or nil.
-   Terms whose token does not resolve to a variable are skipped."
+   Throws when a term does not resolve to a variable, like filters do."
   [order-by field-id->var pair->target-var]
   (when (seq order-by)
-    (let [parts (for [[dir fld & _] order-by
-                      :let [var (var-for-token fld field-id->var pair->target-var)]]
-                  (when var
-                    (str (str/upper-case (name dir)) "(?" var ")")))
-          parts (remove nil? parts)]
-      (when (seq parts)
-        (let [clause (str "ORDER BY " (str/join " " parts))]
-          (log/debugf "[mbql] Order clause: %s" clause)
-          clause)))))
+    (let [parts (for [[dir fld & _] order-by]
+                  (order-term dir (var-for-token fld field-id->var pair->target-var) fld))
+          clause (str "ORDER BY " (str/join " " parts))]
+      (log/debugf "[mbql] Order clause: %s" clause)
+      clause)))
 
 (defn- unwrap-aggregation
   "Strip an `:aggregation-options` wrapper, returning the inner aggregation clause."
@@ -903,17 +908,15 @@
    (`[:aggregation N]`)."
   [order-by token->var]
   (when (seq order-by)
-    (let [parts (for [[dir tok & _] order-by
-                      :let [v (cond
+    (let [parts (for [[dir tok & _] order-by]
+                  (order-term dir
+                              (cond
                                 (and (vector? tok) (= :aggregation (first tok)))
                                 (str "ag_" (second tok))
                                 (and (vector? tok) (#{:field :expression} (first tok)))
-                                (token->var tok)
-                                :else nil)]
-                      :when v]
-                  (str (str/upper-case (name dir)) "(?" v ")"))]
-      (when (seq parts)
-        (str "ORDER BY " (str/join " " parts))))))
+                                (token->var tok))
+                              tok))]
+      (str "ORDER BY " (str/join " " parts)))))
 
 (declare compile-stage)
 
