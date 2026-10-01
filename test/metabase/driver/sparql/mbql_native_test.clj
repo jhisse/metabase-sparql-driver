@@ -204,3 +204,13 @@
   (testing "a non-SELECT source fails with a clear error"
     (is (thrown-with-msg? clojure.lang.ExceptionInfo #"needs a SELECT query as its source"
                           (tu/compile-query (tu/native-card-query 2))))))
+
+(deftest page-test
+  (testing "lib/with-page compiles to LIMIT and OFFSET (the agent API paginates with it)"
+    (let [q (tu/person-query)]
+      (is (str/ends-with? (->sparql (lib/with-page q {:page 1 :items 5})) "LIMIT 5 OFFSET 0"))
+      (is (str/ends-with? (->sparql (lib/with-page q {:page 3 :items 5})) "LIMIT 5 OFFSET 10"))
+      (is (str/ends-with? (->sparql (lib/limit q 7)) "LIMIT 7"))))
+  (testing "on a question over a saved native question, the outer query is paged"
+    (is (str/ends-with? (->sparql (lib/with-page (tu/native-card-query) {:page 2 :items 5}))
+                        "LIMIT 5 OFFSET 5"))))

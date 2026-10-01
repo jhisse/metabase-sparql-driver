@@ -528,7 +528,14 @@
                            :order-by [[:asc [:field 2 nil]]]
                            :limit 10})]
       (is (str/includes? sparql "ORDER BY ASC(?naam)"))
-      (is (str/includes? sparql "LIMIT 10")))))
+      (is (str/ends-with? sparql "LIMIT 10")))
+    (testing ":page becomes LIMIT and OFFSET"
+      (let [{:keys [sparql]}
+            (compile-stage* {:source-table 100
+                             :fields [[:field 1 nil] [:field 2 nil]]
+                             :order-by [[:asc [:field 2 nil]]]
+                             :page {:page 3 :items 10}})]
+        (is (str/ends-with? sparql "ORDER BY ASC(?naam)\nLIMIT 10 OFFSET 20"))))))
 
 (deftest compile-base-stage-aggregation-test
   (with-fixture

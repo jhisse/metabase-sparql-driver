@@ -726,6 +726,17 @@
                (conj lines (str "  BIND(" (compile-expression clause field-id->var pair->target-var)
                                 " AS ?" (sanitize-var-name ename) ")")))))))
 
+(defn- limit-clause
+  "The `LIMIT` (and `OFFSET`) clause string for a stage, or nil. `:page`, which
+   the agent API uses to paginate, wins over `:limit`: the QP does not add a
+   default `:limit` to a paged query."
+  [{:keys [limit page]}]
+  ;; Without an ORDER BY the engine may return rows in any order, so pages can
+  ;; overlap or skip rows; the SQL drivers share this limit.
+  (if-let [{:keys [items page]} page]
+    (str "LIMIT " items " OFFSET " (* items (dec page)))
+    (when (number? limit) (str "LIMIT " limit))))
+
 (defn- compile-order-by
   "Compile a non-aggregation `order-by` to an `ORDER BY` clause string, or nil.
    Terms whose token does not resolve to a variable are skipped."
@@ -1031,7 +1042,7 @@
    Returns `{:sparql <query string> :vars <SELECT var names, in order>
               :aliases <raw column var → temporal bucket var>}`."
   [inner expected-cols]
-  (let [limit         (:limit inner)
+  (let [limit-part    (limit-clause inner)
         table-id      (:source-table inner)
         class-uri     (table-id->class-uri table-id)
         naming        (database-naming-context)
@@ -1333,12 +1344,11 @@
                                  filters)
                          (str/join "\n"))
         where-part  (str "WHERE {\n" where-body "\n}")
-        limit-part  (when (number? limit) (str "LIMIT " limit))
         query       (str (str/trim select-part) "\n"
                          where-part "\n"
                          (when group-by-clause (str group-by-clause "\n"))
                          (when order-clause (str order-clause "\n"))
-                         (when limit-part (str limit-part)))]
+                         limit-part)]
     (log/debugf "[sparql.mbql] Compiled base stage: %s" query)
     {:sparql  query
      :vars    result-vars
@@ -1484,7 +1494,6 @@
         agg?          (boolean (or (seq aggregations) (seq breakout)))
         filter-clause (:filter stage)
         order-by      (:order-by stage)
-        limit         (:limit stage)
         agg-projections (when agg?
                           (vec (map-indexed (fn [i a] (aggregation->projection a i token->var true))
                                             aggregations)))
@@ -1595,7 +1604,7 @@
                            "}\n"
                            (when group-by-clause (str group-by-clause "\n"))
                            (when order-clause (str order-clause "\n"))
-                           (when (number? limit) (str "LIMIT " limit)))]
+                           (limit-clause stage))]
     (log/debugf "[sparql.mbql] Compiled derived stage: %s" query)
     {:sparql   query
      :vars     result-vars
