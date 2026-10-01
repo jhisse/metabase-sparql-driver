@@ -1364,8 +1364,9 @@
   #"^(?:\s+|#[^\n\r]*|(?i:PREFIX)\s+[^\s:]*:\s*<[^>]*>|(?i:BASE)\s*<[^>]*>|(?i:DEFINE)\s+\S+\s+(?:\"[^\"]*\"|\S+))*")
 
 (def ^:private dataset-clause-re
-  "Match a `FROM <g>` or `FROM NAMED <g>` dataset clause."
-  #"(?i)\bFROM\s+(?:NAMED\s+)?<[^>]*>")
+  "Match a `FROM` or `FROM NAMED` dataset clause, with a full (`<g>`) or
+   prefixed (`ex:g`) graph IRI."
+  #"(?i)\bFROM\s+(?:NAMED\s+)?(?:<[^>]*>|[^\s<>{}()]*:[^\s<>{}()]*)")
 
 (defn- compile-native-stage
   "Compile a saved native question used as the source of an MBQL stage: its

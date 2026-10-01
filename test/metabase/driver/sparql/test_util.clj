@@ -134,7 +134,7 @@
 (def native-cards
   "[[native-card]], plus cards over other SPARQL: an ASK query (id 2); a
   prologue with a comment and BASE ahead of a SELECT that ends in a comment
-  (id 3); FROM and FROM NAMED clauses (id 4); a non-ASCII variable (id 5);
+  (id 3); FROM and FROM NAMED clauses, with a full and a prefixed IRI (id 4); a non-ASCII variable (id 5);
   a Virtuoso DEFINE pragma (id 6); no recorded columns (id 7)."
   (let [with-query (fn [id sparql & [cols]]
                      (cond-> (-> native-card
@@ -150,7 +150,7 @@
                         "SELECT ?name ?age WHERE { ?s a ex:Person ; "
                         "<" rdfs-label "> ?name ; ex:age ?age } # no LIMIT"))
      (with-query 4 (str "PREFIX ex: <https://example.org/>\n"
-                        "SELECT ?name ?age FROM <https://example.org/g> FROM NAMED <https://example.org/h> "
+                        "SELECT ?name ?age FROM <https://example.org/g> FROM NAMED ex:h "
                         "WHERE { " person " }"))
      (with-query 5 (str "PREFIX ex: <https://example.org/>\n"
                         "SELECT ?name (?age AS ?idade_média) WHERE { " person " }")

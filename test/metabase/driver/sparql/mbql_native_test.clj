@@ -174,7 +174,7 @@
       (is (str/includes? sparql "# no LIMIT\n") sparql)))
   (testing "FROM clauses move out of the sub-SELECT, before the outer WHERE"
     (let [sparql (->sparql (tu/native-card-query 4))]
-      (is (re-find #"(?m)^FROM <https://example.org/g>\nFROM NAMED <https://example.org/h>\nWHERE \{" sparql) sparql)
+      (is (re-find #"(?m)^FROM <https://example.org/g>\nFROM NAMED ex:h\nWHERE \{" sparql) sparql)
       (is (= 2 (count (re-seq #"FROM" sparql))) sparql)))
   (testing "a non-ASCII native variable keeps its name"
     (let [q      (tu/native-card-query 5)
