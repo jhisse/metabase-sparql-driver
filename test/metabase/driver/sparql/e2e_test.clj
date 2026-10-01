@@ -168,6 +168,18 @@
         {:keys [rows]} (tu/run-query q)]
     (is (= [["Alice" 30]] rows))))
 
+(deftest ^:integration page-test
+  (testing "each page holds the next rows (the agent API paginates with :page)"
+    (let [q    (tu/person-query)
+          age  (tu/column q "age")
+          q    (-> q
+                   (lib/with-fields [(tu/column q tu/rdfs-label)])
+                   (lib/order-by age :desc))
+          page #(:rows (tu/run-query (lib/with-page q {:page % :items 1})))]
+      (is (= [["Alice"]] (page 1)))
+      (is (= [["Bob"]] (page 2)))
+      (is (= [] (page 3))))))
+
 (deftest ^:integration custom-columns-test
   (let [q     (tu/person-query)
         label (tu/column q tu/rdfs-label)

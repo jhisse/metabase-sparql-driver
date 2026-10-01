@@ -365,7 +365,12 @@
     (is (nil? (ob [])))
     (testing "aggregation order-by can reference an aggregation by index"
       (is (= "ORDER BY DESC(?ag_0)" (agg-ob [[:desc [:aggregation 0]]])))
-      (is (= "ORDER BY ASC(?naam)"  (agg-ob [[:asc [:field "naam" nil]]]))))))
+      (is (= "ORDER BY ASC(?naam)"  (agg-ob [[:asc [:field "naam" nil]]]))))
+    (testing "a term that resolves to no variable throws instead of leaving the rows unsorted"
+      (is (thrown-with-msg? clojure.lang.ExceptionInfo #"cannot sort by"
+                            (ob [[:asc [:field "onbekend" nil]]])))
+      (is (thrown-with-msg? clojure.lang.ExceptionInfo #"cannot sort by"
+                            (agg-ob [[:asc [:field "onbekend" nil]]]))))))
 
 (deftest var-for-token-test
   (let [f @#'mbql/var-for-token]
@@ -528,7 +533,14 @@
                            :order-by [[:asc [:field 2 nil]]]
                            :limit 10})]
       (is (str/includes? sparql "ORDER BY ASC(?naam)"))
-      (is (str/includes? sparql "LIMIT 10")))))
+      (is (str/ends-with? sparql "LIMIT 10")))
+    (testing ":page becomes LIMIT and OFFSET"
+      (let [{:keys [sparql]}
+            (compile-stage* {:source-table 100
+                             :fields [[:field 1 nil] [:field 2 nil]]
+                             :order-by [[:asc [:field 2 nil]]]
+                             :page {:page 3 :items 10}})]
+        (is (str/ends-with? sparql "ORDER BY ASC(?naam)\nLIMIT 10 OFFSET 20"))))))
 
 (deftest compile-base-stage-aggregation-test
   (with-fixture
