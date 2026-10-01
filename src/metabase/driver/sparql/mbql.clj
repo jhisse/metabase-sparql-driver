@@ -112,12 +112,17 @@
 
 (defn- table-id->class-uri
   "Return the RDF class URI of table `table-id`: its name, expanded to a full
-   URI through [[database-naming-context]]."
+   URI through [[database-naming-context]]. Throws when it resolves to nothing,
+   which `?subject a <>` would silently match no rows for."
   [table-id]
-  (let [nm  (some-> (driver-api/table (driver-api/metadata-provider) table-id)
-                    :name)
+  (let [nm  (when table-id
+              (some-> (driver-api/table (driver-api/metadata-provider) table-id)
+                      :name))
         uri (uri/absolute-uri nm (database-naming-context))]
     (log/debugf "[mbql] Resolved class URI for table-id %s: %s" table-id uri)
+    (when (str/blank? uri)
+      (throw (ex-info (str "The SPARQL driver cannot resolve the class of table " (pr-str table-id))
+                      {:type driver-api/qp.error-type.driver})))
     uri))
 
 (defn- collect-field-ids
@@ -1355,6 +1360,31 @@
       (string? id)  (sanitize-var-name id)
       :else         nil)))
 
+(def ^:private prologue-re
+  "Match the prologue at the start of a SPARQL query: whitespace, `#` comments,
+   and `PREFIX` and `BASE` declarations."
+  #"^(?:\s+|#[^\n]*|(?i:PREFIX)\s+[^\s:]*:\s*<[^>]*>|(?i:BASE)\s*<[^>]*>)*")
+
+(defn- compile-native-stage
+  "Compile a saved native question used as the source of an MBQL stage: its
+   SPARQL, with `{{tag}}`s already substituted, becomes the sub-`SELECT`.
+   `source-metadata` (the outer stage's view of the native columns) names its
+   variables, which also covers `SELECT *`. A sub-`SELECT` cannot hold a
+   prologue, so the `PREFIX` and `BASE` lines come back apart, as `:prologue`,
+   for [[mbql->native]] to put at the top of the query. Throws when the source
+   is not a `SELECT`.
+
+   Returns `{:sparql … :vars … :prologue …}` (see [[compile-base-stage]])."
+  [native source-metadata]
+  (let [prologue (re-find prologue-re native)
+        body     (subs native (count prologue))]
+    (when-not (re-find #"(?i)^SELECT\b" body)
+      (throw (ex-info "A question built on a saved native SPARQL question needs a SELECT query as its source."
+                      {:type driver-api/qp.error-type.unsupported-feature})))
+    {:sparql   body
+     :vars     (mapv :name source-metadata)
+     :prologue (str/trim prologue)}))
+
 (defn- compile-derived-stage
   "Compile a derived MBQL stage (one with `:source-query`). These arise e.g.
    when a saved card / model is used as a source, when an FK display-value
@@ -1376,7 +1406,10 @@
    Returns `{:sparql … :vars … :aliases …}` (see [[compile-base-stage]])."
   [stage expected-cols]
   (let [naming        (database-naming-context)
-        inner         (compile-stage (:source-query stage))
+        source        (:source-query stage)
+        inner         (if (string? (:native source))
+                        (compile-native-stage (:native source) (:source-metadata stage))
+                        (compile-stage source))
         joins         (:joins stage)
         alias->join   (into {} (for [j joins] [(:alias j) j]))
         remap-entries (for [tok   (:fields stage)
@@ -1527,9 +1560,10 @@
                            (when order-clause (str order-clause "\n"))
                            (when (number? limit) (str "LIMIT " limit)))]
     (log/debugf "[sparql.mbql] Compiled derived stage: %s" query)
-    {:sparql  query
-     :vars    result-vars
-     :aliases (:aliases bucketed)}))
+    {:sparql   query
+     :vars     result-vars
+     :aliases  (:aliases bucketed)
+     :prologue (:prologue inner)}))
 
 (defn- compile-stage
   "Compile one MBQL stage, recursing through `:source-query` wrappers.
@@ -1569,7 +1603,8 @@
   [_driver outer-query]
   (let [expected-cols    (expected-result-columns outer-query)
         legacy-query     (driver-api/->legacy-MBQL outer-query)
-        {:keys [sparql vars]} (compile-stage (:query legacy-query) expected-cols)]
+        {:keys [sparql vars prologue]} (compile-stage (:query legacy-query) expected-cols)
+        sparql           (if (seq prologue) (str prologue "\n" sparql) sparql)]
     (log/debugf "[sparql.mbql->native] Compiled query (%d projected columns): %s"
                 (count vars) sparql)
     {:query sparql

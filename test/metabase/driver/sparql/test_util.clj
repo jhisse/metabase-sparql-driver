@@ -113,6 +113,40 @@
    ;; rdf:langString properties, which the Default Language filter reads.
    (col 107 6 "nickname" :type/Text "langString")])
 
+(def native-card
+  "A saved native question over the fixture: a question built on it compiles
+  the SPARQL below as the source of its MBQL stage."
+  {:lib/type        :metadata/card
+   :id              1
+   :database-id     1
+   :name            "People by age"
+   :type            :question
+   :dataset-query   {:database 1
+                     :type     :native
+                     :native   {:query (str "PREFIX ex: <https://example.org/>\n"
+                                            "SELECT ?name ?age WHERE { ?s a ex:Person ; "
+                                            "<" rdfs-label "> ?name ; ex:age ?age }")}}
+   :result-metadata [{:lib/type :metadata/column :name "name" :display-name "name"
+                      :base-type :type/Text :effective-type :type/Text}
+                     {:lib/type :metadata/column :name "age" :display-name "age"
+                      :base-type :type/Integer :effective-type :type/Integer}]})
+
+(def native-cards
+  "[[native-card]], plus cards with the same columns over other SPARQL: an
+  ASK query (id 2), and a prologue with a comment and BASE ahead of a SELECT
+  that ends in a comment (id 3)."
+  (let [with-query (fn [id sparql]
+                     (-> native-card
+                         (assoc :id id)
+                         (assoc-in [:dataset-query :native :query] sparql)))]
+    [native-card
+     (with-query 2 "ASK { ?s a <https://example.org/Person> }")
+     (with-query 3 (str "# people and their ages\n"
+                        "BASE <https://example.org/>\n"
+                        "PREFIX ex: <https://example.org/>\n"
+                        "SELECT ?name ?age WHERE { ?s a ex:Person ; "
+                        "<" rdfs-label "> ?name ; ex:age ?age } # no LIMIT"))]))
+
 (def provider
   "Minimal MetadataProvider over the fixture's schema. Carries the endpoint and
   default graph in the database :details, which is where both mbql->native and
@@ -128,6 +162,7 @@
       (let [objects (case (:lib/type metadata-spec)
                       :metadata/table  [person-table]
                       :metadata/column person-fields
+                      :metadata/card   native-cards
                       [])]
         (into []
               (lib.metadata.protocols/default-spec-filter-xform metadata-spec)
@@ -138,6 +173,12 @@
   "A fresh pMBQL query over the Person table."
   []
   (lib/query provider (lib.metadata/table provider (:id person-table))))
+
+(defn native-card-query
+  "A fresh pMBQL query whose source is the card `id` of [[native-cards]],
+  [[native-card]] by default."
+  ([] (native-card-query (:id native-card)))
+  ([id] (lib/query provider (lib.metadata/card provider id))))
 
 (defn column
   "The column named col-name among (columns-fn q); columns-fn defaults to

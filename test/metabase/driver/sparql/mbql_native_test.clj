@@ -149,3 +149,29 @@
         (is (str/includes? sparql "BIND(LCASE(STR(?shout)) AS ?whisper)"))
         (is (= ["shout" "whisper"] (take-last 2 (select-vars sparql))))
         (is (= 9 (count (select-vars sparql))))))))
+
+(deftest saved-native-question-as-source-test
+  (testing "the saved SPARQL is the sub-SELECT, with its prologue at the top"
+    (let [q   (tu/native-card-query)
+          age (tu/column q lib/filterable-columns "age")]
+      (doseq [[label query] {"no outer clauses"  q
+                             "filter and limit"  (-> q (lib/filter (lib/between age 20 40)) (lib/limit 10))
+                             "count by a column" (-> q (lib/aggregate (lib/count)) (lib/breakout age))}]
+        (testing label
+          (let [sparql (->sparql query)]
+            (is (not (str/includes? sparql "<>")) sparql)
+            (is (str/includes? sparql "?s a ex:Person") sparql)
+            (is (str/starts-with? sparql "PREFIX ex:") sparql))))))
+  (testing "the outer clauses read the native columns"
+    (let [q      (tu/native-card-query)
+          age    (tu/column q lib/filterable-columns "age")
+          sparql (->sparql (-> q (lib/filter (lib/between age 20 40)) (lib/limit 10)))]
+      (is (str/includes? sparql "?age >= 20") sparql)
+      (is (= ["name" "age"] (select-vars sparql)))))
+  (testing "a comment and BASE in the prologue, and a comment ending the query"
+    (let [sparql (->sparql (tu/native-card-query 3))]
+      (is (str/starts-with? sparql "# people and their ages\nBASE <https://example.org/>\nPREFIX ex:") sparql)
+      (is (str/includes? sparql "# no LIMIT\n") sparql)))
+  (testing "a non-SELECT source fails with a clear error"
+    (is (thrown-with-msg? clojure.lang.ExceptionInfo #"needs a SELECT query as its source"
+                          (tu/compile-query (tu/native-card-query 2))))))

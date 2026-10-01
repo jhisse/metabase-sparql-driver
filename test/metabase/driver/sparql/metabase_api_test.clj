@@ -191,3 +191,21 @@
                                    <http://www.w3.org/2000/01/rdf-schema#label> ?label } ORDER BY ?label"}})]
     (is (= "completed" status) error)
     (is (= [["Shelbyville"] ["Springfield"]] (:rows data)))))
+
+(deftest ^:integration question-on-saved-native-question-test
+  ;; What "Explore results" and a pin map in tiles run: an MBQL stage whose
+  ;; source is a saved native question.
+  (let [card (api :post "/api/card"
+                  {:name                   "Cities (e2e)"
+                   :display                :table
+                   :visualization_settings {}
+                   :dataset_query          {:database (db-id :auto)
+                                            :type     :native
+                                            :native   {:query "PREFIX ex: <https://example.org/>
+SELECT ?label WHERE { ?c a ex:City ; <http://www.w3.org/2000/01/rdf-schema#label> ?label }"}}})]
+    (try
+      (let [{:keys [rows]} (run-mbql :auto {:source-table (str "card__" (:id card))
+                                            :filter       [:= [:field "label" {:base-type :type/Text}] "Springfield"]})]
+        (is (= [["Springfield"]] rows)))
+      (finally
+        (api :delete (str "/api/card/" (:id card)))))))
