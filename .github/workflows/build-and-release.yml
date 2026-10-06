@@ -301,6 +301,7 @@ jobs:
         uses: docker/build-push-action@v7
         with:
           context: .
+          platforms: linux/amd64,linux/arm64
           push: true
           # :latest only moves on a stable tag, never on a pre-release.
           tags: |

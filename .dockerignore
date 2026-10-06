@@ -1,0 +1,11 @@
+# Only what the Dockerfile copies; everything else stays out of the build context.
+*
+!deps.edn
+!Makefile
+!resources/
+!src/
+!metabase/
+metabase/.git
+metabase/.cpcache
+metabase/node_modules
+metabase/target
