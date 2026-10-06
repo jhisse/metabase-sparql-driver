@@ -23,23 +23,24 @@ RDF classes become tables and properties become columns, so people who don't kno
 > [!TIP]
 > If this repository is useful to you, please consider starring it ⭐.
 
-## :handshake: Compatibility
-
-| Driver Version       | Metabase Version  | Notes                                            |
-|:---------------------|:------------------|:-------------------------------------------------|
-| **v0.0.11+**         | v0.61.x           | Built and tested against Metabase v0.61.2.       |
-| **v0.0.10**          | v0.56.3 — v0.56.x | Requires `describe-database*` (added in 0.56.3). |
-| **v0.0.1 – v0.0.9**  | < v0.56.3         | Uses legacy `describe-database`.                 |
-
-> [!IMPORTANT]
-> Upgrading from `v0.0.10` or earlier renames the synthetic primary-key column from `id` to `subject` and shortens class/property names whose URI starts with the **Default Graph** URI. After dropping the new jar in, **re-sync each database** so the renamed metadata lands cleanly.
-
 ## :zap: Quick Start
 
-1. **Download** the latest driver from the [releases page](https://github.com/jhisse/metabase-sparql-driver/releases)
-2. **Copy** `sparql.metabase-driver.jar` to your Metabase `plugins/` directory
+**With Docker** (Metabase with the driver already installed):
+
+```bash
+docker run -d -p 3000:3000 ghcr.io/jhisse/metabase-sparql-driver:latest
+```
+
+Open <http://localhost:3000>, finish the setup wizard, then **Add database** → **SPARQL** → paste an endpoint URL such as `https://query.wikidata.org/sparql`. The image is the official `metabase/metabase` image plus the driver, so the [same options](https://www.metabase.com/docs/latest/installation-and-operation/running-metabase-on-docker) apply; add `-v ~/metabase-data:/metabase-data -e MB_DB_FILE=/metabase-data/metabase.db` to keep your questions across restarts.
+
+**With an existing Metabase:**
+
+1. **Download** `sparql.metabase-driver.jar` from the [releases page](https://github.com/jhisse/metabase-sparql-driver/releases)
+2. **Copy** it to your Metabase `plugins/` directory
 3. **Restart** Metabase
-4. **Add database** → Select "SPARQL" → Enter endpoint URL
+4. **Add database** → **SPARQL** → enter the endpoint URL
+
+See [Compatibility](#handshake-compatibility) for which Metabase versions each release supports.
 
 ## :world_map: A tour with Wikidata
 
@@ -173,6 +174,15 @@ Count rows by **Created** grouped by year and pick the Waterfall visualization: 
   <img alt="Waterfall chart of cancer cell lines added to Cellosaurus each year, from 2012 to 2026" src="./images/cellosaurus/waterfall-light.webp">
 </picture>
 
+## :gear: How It Works
+
+- **Sync.** Each `rdf:type` becomes a table and each property a column; the subject IRI becomes the table's `subject` primary key. The `auto` strategy discovers classes and properties by sampling the endpoint (configurable limits, 20 properties and 10000 sampled values per class by default). The `shacl` strategy reads a SHACL document instead: node shapes become tables, `sh:property` becomes columns and `sh:class` becomes a foreign key. `explicit` takes the schema as JSON and `none` syncs nothing, for endpoints too large to sample. Sync lives in `database.clj`, `shacl.clj` and `templates.clj`.
+- **Query builder.** Every visual question is compiled from Metabase's query language (MBQL) to SPARQL in `mbql.clj`: projection, filters, custom expressions, ordering, left joins, aggregations with date breakouts, and questions built on a saved question, which become a sub-`SELECT`. Foreign-key display values are `OPTIONAL` patterns, so a row without the link keeps an empty value. `Count` compiles to `COUNT(DISTINCT ?subject)`, so grouping by a multi-valued property counts entities, not fanned-out rows.
+- **Types.** Result terms are mapped to Metabase base types per column and parsed per cell in `conversion.clj`; the table in [Automatic Type Conversion](#arrows_counterclockwise-automatic-type-conversion) lists the mapping.
+- **Native questions.** A `{{tag}}` is rendered as a typed, escaped SPARQL term in `parameters.clj`. Every string literal goes through one escaper and every IRI through one `<iri>` helper (`uri.clj`), so a `"`, `\` or `>` in a filter value cannot break out of the query.
+
+What does not compile yet is listed under [Limitations and Known Issues](#warning-limitations-and-known-issues).
+
 ## :arrows_counterclockwise: Automatic Type Conversion
 
 Query-time mapping (every strategy). SHACL sync reads `sh:datatype` instead — see [SHACL → Metabase mapping](#shacl--metabase-mapping).
@@ -191,6 +201,17 @@ Query-time mapping (every strategy). SHACL sync reads `sh:datatype` instead — 
 | Any other datatype (incl. `xsd:string`, `xsd:anyURI`, `xsd:dateTimeStamp`) | Text       | Value kept as its lexical string                                      |
 | Untagged literals                                                  | Text               | `"Hello"`                                                             |
 | Language-tagged literals                                           | Text               | `"Hello"@en` comes through as `Hello` (the tag is not part of the value) |
+
+## :handshake: Compatibility
+
+| Driver Version       | Metabase Version  | Notes                                            |
+|:---------------------|:------------------|:-------------------------------------------------|
+| **v0.0.11+**         | v0.61.x           | Built and tested against Metabase v0.61.2.       |
+| **v0.0.10**          | v0.56.3 — v0.56.x | Requires `describe-database*` (added in 0.56.3). |
+| **v0.0.1 – v0.0.9**  | < v0.56.3         | Uses legacy `describe-database`.                 |
+
+> [!IMPORTANT]
+> Upgrading from `v0.0.10` or earlier renames the synthetic primary-key column from `id` to `subject` and shortens class/property names whose URI starts with the **Default Graph** URI. After dropping the new jar in, **re-sync each database** so the renamed metadata lands cleanly.
 
 ## :wrench: Configuration
 
@@ -613,39 +634,11 @@ Run `make check-deps` to check if dependencies are installed.
    target/sparql.metabase-driver.jar
    ```
 
-## :whale: Build Only Driver with Docker
+### Other make targets
 
-```bash
-make docker-build-driver
-```
-
-## :whale: Build Metabase + Driver Docker Image
-
-```bash
-make docker-build
-```
-
-## :gear: Additional Make Commands
-
-- `make build`: Build the SPARQL driver
-- `make build-full`: Complete build with checks and initialization
-- `make clean`: Remove build files
-- `make init-metabase`: Initialize the Metabase submodule
-- `make check-deps`: Check if dependencies are installed
-- `make lint`: Lint code using clj-kondo
-- `make format`: Format code using cljfmt
-- `make splint`: Run splint static code analysis
-- `make test`: Run the hermetic unit tests
-- `make smoke`: Run the smoke/integration tests against an ephemeral Oxigraph endpoint (requires Docker)
-- `make demo` / `make demo-down`: Start / stop a local Metabase with the built driver (see below)
-- `make e2e`: Run the Metabase API tests against that environment, then stop it
-- `make coverage`: Run the unit tests with coverage analysis
-- `make docker-build`: Build docker image
-- `make docker-run`: Run docker image
-- `make docker-stop`: Stop docker image
-- `make docker-clean`: Clean old container
-- `make docker-build-driver`: Build driver with docker
-- `make help`: Display this help
+- `make docker-build-driver`: build the jar inside Docker, without a local JDK or Clojure
+- `make docker-build`: build a Metabase image with the driver in `/plugins/`, the same image the CI publishes to `ghcr.io`
+- `make test`, `make lint`, `make smoke`, `make e2e`: the checks the CI runs; `make help` lists the rest
 
 ## :test_tube: Try It Locally
 
@@ -660,28 +653,15 @@ Open <http://localhost:3000> and log in as `admin@example.org` / `Sparql-demo-20
 
 Requires Docker (Compose v2), curl and python3. The login and database ids are written to `target/demo/env.json` for scripts and tests. `make e2e` runs the Metabase API tests (`metabase_api_test.clj`) against this environment.
 
-## Run with debug logs
+## :bug: Run With Debug Logs
 
-To troubleshoot connection or query issues, run Metabase with debug logging:
+To see every SPARQL query the driver sends, plus sync and type-conversion details, run a `metabase.jar` from the repository root with the bundled `log4j2.xml`:
 
 ```bash
 java --add-opens java.base/java.nio=ALL-UNNAMED -Dlog4j.configurationFile=file:./log4j2.xml -jar metabase.jar
 ```
 
-**Requirements:**
-
-- Java 21 installed
-- Place `metabase.jar` in the project root folder
-- The `log4j2.xml` file is already configured for SPARQL driver debugging
-
-**What you'll see:**
-
-- SPARQL query execution details
-- Connection attempts and errors
-- Data type conversion processes
-- Metadata sync operations
-
-## :handshake: Contributing
+## :wave: Contributing
 
 Found a bug? Open an issue. Want to contribute code? Read [CONTRIBUTING.md](CONTRIBUTING.md) first — it covers PR scope and size, branching, the pre-PR checklist, and what is not accepted in contributor PRs. Small, focused PRs are reviewed quickly.
 
