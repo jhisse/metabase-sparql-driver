@@ -531,6 +531,11 @@
   [alias field-name]
   (sanitize-var-name (str alias "__" (or field-name "f"))))
 
+(defn- join-subject-var
+  "The SPARQL var name of a joined entity's subject column: `<alias>_subject`."
+  [alias]
+  (sanitize-var-name (str alias "_subject")))
+
 (defn- ensure-triple-for-field
   "Return the OPTIONAL line that binds `?var-alias` to `property-uri` of
    `?subject`, with the [[lang-filter]] `lang-filter` (or nil) inside it."
@@ -984,7 +989,7 @@
            (and fid alias (get alias->intermediate-var alias))
            (let [inter (get alias->intermediate-var alias)]
              (if (id-field? fid)
-               (update acc :vars conj inter)
+               (update acc :vars conj (join-subject-var alias))
                (let [nm   (:name (field-id->metadata fid))
                      v    (joined-var-name alias (or nm (str "f_" fid)))
                      prop (uri/absolute-uri nm naming)]
@@ -1028,10 +1033,11 @@
 
    Without the path, a row whose FK is missing would leave `?<alias>_subject`
    unbound, and the second OPTIONAL would bind it to every node carrying
-   `<target-prop>`. For chained joins (e.g. Item → Provider → Owner) the FK
-   field lives on a previously joined table; `alias->source-var` resolves each
-   hop's source to that prior join's intermediate var, and the path chains
-   the hops.
+   `<target-prop>`. When the FK is also a column of the row, the join binds
+   that column's var and copies it into `?<alias>_subject` with a BIND. For
+   chained joins (e.g. Item → Provider → Owner) the FK field lives on a
+   previously joined table; `alias->source-var` resolves each hop's source to
+   that prior join's intermediate var, and the path chains the hops.
 
    Aggregation and breakout-only queries project only breakout columns and
    aggregate expressions, with a `GROUP BY` over the breakouts. Throws when a
@@ -1071,10 +1077,24 @@
                                   table-id agg? (count output-tokens) (count breakout) (count order-by) (count joins))
         ;; Joined-field references: `[field-id alias source-field]` that appear anywhere in the stage.
         joined-pairs   (collect-joined-pairs triple-inner)
+        ;; Field-ids read off the row itself (a field can also be reached through a
+        ;; join, e.g. a self-referencing FK's display value).
+        field-ids     (collect-field-ids triple-inner)
+        field-id->var (build-var-aliases field-ids)
         ;; Per-join intermediate var: ?<alias>_subject — binds the joined entity URI.
+        ;; A join whose FK is a column of this table reuses that column's var, so
+        ;; a multi-valued FK does not pair every value with every display value.
         alias->intermediate-var (into {}
-                                      (for [j joins]
-                                        [(:alias j) (sanitize-var-name (str (:alias j) "_subject"))]))
+                                      (for [j joins
+                                            :let [alias  (:alias j)
+                                                  fk-ref (condition->fk-ref (:condition j) alias)
+                                                  fk-id  (or (:fk-field-id j) (field-token->id fk-ref))
+                                                  fk-var (when (and fk-id
+                                                                    (not (field-token->join-alias fk-ref))
+                                                                    (not (id-field? fk-id))
+                                                                    (contains? #{nil table-id} (:table-id (field-id->metadata fk-id))))
+                                                           (get field-id->var fk-id))]]
+                                        [alias (or fk-var (join-subject-var alias))]))
         ;; FK property to reach the joined entity. Implicit joins carry `:fk-field-id`;
         ;; explicit joins only have a `:condition`, so fall back to that.
         alias->fk-prop (into {}
@@ -1167,7 +1187,7 @@
                                (for [[fid alias :as k] joined-keys]
                                  [k
                                   (if (id-field? fid)
-                                    (or (:var (pair->hop k)) (get alias->intermediate-var alias))
+                                    (or (:var (pair->hop k)) (join-subject-var alias))
                                     (joined-var-name alias
                                                      (str (some-> (pair->hop k) :name (str "__"))
                                                           (or (:name (field-id->metadata fid))
@@ -1185,16 +1205,12 @@
             (throw (ex-info (format "The SPARQL driver cannot follow %s: it is not a foreign key."
                                     (let [meta (field-id->metadata sf)] (or (:display-name meta) (:name meta) sf)))
                             {:type driver-api/qp.error-type.unsupported-feature})))
-        ;; Field-ids read off the row itself (a field can also be reached through a
-        ;; join, e.g. a self-referencing FK's display value).
-        field-ids     (collect-field-ids triple-inner)
         field-id->prop (into {}
                              (for [fid field-ids
                                    :let [nm (:name (field-id->metadata fid))]
                                    :when (and nm (not (id-field? fid)))]
                                [fid (uri/absolute-uri nm naming)]))
-        field-id->var  (build-var-aliases field-ids)
-        token->var     (fn [tok] (var-for-token tok field-id->var pair->target-var))
+        token->var    (fn [tok] (var-for-token tok field-id->var pair->target-var))
         ;; With a Default Language, `rdf:langString` columns only take values in
         ;; that language (or untagged), filtered inside their OPTIONAL.
         lang           (let [l (database-default-language)] (when-not (str/blank? l) l))
@@ -1274,6 +1290,7 @@
                                                           (vals field-id->var)
                                                           (vals pair->target-var)
                                                           (vals alias->intermediate-var)
+                                                          (map join-subject-var (keys alias->intermediate-var))
                                                           (keep :var (vals pair->hop))
                                                           (vals (:aliases bucketed))
                                                           (map :var agg-projections))))
@@ -1326,6 +1343,14 @@
                       agg?       (vec (concat breakout-vars (keep :var agg-projections)))
                       reconciled (vec (:vars reconciled))
                       :else      (vec (concat ["subject"] direct-select-vars joined-select-vars expr-select-vars)))
+        ;; A shared FK var is copied into the joined subject column wherever that
+        ;; column is read, so SELECT never names one var twice.
+        subject-binds (for [[alias inter] alias->intermediate-var
+                            :let [v (join-subject-var alias)]
+                            :when (and (not= inter v)
+                                       (or (some #{v} result-vars)
+                                           (some (fn [[fid a]] (and (= alias a) (id-field? fid))) joined-pairs)))]
+                        (format "  BIND(?%s AS ?%s)" inter v))
         select-part (if agg?
                       (str "SELECT "
                            (str/join " " (concat (map #(str "?" %) breakout-vars)
@@ -1342,9 +1367,12 @@
                                  join-fk-triples
                                  join-target-triples
                                  (or (:triples reconciled) [])
+                                 subject-binds
                                  expr-bind-lines
                                  (:binds bucketed)
                                  filters)
+                         ;; A join sharing a FK column's var repeats that column's OPTIONAL.
+                         distinct
                          (str/join "\n"))
         where-part  (str "WHERE {\n" where-body "\n}")
         query       (str (str/trim select-part) "\n"
