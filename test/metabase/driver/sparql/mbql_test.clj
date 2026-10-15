@@ -605,7 +605,27 @@
         (is (str/includes? sparql
                            (str "OPTIONAL { ?subject <" base "geboorteplaats> ?Plaats_subject . }")))
         (is (str/includes? sparql
-                           (str "OPTIONAL { ?subject <" base "geboorteplaats> ?Plaats_subject . ?Plaats_subject <" base "label> ?Plaats__label . }")))))))
+                           (str "OPTIONAL { ?subject <" base "geboorteplaats> ?Plaats_subject . ?Plaats_subject <" base "label> ?Plaats__label . }")))))
+    (testing "a projected FK column shares its var with the join, so a multi-valued FK is not squared"
+      (let [{:keys [sparql vars]}
+            (compile-stage* {:source-table 100
+                             :fields [[:field 4 nil]
+                                      [:field 10 {:join-alias "Plaats"}]]
+                             :joins [{:alias "Plaats" :fk-field-id 4}]})]
+        (is (= ["subject" "geboorteplaats" "Plaats__label"] vars))
+        (is (str/includes? sparql
+                           (str "OPTIONAL { ?subject <" base "geboorteplaats> ?geboorteplaats . ?geboorteplaats <" base "label> ?Plaats__label . }")))
+        (is (not (str/includes? sparql "Plaats_subject")))
+        (testing ", and its OPTIONAL is emitted once"
+          (is (= 1 (count (re-seq #"OPTIONAL \{ \?subject <[^>]+geboorteplaats> \?geboorteplaats \. \}" sparql)))))))
+    (testing "grouping by a FK and its display value shares the FK var"
+      (let [{:keys [sparql]}
+            (compile-stage* {:source-table 100
+                             :aggregation [[:count]]
+                             :breakout [[:field 10 {:join-alias "Plaats"}] [:field 4 nil]]
+                             :joins [{:alias "Plaats" :fk-field-id 4}]})]
+        (is (str/includes? sparql (str "?geboorteplaats <" base "label> ?Plaats__label .")))
+        (is (str/includes? sparql "GROUP BY ?Plaats__label ?geboorteplaats"))))))
 
 (deftest compile-base-stage-field-also-joined-test
   (testing "a field that is also the display value of a self-referencing FK keeps its own variable"
@@ -656,6 +676,34 @@
                                              "?C_subject <" base "stad> ?C__stad_subject . }"))))
             (is (str/includes? sparql (str "?C_subject <" base "stad> ?C__stad_subject . "
                                            "?C__stad_subject <" base "label> ?C__stad__label ."))))
+          (let [join  [{:alias     "C"
+                        :condition [:= [:field 4 nil] [:field 1 {:join-alias "C"}]]}]
+                stage (fn [fields] {:source-table 100 :fields fields :joins join})]
+            (testing "an explicit join on a projected FK column shares its var"
+              (let [{:keys [sparql vars]}
+                    (compile-base-stage* (stage [[:field 1 nil] [:field 4 nil] [:field 10 {:join-alias "C"}]])
+                                         [{:id 1} {:id 4} {:id 10 :lib/join-alias "C"}])]
+                (is (= ["subject" "werkgever" "C__label"] vars))
+                (is (str/includes? sparql (str "?subject <" base "werkgever> ?werkgever . "
+                                               "?werkgever <" base "label> ?C__label .")))))
+            (testing "and copies it into the joined subject column, so SELECT names each var once"
+              (let [{:keys [sparql vars]}
+                    (compile-base-stage* (stage [[:field 1 nil] [:field 4 nil]
+                                                 [:field 1 {:join-alias "C"}] [:field 10 {:join-alias "C"}]])
+                                         [{:id 1} {:id 4} {:id 1 :lib/join-alias "C"} {:id 10 :lib/join-alias "C"}])]
+                (is (= ["subject" "werkgever" "C_subject" "C__label"] vars))
+                (is (str/includes? sparql "BIND(?werkgever AS ?C_subject)"))
+                (is (str/includes? sparql (str "?werkgever <" base "label> ?C__label .")))))
+            (testing "a filter and a custom column on the joined subject read the copy, bound first"
+              (let [{:keys [sparql]}
+                    (compile-stage* (assoc (stage [[:field 1 nil] [:field 4 nil] [:field 10 {:join-alias "C"}]])
+                                           :filter [:= [:field 1 {:join-alias "C"}] "https://example.org/acme"]
+                                           :expressions {"s" [:concat [:field 1 {:join-alias "C"}] "!"]}))
+                    bind (str/index-of sparql "BIND(?werkgever AS ?C_subject)")]
+                (is bind sparql)
+                (is (< bind (str/index-of sparql "BIND(CONCAT(STR(?C_subject)")))
+                (is (re-find #"FILTER \(.*\?C_subject" sparql))
+                (is (< bind (str/index-of sparql "FILTER"))))))
           (testing "a column reached through a field that is not a FK fails clearly"
             (is (thrown-with-msg? clojure.lang.ExceptionInfo #"cannot follow werkgever: it is not a foreign key"
                                   (compile-stage* {:source-table 100
