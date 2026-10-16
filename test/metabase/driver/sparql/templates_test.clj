@@ -2,7 +2,18 @@
   "Unit tests for the SPARQL query templates."
   (:require [clojure.string :as str]
             [clojure.test :refer :all]
-            [metabase.driver.sparql.templates :as templates]))
+            [metabase.driver.sparql.templates :as templates]
+            [metabase.driver.sparql.test-util :as tu]))
+
+(deftest connection-test-query-is-a-select-test
+  (testing "the connection test is a SELECT, not ASK, which some endpoints reject"
+    (let [q (templates/connection-test-query)]
+      (is (str/starts-with? q "SELECT"))
+      (is (nil? (tu/sparql-syntax-error q)) q)))
+  (testing "the fallback is the ASK test of earlier versions"
+    (let [q (templates/connection-test-fallback-query)]
+      (is (str/starts-with? q "ASK"))
+      (is (nil? (tu/sparql-syntax-error q)) q))))
 
 (deftest class-properties-query-iri-projection-test
   (let [uri "https://example.org/Person"]

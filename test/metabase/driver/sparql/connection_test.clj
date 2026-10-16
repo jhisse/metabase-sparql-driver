@@ -38,4 +38,27 @@
   (testing "a failed probe throws with the endpoint's reason, for the connection form to show"
     (with-redefs [execute/execute-sparql-query (fn [_ _ _] [false "SPARQL endpoint returned status: 401" :db])]
       (is (thrown-with-msg? Exception #"Connection failed: SPARQL endpoint returned status: 401"
-                            (connection/can-connect? "http://example.org/sparql" {}))))))
+                            (connection/can-connect? "http://example.org/sparql" {})))))
+  (let [calls   (atom [])
+        connect (fn [select-result ask-result]
+                  (reset! calls [])
+                  (with-redefs [execute/execute-sparql-query
+                                (fn [_ query _]
+                                  (swap! calls conj (if (re-find #"^ASK" query) :ask :select))
+                                  (if (re-find #"^ASK" query) ask-result select-result))]
+                    (connection/can-connect? "http://example.org/sparql" {})))]
+    (testing "a successful SELECT does not try ASK"
+      (is (true? (connect [true {:results {:bindings [{}]}}] nil)))
+      (is (= [:select] @calls)))
+    (testing "an endpoint that rejects the SELECT connects through the ASK fallback"
+      (is (true? (connect [false "SPARQL endpoint returned status: 500" :db] [true {:boolean true}])))
+      (is (= [:select :ask] @calls)))
+    (testing "an unreachable endpoint fails at once, without the ASK fallback"
+      (is (thrown-with-msg? Exception #"Connection failed: Connection refused"
+                            (connect [false "Connection refused" :transport] [true {:boolean true}])))
+      (is (= [:select] @calls)))
+    (testing "when both fail, the SELECT error is thrown"
+      (is (thrown-with-msg? Exception #"Connection failed: SPARQL endpoint returned status: 400"
+                            (connect [false "SPARQL endpoint returned status: 400" :query]
+                                     [false "SPARQL endpoint returned status: 500" :db])))
+      (is (= [:select :ask] @calls)))))
