@@ -11,17 +11,23 @@
   "Return true when `endpoint` answers the connection test query, or throw
    \"Connection failed: …\" with the endpoint's error.
 
+   When the endpoint rejects the SELECT test, the ASK fallback is tried once,
+   but not after a network failure.
+
    `options` takes `:default-graph`, `:insecure?` and `:auth` (from
    `[[auth/http-options]]`). The request uses the probe timeout of
    [[execute/probe-options]]."
   [endpoint options]
   (log/info "Trying to connect to SPARQL endpoint:" (uri/redact-userinfo endpoint))
-  (let [[success result] (execute/execute-sparql-query endpoint
-                                                       (templates/connection-test-query)
-                                                       (execute/probe-options options))]
-    (if success
-      true
-      (throw (Exception. (str "Connection failed: " result))))))
+  (let [options               (execute/probe-options options)
+        run                   #(execute/execute-sparql-query endpoint % options)
+        [success result kind] (run (templates/connection-test-query))]
+    (when-not (or success
+                  ;; Not after a network failure: the endpoint would time out twice.
+                  (and (not= :transport kind)
+                       (first (run (templates/connection-test-fallback-query)))))
+      (throw (Exception. (str "Connection failed: " result))))
+    true))
 
 (defn dbms-version
   "Return the SPARQL version the endpoint of `database` supports, as

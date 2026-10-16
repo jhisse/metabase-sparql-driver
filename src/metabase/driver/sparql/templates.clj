@@ -5,8 +5,15 @@
   (:require [metabase.driver.sparql.uri :as uri]))
 
 (defn connection-test-query
-  "Return an ASK query with an empty pattern. Any endpoint that can answer
-  queries returns true, so a successful run means it is reachable."
+  "Return a SELECT with an empty pattern; a successful run means the endpoint
+  is reachable. Not ASK, which some endpoints reject (data.nobelprize.org
+  answers every ASK with a 500)."
+  []
+  "SELECT * WHERE { } LIMIT 1")
+
+(defn connection-test-fallback-query
+  "Return the ASK the connection test used before, for endpoints that reject
+  [[connection-test-query]]."
   []
   "ASK { }")
 
