@@ -6,7 +6,10 @@
             [metabase.driver.sparql.database :as database]
             [metabase.driver.sparql.dimensions :as dimensions]
             [metabase.driver.sparql.shacl :as shacl]
-            [metabase.models.humanization :as humanization]
+            [metabase.events.core :as events]
+            [metabase.warehouse-schema.humanization :as humanization]
+            ;; registers the :humanization-strategy setting humanization reads
+            [metabase.warehouse-schema.settings]
             [toucan2.core :as t2]))
 
 (def ^:private graph "https://example.org/")
@@ -133,3 +136,7 @@
         (is (nil? (readable urn (humanization/name->human-readable-name urn))))))
     (testing "a short field name is left to sync"
       (is (nil? (readable "foundedOn" "Founded On"))))))
+
+(deftest sync-end-hook-is-registered-test
+  (testing "the post-sync hook listens to :event/sync-metadata-end in the events hierarchy"
+    (is (events/isa? :event/sync-metadata-end ::dimensions/sparql-sync-end))))

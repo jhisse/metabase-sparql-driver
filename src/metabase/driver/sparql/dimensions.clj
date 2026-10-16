@@ -21,7 +21,7 @@
    [metabase.driver.sparql.database :as database]
    [metabase.driver.sparql.uri :as uri]
    [metabase.events.core :as events]
-   [metabase.models.humanization :as humanization]
+   [metabase.warehouse-schema.humanization :as humanization]
    [metabase.util.log :as log]
    [methodical.core :as methodical]
    [toucan2.core :as t2]))
@@ -134,8 +134,8 @@
     (t2/update! :model/Field (:id field) {:display_name display-name})))
 
 ;; If the driver API ever gains a post-sync hook, this should migrate there.
-(derive ::sparql-sync-end :metabase/event)
-(derive :event/sync-metadata-end ::sparql-sync-end)
+(events/derive! ::sparql-sync-end :metabase/event)
+(events/derive! :event/sync-metadata-end ::sparql-sync-end)
 
 (defn- sync-end!
   "Run the post-sync steps for the database `database-id` when it is a SPARQL

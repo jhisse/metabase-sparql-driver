@@ -20,27 +20,26 @@
   (:require
    [clojure.string :as str]
    [metabase.driver-api.core :as driver-api]
-   [metabase.driver.common.parameters :as params]
-   ^{:clj-kondo/ignore [:deprecated-namespace]} [metabase.driver.common.parameters.parse :as params.parse]
-   [metabase.driver.common.parameters.values :as params.values]
    [metabase.driver.sparql.uri :as uri]
+   [metabase.lib.core :as lib]
+   [metabase.query-processor.parameters.values :as params.values]
    [metabase.util.log :as log]))
 
 (defn- unsupported-kind
-  "Return the user-facing name of a parameter value record we cannot render in
+  "Return the user-facing name of a parsed parameter value we cannot render in
    SPARQL, or nil: Field Filters (SQL-shaped BETWEEN/IN clauses), referenced
    cards, snippets, and referenced tables."
   [v]
   (cond
-    (params/FieldFilter? v)            "Field Filter"
-    (params/ReferencedCardQuery? v)    "saved question"
-    (params/ReferencedQuerySnippet? v) "snippet"
-    (params/ReferencedTableQuery? v)   "table"))
+    (lib/parsed-field-filter-param? v)            "Field Filter"
+    (lib/parsed-referenced-card-query-param? v)    "saved question"
+    (lib/parsed-referenced-query-snippet-param? v) "snippet"
+    (lib/parsed-referenced-table-query-param? v)   "table"))
 
 (defn- record-value
-  "Return the underlying scalar(s) of a Metabase parameter value record, a
+  "Return the underlying scalar(s) of a parsed Metabase parameter value, a
    date range as the string `\"start/end\"`, or `v` unchanged when it isn't a
-   record we recognize. Throws `unsupported-feature` for the kinds
+   kind we recognize. Throws `unsupported-feature` for the kinds
    [[unsupported-kind]] names."
   [v]
   (cond
@@ -48,13 +47,13 @@
     (throw (ex-info (format "The SPARQL driver does not support %s variables; use a Text, Number or Date variable."
                             (unsupported-kind v))
                     {:type driver-api/qp.error-type.unsupported-feature}))
-    ;; DateRange / DateTimeRange — render as ISO "start/end".
-    (or (instance? metabase.driver.common.parameters.DateRange v)
-        (instance? metabase.driver.common.parameters.DateTimeRange v))
+    ;; date range / date-time range — render as ISO "start/end".
+    (or (lib/parsed-date-range-param? v)
+        (lib/parsed-date-time-range-param? v))
     (str (:start v) "/" (:end v))
-    ;; TemporalUnit wraps a raw scalar in `:value`.
+    ;; A temporal unit wraps a raw scalar in `:value`.
     ;; Plain map shape `{:type … :value …}` occasionally surfaces.
-    (or (params/TemporalUnit? v)
+    (or (lib/parsed-temporal-unit-param? v)
         (and (map? v) (contains? v :value)))
     (:value v)
     :else                                v))
@@ -76,8 +75,8 @@
   [v]
   (let [v (record-value v)]
     (cond
-      (instance? metabase.driver.common.parameters.Date v) (date-literal (:s v))
-      (or (nil? v) (= params/no-value v)) nil
+      (lib/parsed-date-param? v) (date-literal (:s v))
+      (or (nil? v) (= lib/parsed-param-no-value-placeholder v)) nil
       (sequential? v)       (let [terms (keep ->sparql-term v)]
                               (when (seq terms)
                                 (str/join ", " terms)))
@@ -117,34 +116,34 @@
    (fn [[acc missing] [before token after]]
      (cond
        (string? token)         [(conj acc token) missing]
-       (params/Param? token)   (if-let [term (->sparql-term (get param->value (:k token)))]
-                                 (if (and (re-find #"[\"']" term) (quoted? before after))
-                                   (throw (ex-info (format "The {{%s}} variable is written inside quotes. Remove them: the driver quotes text values itself."
-                                                           (:k token))
-                                                   {:type driver-api/qp.error-type.invalid-query}))
-                                   [(conj acc term) missing])
-                                 [(conj acc (str "{{" (:k token) "}}")) (conj missing (:k token))])
-       (params/Optional? token) (let [[opt opt-missing] (substitute param->value (:args token))]
-                                  [(cond-> acc (empty? opt-missing) (into opt)) missing])
+       (lib/parsed-param? token) (if-let [term (->sparql-term (get param->value (:k token)))]
+                                   (if (and (re-find #"[\"']" term) (quoted? before after))
+                                     (throw (ex-info (format "The {{%s}} variable is written inside quotes. Remove them: the driver quotes text values itself."
+                                                             (:k token))
+                                                     {:type driver-api/qp.error-type.invalid-query}))
+                                     [(conj acc term) missing])
+                                   [(conj acc (str "{{" (:k token) "}}")) (conj missing (:k token))])
+       (lib/parsed-optional-param? token) (let [[opt opt-missing] (substitute param->value (:args token))]
+                                            [(cond-> acc (empty? opt-missing) (into opt)) missing])
        :else                   (throw (ex-info (str "The SPARQL driver cannot substitute " (pr-str token))
                                                {:type driver-api/qp.error-type.unsupported-feature}))))
    [[] []]
    (partition 3 1 (concat [nil] tokens [nil]))))
 
 (defn substitute-native-parameters
-  "Return `inner-query` with the `{{tag}}` placeholders in its `:query`
-   replaced by their parameter values, and `[[ … ]]` clauses dropped when one
-   of their parameters has no value. Any other tag without a value stays as
-   written, with a logged warning. Throws when a tag with a value is written
-   inside quotes."
-  [_driver inner-query]
-  #_{:clj-kondo/ignore [:unresolved-var]}
-  (let [param->value      (params.values/query->params-map inner-query)
+  "Return `query` with the `{{tag}}` placeholders in the native SPARQL of stage
+   `stage-number` replaced by their parameter values, and `[[ … ]]` clauses
+   dropped when one of their parameters has no value. Any other tag without a
+   value stays as written, with a logged warning. Throws when a tag with a value
+   is written inside quotes."
+  [_driver query stage-number]
+  (let [stage           (lib/query-stage query stage-number)
+        param->value    (params.values/stage->params-map query stage)
         ;; false: SPARQL comments are `#`, which the parser does not know;
         ;; a tag in one is left as written when it has no value.
-        [parts missing]   (substitute param->value (params.parse/parse (:query inner-query) false))]
+        [parts missing] (substitute param->value (lib/parse-parameters (:native stage) false))]
     (when (seq missing)
       (log/warnf "[sparql.params] No value for %s; left as written" (vec (distinct missing))))
     (let [substituted (str/join parts)]
       (log/debugf "[sparql.params] Substituted query: %s" substituted)
-      (assoc inner-query :query substituted))))
+      (lib/update-query-stage query stage-number assoc :native substituted))))

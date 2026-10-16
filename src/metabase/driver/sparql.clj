@@ -66,7 +66,6 @@
                               :connection-impersonation-requires-role false
                               :native-requires-specified-collection false
                               :index-info false
-                              :describe-fks true ;; populated from SHACL when `metadata-sync-strategy = shacl`, empty otherwise
                               :describe-fields false ;; Can be slow in big datasets
                               :describe-indexes false
                               :upload-with-auto-pk false
@@ -150,11 +149,11 @@
   (log/debugf "[describe-fks] - Discovering FKs for database: %s" (:name database))
   (database/fks database))
 
-;; Implements substitute-native-parameters multimethod to handle native query parameters.
-(defmethod driver/substitute-native-parameters :sparql
-  [_driver inner-query]
-  (log/debugf "[substitute-native-parameters] - Substituting native parameters. Query: %s" (:query inner-query))
-  (parameters/substitute-native-parameters _driver inner-query))
+;; Implements substitute-native-parameters-in-stage-method to handle native query parameters.
+(defmethod driver/substitute-native-parameters-in-stage-method :sparql
+  [driver query stage-number]
+  (log/debugf "[substitute-native-parameters] - Substituting native parameters in stage %d" stage-number)
+  (parameters/substitute-native-parameters driver query stage-number))
 
 ;; Implements mbql->native multimethod to convert MBQL queries to SPARQL queries.
 (defmethod driver/mbql->native :sparql

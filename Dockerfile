@@ -1,4 +1,4 @@
-FROM --platform=$BUILDPLATFORM clojure:temurin-21-tools-deps-trixie-slim AS builder-base
+FROM --platform=$BUILDPLATFORM clojure:temurin-25-tools-deps-trixie-slim AS builder-base
 
 WORKDIR /app
 
@@ -14,6 +14,6 @@ FROM builder-base AS builder
 
 RUN make build
 
-FROM metabase/metabase:v0.61.2.x
+FROM metabase/metabase:v0.64.1.x
 
 COPY --from=builder /app/target/sparql.metabase-driver.jar /plugins/

@@ -15,7 +15,7 @@ services:
   metabase:
     profiles: ["demo"]
     # Same Metabase as the Dockerfile and the metabase/ submodule.
-    image: metabase/metabase:v0.61.2.x
+    image: metabase/metabase:v0.64.1.x
     depends_on: [oxigraph]
     environment:
       MB_ANON_TRACKING_ENABLED: "false"
