@@ -12,7 +12,6 @@
    compiler handles every clause the feature gates (see AGENTS.md)."
   #{:basic-aggregations
     :case-sensitivity-string-filter-options
-    :describe-fks
     :expressions
     :expressions/float
     :expressions/integer

@@ -45,7 +45,7 @@ Run the full checklist (see also the PR template):
 ```bash
 make lint
 make splint
-make test    # requires Java 21+ and the metabase/ submodule (make init-metabase)
+make test    # requires Java 25+ and the metabase/ submodule (make init-metabase)
 make smoke   # integration tests against an ephemeral Oxigraph endpoint (requires Docker, curl, python3)
 make e2e     # optional: tests through a real Metabase (make build first; requires Docker, curl, python3)
 make format  # if you changed Clojure sources

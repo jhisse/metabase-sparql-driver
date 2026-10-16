@@ -206,11 +206,14 @@ Query-time mapping (every strategy). SHACL sync reads `sh:datatype` instead — 
 
 | Driver Version       | Metabase Version  | Notes                                            |
 |:---------------------|:------------------|:-------------------------------------------------|
-| **v0.0.11+**         | v0.61.x           | Built and tested against Metabase v0.61.2.       |
+| **v0.0.20+**         | v0.64.x           | Built and tested against Metabase v0.64.1.       |
+| **v0.0.11 – v0.0.19** | v0.61.x          | Built and tested against Metabase v0.61.2.       |
 | **v0.0.10**          | v0.56.3 — v0.56.x | Requires `describe-database*` (added in 0.56.3). |
 | **v0.0.1 – v0.0.9**  | < v0.56.3         | Uses legacy `describe-database`.                 |
 
 > [!IMPORTANT]
+> `v0.0.20` needs Metabase v0.64 (Java 25) and does not load on v0.61; stay on `v0.0.19` until you upgrade Metabase.
+>
 > Upgrading from `v0.0.10` or earlier renames the synthetic primary-key column from `id` to `subject` and shortens class/property names whose URI starts with the **Default Graph** URI. After dropping the new jar in, **re-sync each database** so the renamed metadata lands cleanly.
 
 ## :wrench: Configuration
@@ -603,7 +606,7 @@ float(regexextract([code], "[0-9]+"))
 
 - Git
 - Clojure CLI tools
-- Java Development Kit (JDK) 21
+- Java Development Kit (JDK) 25
 
 Run `make check-deps` to check if dependencies are installed.
 

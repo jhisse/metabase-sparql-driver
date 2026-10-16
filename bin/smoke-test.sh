@@ -5,7 +5,7 @@
 # and always tear the container down.
 #
 # Invoked by `make smoke`. Requires Docker (with Compose v2), curl, python3 and a
-# Java 21+ `clojure` on PATH. The metabase/ submodule must be initialized (make init-metabase).
+# Java 25+ `clojure` on PATH. The metabase/ submodule must be initialized (make init-metabase).
 set -euo pipefail
 
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"

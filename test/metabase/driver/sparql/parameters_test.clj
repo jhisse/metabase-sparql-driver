@@ -2,12 +2,18 @@
   "Unit tests for SPARQL parameter substitution"
   (:require [clojure.string :as str]
             [clojure.test :refer :all]
-            [metabase.driver.common.parameters :as params]
             [metabase.driver.sparql.parameters :as parameters]
-            [metabase.driver.sparql.test-util :as tu]))
+            [metabase.driver.sparql.test-util :as tu]
+            [metabase.lib.core :as lib]))
 
-(defn- subst [inner-query]
-  (:query (parameters/substitute-native-parameters :sparql inner-query)))
+(defn- subst [{:keys [query template-tags parameters]}]
+  ;; The QP hands the driver a native stage that carries its own :parameters.
+  (let [q (lib/query tu/provider {:database   1
+                                  :type       :native
+                                  :native     {:query query :template-tags (or template-tags {})}
+                                  :parameters parameters})
+        q (lib/update-query-stage q 0 assoc :parameters (:parameters q))]
+    (:native (lib/query-stage (parameters/substitute-native-parameters :sparql q 0) 0))))
 
 (deftest no-parameters
   (testing "Query without any template tags is returned unchanged"
@@ -144,7 +150,7 @@
 (deftest field-filter-is-a-clear-error
   (testing "a Field Filter fails with a clear message instead of a generic endpoint 400"
     (is (thrown-with-msg? clojure.lang.ExceptionInfo #"does not support Field Filter variables"
-                          (#'parameters/->sparql-term (params/map->FieldFilter {:field {} :value "x"}))))))
+                          (#'parameters/->sparql-term {:lib/type :metabase.lib.parameters.parse.types/field-filter :field {} :value "x"})))))
 
 (deftest tag-inside-quotes-is-an-error
   (letfn [(subst-tags [q values]
@@ -182,3 +188,23 @@
       (let [out (subst-tags "SELECT * WHERE { ?s ?p ?o FILTER(?o IN ({{x}},{{y}})) }" {"x" "a" "y" "b"})]
         (is (= "SELECT * WHERE { ?s ?p ?o FILTER(?o IN (\"a\",\"b\")) }" out))
         (is (nil? (tu/sparql-syntax-error out)) out)))))
+
+(deftest query-processor-substitutes-parameters
+  (testing "the QP's parameter middleware reaches the driver's substitute-native-parameters-in-stage-method"
+    (let [compile (fn [params]
+                    (:query (tu/compile-query
+                             (lib/query tu/provider
+                                        {:database   1
+                                         :type       :native
+                                         :native     {:query         "SELECT * WHERE { ?s ?p ?o [[FILTER(?o = {{n}})]] }"
+                                                      :template-tags {"n" {:name "n" :display-name "N" :type :text
+                                                                           :id "00000000-0000-4000-8000-000000000001"}}}
+                                         :parameters params}))))]
+      (testing "with a value"
+        (let [out (compile [{:type :category :target [:variable [:template-tag "n"]] :value "Alice"}])]
+          (is (= "SELECT * WHERE { ?s ?p ?o FILTER(?o = \"Alice\") }" out))
+          (is (nil? (tu/sparql-syntax-error out)) out)))
+      (testing "without a value, the optional clause is dropped"
+        (let [out (compile [])]
+          (is (= "SELECT * WHERE { ?s ?p ?o  }" out))
+          (is (nil? (tu/sparql-syntax-error out)) out))))))
