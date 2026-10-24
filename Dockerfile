@@ -1,4 +1,4 @@
-FROM --platform=$BUILDPLATFORM clojure:temurin-25-tools-deps-trixie-slim AS builder-base
+FROM --platform=$BUILDPLATFORM clojure:temurin-27-tools-deps-trixie-slim AS builder-base
 
 WORKDIR /app
 
