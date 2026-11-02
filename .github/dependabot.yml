@@ -10,3 +10,10 @@ updates:
     schedule:
       interval: weekly
     open-pull-requests-limit: 2
+    ignore:
+      # The Metabase base image must match the metabase/ submodule the driver
+      # is built and tested against; both move together in a manual PR.
+      - dependency-name: metabase/metabase
+      # The builder's JDK must match the java-version in CI. The floating
+      # temurin-25 tag already picks up patch releases on each build.
+      - dependency-name: clojure
