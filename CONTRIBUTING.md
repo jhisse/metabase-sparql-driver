@@ -5,6 +5,7 @@ Thanks for your interest in improving the SPARQL driver. To keep the project rev
 ## Pull requests
 
 - **Always branch from up-to-date `main`**: `git fetch origin && git checkout -b feat/my-change origin/main`. PRs based on stale branches, or carrying commits already merged to `main`, will be closed.
+- **Name the branch `<type>/<short-description>`** in kebab-case, where `<type>` is the Conventional Commits type of the change: `feat`, `fix`, `docs`, `ci`, `build`, `chore`, `refactor` or `test` (e.g. `fix/regexextract-capture-group`).
 - **One feature or fix per PR**, ideally under ~400 changed lines. Large multi-feature PRs will be closed with a request to split.
 - For larger features (new sync strategies, type detection heuristics, geospatial support, query optimizations), **discuss the design with the maintainer first** before implementing.
 - **PR descriptions must describe exactly what the diff contains** — nothing more, nothing less.

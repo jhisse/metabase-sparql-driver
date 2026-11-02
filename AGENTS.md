@@ -3,7 +3,7 @@
 All contribution rules live in [CONTRIBUTING.md](CONTRIBUTING.md).
 Read it and follow it strictly before making any change. In particular:
 
-- Always create your branch from up-to-date `main`.
+- Always create your branch from up-to-date `main`, named `<type>/<short-description>` (see CONTRIBUTING.md).
 - One feature per PR, roughly under 400 changed lines.
 - Never bump the version in `resources/metabase-plugin.yaml`.
 
