@@ -307,22 +307,40 @@
   ^ZonedDateTime []
   (ZonedDateTime/now (query-zone)))
 
-(defn- temporal-clause?
+(defn- interval-clause?
   [x]
-  (and (vector? x) (contains? #{:absolute-datetime :relative-datetime} (first x))))
+  (and (vector? x) (= :interval (first x))))
+
+(defn- temporal-clause?
+  "True when `x` is a date the compiler resolves to a constant: an
+   `:absolute-datetime`, a `:relative-datetime`, or one of those shifted by
+   `:interval`s (`[:+ [:relative-datetime -30 :day] [:interval -1 :year]]`,
+   which a relative filter \"starting from\" desugars to)."
+  [x]
+  (and (vector? x)
+       (or (contains? #{:absolute-datetime :relative-datetime} (first x))
+           (and (contains? #{:+ :-} (first x))
+                (temporal-clause? (second x))
+                (seq (nnext x))
+                (every? interval-clause? (nnext x))))))
 
 (defn- temporal-clause->value
   "Resolve `[:absolute-datetime t unit]` / `[:relative-datetime n unit]` to a
    java.time value. A relative datetime is the start of `unit`, `n` units from
    now (the same semantics as the SQL and Mongo drivers); `:current` or a
-   missing unit gives the current time itself, untruncated."
-  [[tag a b]]
+   missing unit gives the current time itself, untruncated. A `:+`/`:-` of
+   one of those and `[:interval n unit]`s adds or subtracts each interval."
+  [[tag a b :as clause]]
   (case tag
     :absolute-datetime (if (string? a) (u.date/parse a) a)
     :relative-datetime (let [now (query-now)]
                          (if (or (= a :current) (contains? #{nil :default} b))
                            now
-                           (u.date/truncate (u.date/add now b a) b)))))
+                           (u.date/truncate (u.date/add now b a) b)))
+    (:+ :-) (reduce (fn [t [_ n unit]]
+                      (u.date/add t unit (if (= tag :-) (- n) n)))
+                    (temporal-clause->value a)
+                    (nnext clause))))
 
 (def ^:private ^DateTimeFormatter xsd-local-datetime-format
   (DateTimeFormatter/ofPattern "uuuu-MM-dd'T'HH:mm:ss"))

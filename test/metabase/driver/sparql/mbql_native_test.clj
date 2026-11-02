@@ -111,6 +111,11 @@
       (let [sparql (->sparql (lib/filter q (lib/< upd "2024-01-01")))]
         (is (str/includes? sparql "TZ(?updated) != \"\""))
         (is (str/includes? sparql (str "?updated < \"2024-01-01T00:00:00\"^^" xsd "dateTime>")))))
+    (testing "a relative range starting from an offset shifts both bounds by it"
+      (let [year   (.getYear (java.time.LocalDate/now java.time.ZoneOffset/UTC))
+            sparql (->sparql (lib/filter q (lib/relative-time-interval born -30 :year -1 :year)))]
+        (is (str/includes? sparql (str "?birthDate >= \"" (- year 31) "-01-01\"^^" xsd "date>")) sparql)
+        (is (str/includes? sparql (str "?birthDate < \"" (dec year) "-01-01\"^^" xsd "date>")) sparql)))
     (testing "relative presets (desugared by the QP) compile for every unit"
       (doseq [unit [:day :week :month :quarter :year]]
         (is (str/includes? (->sparql (lib/filter q (lib/time-interval born -2 unit)))
