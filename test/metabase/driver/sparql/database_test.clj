@@ -350,10 +350,61 @@
                               (database/describe-table :sparql (shacl-db) {:name "Persoon"})))))
     (testing "the shacl strategy without a SHACL URL throws instead of retiring every table"
       (with-redefs [database/has-synced-tables? (constantly true)]
-        (is (thrown-with-msg? clojure.lang.ExceptionInfo #"needs a SHACL URL"
+        (is (thrown-with-msg? clojure.lang.ExceptionInfo #"needs a SHACL document or URL"
                               (database/describe-database :sparql (shacl-db :shacl-url " "))))))
     (testing "the connection test rejects the shacl strategy without a SHACL URL"
-      (is (thrown-with-msg? clojure.lang.ExceptionInfo #"needs a SHACL URL"
+      (is (thrown-with-msg? clojure.lang.ExceptionInfo #"needs a SHACL document or URL"
                             (database/check-sync-settings! (:details (shacl-db :shacl-url "")))))
       (is (nil? (database/check-sync-settings! (:details (shacl-db)))))
       (is (nil? (database/check-sync-settings! {:metadata-sync-strategy "auto"}))))))
+
+(deftest shacl-inline-source-test
+  (let [no-url  (fn [& _] (throw (ex-info "URL path used" {})))
+        no-text (fn [& _] (throw (ex-info "inline path used" {})))]
+    (testing "a pasted document wins over the URL and is parsed under the default language"
+      (let [calls (atom [])]
+        (with-redefs [shacl/metadata           no-url
+                      shacl/metadata-from-text (fn [text lang] (swap! calls conj [text lang]) shapes)]
+          (is (= #{"Persoon" "Plaats" "http://xmlns.com/foaf/0.1/Agent"}
+                 (set (map :name (:tables (database/describe-database
+                                           :sparql (shacl-db :shacl-document "doc"
+                                                             :default-language "nl")))))))
+          (database/describe-database :sparql (shacl-db :shacl-document "doc"))
+          (is (= [["doc" "nl"] ["doc" ""]] @calls)))))
+    (testing "a blank pasted document falls back to the URL"
+      (let [urls (atom [])]
+        (with-redefs [shacl/metadata           (fn [url _ _] (swap! urls conj url) shapes)
+                      shacl/metadata-from-text no-text]
+          (database/describe-database :sparql (shacl-db :shacl-document " \n "))
+          (is (= ["https://example.org/shapes.ttl"] @urls)))))
+    (testing "a pasted document needs no URL: tables and FKs come from it"
+      (with-redefs [shacl/metadata           no-url
+                    shacl/metadata-from-text (fn [& _] shapes)]
+        (is (= 3 (count (:tables (database/describe-database :sparql (shacl-db :shacl-url nil :shacl-document "doc"))))))
+        (is (= #{"Persoon" "http://xmlns.com/foaf/0.1/Agent"}
+               (set (map :fk-table-name (database/fks (shacl-db :shacl-url nil :shacl-document "doc"))))))))
+    (testing "shacl-shapes: no parse outside the shacl strategy, even with a document set"
+      (let [parsed? (atom false)]
+        (with-redefs [shacl/metadata-from-text (fn [& _] (reset! parsed? true) shapes)]
+          (is (nil? (database/shacl-shapes (shacl-db :shacl-url nil
+                                                     :shacl-document "doc"
+                                                     :metadata-sync-strategy "auto"))))
+          (is (false? @parsed?))
+          (is (= shapes (database/shacl-shapes (shacl-db :shacl-url nil :shacl-document "doc")))))))
+    (testing "a malformed inline document throws with a message that names the settings, not a URL"
+      (with-redefs [shacl/metadata-from-text    (fn [& _] (throw (ex-info "Expected '.', found 'a'" {})))
+                    database/has-synced-tables? (constantly true)]
+        (is (thrown-with-msg? clojure.lang.ExceptionInfo #"Failed to parse the SHACL document from the connection settings: Expected"
+                              (database/describe-database :sparql (shacl-db :shacl-url nil :shacl-document "bad"))))
+        (is (empty? (database/fks (shacl-db :shacl-url nil :shacl-document "bad"))))))
+    (testing "the connection test parses a pasted document, never fetches the URL, and rejects blanks everywhere"
+      (with-redefs [shacl/metadata no-url]
+        (is (nil? (database/check-sync-settings!
+                   (:details (shacl-db :shacl-url "" :shacl-document (slurp "test/resources/fixtures/smoke-shapes.ttl"))))))
+        (is (nil? (database/check-sync-settings! (:details (shacl-db))))
+            "a URL is not fetched at connection time")
+        (is (thrown-with-msg? clojure.lang.ExceptionInfo #"Failed to parse the SHACL document from the connection settings"
+                              (database/check-sync-settings! (:details (shacl-db :shacl-url "" :shacl-document "ex:Bad a .")))))
+        (is (thrown-with-msg? clojure.lang.ExceptionInfo #"needs a SHACL document or URL"
+                              (database/check-sync-settings!
+                               (:details (shacl-db :shacl-url "" :shacl-document "  ")))))))))

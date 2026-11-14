@@ -37,11 +37,11 @@
       :body
       json/decode+kw))
 
-(defn- db-id [k] (get-in @env [:databases k]))
+(defn- db-id [k] (if (integer? k) k (get-in @env [:databases k])))
 
 (defn- tables
-  "Synced tables of database `k` (:auto or :shacl), by name, each with its
-  fields by name."
+  "Synced tables of database `k` (:auto, :shacl or a database id), by name,
+  each with its fields by name."
   [k]
   (into {}
         (map (fn [t] [(:name t) (assoc t :fields (into {} (map (juxt :name identity)) (:fields t)))]))
@@ -70,6 +70,35 @@
     (testing "sh:class shapes are saved as FKs to the target table's subject"
       (is (= (get-in City [:fields "subject" :id])
              (get-in Company [:fields "headquarters" :fk_target_field_id]))))))
+
+(deftest ^:integration shacl-inline-document-sync-test
+  ;; The same shapes as the :shacl database, pasted into the connection
+  ;; instead of fetched from a URL: Metabase must keep the text in the details
+  ;; and the driver must sync from it without any HTTP fetch.
+  (let [base (select-keys (:details (api :get (str "/api/database/" (db-id :shacl))))
+                          [:endpoint :default-graph])
+        id   (:id (api :post "/api/database"
+                       {:engine  "sparql"
+                        :name    "SPARQL SHACL inline (e2e)"
+                        :details (assoc base
+                                        :advanced-options       true
+                                        :metadata-sync-strategy "shacl"
+                                        :shacl-document         (slurp "test/resources/fixtures/smoke-shapes.ttl"))}))]
+    (try
+      ;; FKs are written after the initial sync, so wait for one of them too.
+      (loop [n 120]
+        (when (and (pos? n)
+                   (not (and (= "complete" (:initial_sync_status (api :get (str "/api/database/" id))))
+                             (get-in (tables id) ["Company" :fields "headquarters" :fk_target_field_id]))))
+          (Thread/sleep 1000)
+          (recur (dec n))))
+      (let [{:strs [Person Company City]} (tables id)]
+        (is (= "A company that employs people" (:description Company)))
+        (is (= "type/Integer" (get-in Person [:fields "age" :base_type])))
+        (is (= (get-in City [:fields "subject" :id])
+               (get-in Company [:fields "headquarters" :fk_target_field_id]))))
+      (finally
+        (api :delete (str "/api/database/" id))))))
 
 (deftest ^:integration filter-through-api-test
   (let [person (get (tables :shacl) "Person")]

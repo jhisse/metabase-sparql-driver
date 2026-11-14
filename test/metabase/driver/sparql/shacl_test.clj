@@ -375,3 +375,29 @@
         (shacl/metadata url "nl" {:max-bytes 100})
         (is (= 7 @fetches)))
       (shacl/invalidate! url))))
+
+(deftest metadata-from-text-test
+  (let [parse  shacl/parse-turtle
+        parses (atom 0)]
+    (with-redefs [shacl/fetch-shacl  (fn [& _] (throw (ex-info "no HTTP allowed" {})))
+                  shacl/parse-turtle (fn [text base] (swap! parses inc) (parse text base))]
+      (shacl/invalidate! turtle)
+      (testing "an inline document is parsed without any HTTP request"
+        (is (= 3 (count (shacl/metadata-from-text turtle "nl"))))
+        (is (= 1 @parses)))
+      (testing "a repeat within the TTL is served from cache; a new language is a miss"
+        (shacl/metadata-from-text turtle "nl")
+        (is (= 1 @parses))
+        (shacl/metadata-from-text turtle "en")
+        (is (= 2 @parses)))
+      (testing "an entry older than the TTL is parsed again, and storing evicts the expired ones"
+        (swap! @#'shacl/cache assoc-in [[turtle "nl" :text] :at] 0)
+        (swap! @#'shacl/cache assoc-in [[turtle "en" :text] :at] 0)
+        (shacl/metadata-from-text turtle "nl")
+        (is (= 3 @parses))
+        (is (not (contains? @@#'shacl/cache [turtle "en" :text]))))
+      (testing "a malformed document throws and is not cached"
+        (is (thrown? Exception (shacl/metadata-from-text "ex:Bad a ." "nl")))
+        (is (thrown? Exception (shacl/metadata-from-text "ex:Bad a ." "nl")))
+        (is (= 5 @parses)))
+      (shacl/invalidate! turtle))))

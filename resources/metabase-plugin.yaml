@@ -61,13 +61,26 @@ driver:
       display-name: Metadata Sync Strategy
       type: string
       default: auto
-      description: 'How Metabase discovers tables and fields. One of: auto (discover from endpoint), none (don''t sync), explicit (use JSON configuration), shacl (fetch from URL).'
+      description: 'How Metabase discovers tables and fields. One of: auto (discover from endpoint), none (don''t sync), explicit (use JSON configuration), shacl (read a SHACL document, pasted or fetched from a URL).'
       visible-if:
         advanced-options: true
+    - name: shacl-document
+      display-name: SHACL Document (Turtle)
+      type: text
+      placeholder: |-
+        @prefix sh: <http://www.w3.org/ns/shacl#> .
+        @prefix ex: <https://example.org/> .
+
+        ex:PersonShape a sh:NodeShape ;
+          sh:targetClass ex:Person ;
+          sh:property [ sh:path ex:name ] .
+      description: 'Paste the SHACL document in Turtle to sync without serving it over HTTP. Takes precedence over SHACL URL. There is no URL to resolve relative IRIs against: use absolute IRIs or an @base directive.'
+      visible-if:
+        metadata-sync-strategy: shacl
     - name: shacl-url
       display-name: SHACL URL
       placeholder: https://example.org/schema.ttl
-      description: URL serving a SHACL document in Turtle. Fetched at sync time when Metadata Sync Strategy is set to SHACL. HTTPS is recommended; plain HTTP is allowed for local testing.
+      description: URL serving a SHACL document in Turtle. Fetched at sync time when Metadata Sync Strategy is set to SHACL and SHACL Document is blank. HTTPS is recommended; plain HTTP is allowed for local testing.
       visible-if:
         metadata-sync-strategy: shacl
     - name: shacl-connect-timeout

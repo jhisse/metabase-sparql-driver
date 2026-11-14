@@ -1,8 +1,9 @@
 (ns metabase.driver.sparql.shacl
   "SHACL-based metadata sync for the SPARQL driver.
 
-   Given a URL serving a SHACL document in Turtle, this namespace:
-   - fetches and parses the document,
+   Given a SHACL document in Turtle, pasted into the connection form or
+   served at a URL, this namespace:
+   - parses the document (fetching it first when it comes from a URL),
    - extracts shapes (one per RDF class / Metabase table),
    - extracts property shapes (one per Metabase column),
    - flattens `sh:node` inheritance,
@@ -11,11 +12,12 @@
      sync-time overrides (`hide`, `semanticType`, `displayValueProperty`),
      and `dash:hidden` on property shapes as `sban:hide`.
 
-   The public entry point is [[metadata]] which returns a fully-resolved
-   intermediate description that [[metabase.driver.sparql.database]] turns
-   into the maps Metabase's sync interface expects. Results are cached per
-   URL, language and fetch options for 30 seconds so a single sync run only
-   fetches once."
+   The public entry points are [[metadata]] (a URL) and [[metadata-from-text]]
+   (an inline document); both return a fully-resolved intermediate description
+   that [[metabase.driver.sparql.database]] turns into the maps Metabase's sync
+   interface expects. Results are cached per source (URL or document text),
+   language and fetch options for 30 seconds so a single sync run only fetches
+   and parses once."
   (:require [clj-http.client :as http]
             [clojure.string :as str]
             [metabase.driver.sparql.uri :as uri]
@@ -518,9 +520,24 @@
     (when (and at (< (- (System/currentTimeMillis) at) cache-ttl-ms))
       value)))
 
-(defn- cache-store! [k value]
-  (swap! cache assoc k {:at (System/currentTimeMillis) :value value})
-  value)
+(defn- cache-store!
+  "Cache `value` under `k` and drop the expired entries, so a document
+   pasted into the connection form (the key is the text itself) does not
+   pin its previous versions in memory."
+  [k value]
+  (let [now (System/currentTimeMillis)]
+    (swap! cache (fn [m]
+                   (into {k {:at now :value value}}
+                         (filter (fn [[_ {:keys [at]}]] (< (- now at) cache-ttl-ms)))
+                         m)))
+    value))
+
+(defn- cached
+  "Return the value cached under `k` within the TTL, or compute it with
+   `thunk` and cache it. An exception from `thunk` propagates uncached."
+  [k thunk]
+  (or (cache-lookup k)
+      (cache-store! k (thunk))))
 
 (defn metadata
   "Return the [[shacl->metadata]] shapes of the SHACL document at `url` under
@@ -528,17 +545,32 @@
    cached in the last 30 seconds. `opts` is forwarded to [[fetch-shacl]] (HTTP
    timeouts and size cap) and is part of the cache key, so a database never
    gets a document fetched under another database's size cap. Fetch and parse
-   errors throw and are not cached."
+   errors throw and are not cached. See [[metadata-from-text]] for a document
+   given inline."
   ([url lang] (metadata url lang nil))
   ([url lang opts]
-   (let [k [url lang opts]]
-     (or (cache-lookup k)
-         (cache-store! k
-                       (-> (fetch-shacl url opts)
-                           (parse-turtle url)
-                           (shacl->metadata lang)))))))
+   (cached [url lang opts]
+           #(-> (fetch-shacl url opts)
+                (parse-turtle url)
+                (shacl->metadata lang)))))
+
+(defn metadata-from-text
+  "Return the [[shacl->metadata]] shapes of the Turtle document `text` under
+   language `lang`, parsing it unless `[text lang :text]` was cached in the
+   last 30 seconds. The text has no location, so relative IRIs are not
+   resolved: an inline document must use absolute IRIs or an `@base`
+   directive. No size cap applies, since the text is already stored in the
+   connection details. Parse errors throw and are not cached."
+  [text lang]
+  (cached [text lang :text]
+          #(do (log/infof "[shacl] Parsing the SHACL document from the connection settings (%d characters)"
+                          (count text))
+               (-> text
+                   (parse-turtle nil)
+                   (shacl->metadata lang)))))
 
 (defn invalidate!
-  "Forget the cached SHACL metadata for `url` (all languages and options)."
-  [url]
-  (swap! cache (fn [m] (into {} (remove (fn [[[u] _]] (= u url)) m)))))
+  "Forget the cached SHACL metadata for `source`, a URL or an inline document
+   (all languages and options)."
+  [source]
+  (swap! cache (fn [m] (into {} (remove (fn [[[s] _]] (= s source)) m)))))

@@ -229,7 +229,8 @@ Query-time mapping (every strategy). SHACL sync reads `sh:datatype` instead — 
 | Hide URIs outside known namespaces    |    ❌    | When enabled, RDF classes and properties whose URI does **not** start with the Default Graph URI or a configured Namespace Prefix are skipped during sync (less clutter when external vocabularies are sampled). | `false`                             |
 | Metadata Sync Strategy (Advanced)     |    ❌    | How the driver discovers tables/fields.                                                                                                                                                                                                                  | `auto` / `none` / `explicit` / `shacl` |
 | Schema Configuration (Advanced)       |    ❌    | JSON schema. Visible when strategy is `explicit`.                                                                                                                                                                                                        | See JSON example below              |
-| SHACL URL (Advanced)                  |    ❌    | URL serving a SHACL document in Turtle. Visible when strategy is `shacl`. Fetched on every sync. HTTPS is recommended; plain HTTP is allowed for local testing. Redirects are followed up to 5 times; a public URL cannot redirect to a loopback, private or link-local address. | `https://example.org/schema.ttl`    |
+| SHACL Document (Advanced)             |    ❌    | SHACL document in Turtle, pasted into the form. Visible when strategy is `shacl`. Takes precedence over SHACL URL. There is no URL to resolve relative IRIs against: use absolute IRIs or an `@base` directive. | Turtle text                         |
+| SHACL URL (Advanced)                  |    ❌    | URL serving a SHACL document in Turtle. Visible when strategy is `shacl`. Fetched on every sync when SHACL Document is blank. HTTPS is recommended; plain HTTP is allowed for local testing. Redirects are followed up to 5 times; a public URL cannot redirect to a loopback, private or link-local address. | `https://example.org/schema.ttl`    |
 | SHACL Connect / Read Timeout, Max Document Size (Advanced) | ❌ | Limits for fetching the SHACL document. Visible when strategy is `shacl`. The read timeout also bounds the whole body once the response arrives (up to about twice that), and the size is checked while downloading. A blank, malformed, zero, negative or out-of-range value uses the default. | `10` s / `30` s / `10` MB (defaults) |
 
 > [!WARNING]
@@ -243,7 +244,7 @@ Query-time mapping (every strategy). SHACL sync reads `sh:datatype` instead — 
   - **Discovery Sample Size**: Number of instances to sample when discovering properties (default: 10000)
 - **`none`**: Skip metadata sync entirely (useful for very large datasets where discovery is slow).
 - **`explicit`**: Use a manually defined JSON schema (see example below).
-- **`shacl`**: Fetch a SHACL document and treat it as the schema. See [SHACL Schema Sync](#shacl-schema-sync) below — this is the recommended path when you control the ontology.
+- **`shacl`**: Use a SHACL document, pasted or fetched from a URL, as the schema. See [SHACL Schema Sync](#shacl-schema-sync) below — this is the recommended path when you control the ontology.
 
 ### Default Graph URI as Implicit Base Prefix
 
@@ -388,15 +389,15 @@ The schema is a JSON object with a `tables` key, which is an array of table obje
 
 ## :scroll: SHACL Schema Sync
 
-When you control the ontology behind your SPARQL endpoint, **SHACL** is the cleanest way to tell Metabase about the schema. The driver fetches a SHACL document over HTTP at sync time, parses the shapes, and uses them as the single source of truth for tables, columns, types, and foreign-key relationships — no sampling queries, no JSON to maintain.
+When you control the ontology behind your SPARQL endpoint, **SHACL** is the cleanest way to tell Metabase about the schema. The driver reads a SHACL document at sync time (pasted into the connection form or fetched over HTTP), parses the shapes, and uses them as the single source of truth for tables, columns, types, and foreign-key relationships — no sampling queries, no JSON to maintain.
 
 To enable it:
 
 1. Set **Metadata Sync Strategy** to `shacl` (under Advanced).
-2. Fill in **SHACL URL** with the URL of a Turtle document the Metabase container can reach (HTTPS recommended; plain HTTP is allowed for local testing).
+2. Provide the document: paste it into **SHACL Document**, or fill in **SHACL URL** with the URL of a Turtle document the Metabase container can reach (HTTPS recommended; plain HTTP is allowed for local testing). When both are set, the pasted document wins. A pasted document has no URL to resolve relative IRIs against, so use absolute IRIs or an `@base` directive; the connection test parses it and reports syntax errors right away.
 3. (Optional) Set **Default Language** so multilingual `sh:name` / `sh:description` labels resolve to the right language.
 
-The driver re-fetches the SHACL on every sync. The parsed result is cached for 30 seconds (per URL, Default Language and SHACL fetch limits), so the many lookups within one sync reuse a single fetch.
+The driver re-reads the SHACL on every sync (re-fetching it when it comes from a URL). The parsed result is cached for 30 seconds (per document or URL, Default Language and, for a URL, the SHACL fetch limits), so the many lookups within one sync reuse a single fetch.
 
 ### SHACL → Metabase mapping
 

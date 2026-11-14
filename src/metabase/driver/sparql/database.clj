@@ -250,46 +250,66 @@
      :socket-timeout-ms  (scaled (:shacl-socket-timeout details) 1000 Integer/MAX_VALUE)
      :max-bytes          (scaled (:shacl-max-size-mb details) (* 1024 1024) Long/MAX_VALUE)}))
 
-(defn- shacl-url
-  "Return the SHACL URL of connection `details`, or nil when it is blank."
+(defn- shacl-source
+  "Return where the SHACL document of connection `details` comes from:
+   `{:text …}` for a document pasted into `:shacl-document`, `{:url …}` for
+   `:shacl-url`, or nil when neither is set. A blank value counts as unset.
+   The pasted document wins over the URL, so the text shown when editing the
+   connection is the one in use."
   [details]
-  (not-empty (str/trim (str (:shacl-url details)))))
+  (let [setting (fn [k] (not-empty (str/trim (str (get details k)))))]
+    (if-let [text (setting :shacl-document)]
+      {:text text}
+      (when-let [url (setting :shacl-url)]
+        {:url url}))))
 
 (defn- load-shacl-shapes
-  "Return the SHACL shapes of `database` (cached by [[shacl/metadata]]). The
-   language for `sh:name`/`sh:description` and the HTTP timeouts and size cap
-   come from the connection details. Throws when no SHACL URL is set, or the
-   document cannot be fetched or parsed or has no shapes (an empty body from
-   a proxy parses as an empty document)."
+  "Return the SHACL shapes of `database` (cached by [[shacl/metadata]] or
+   [[shacl/metadata-from-text]]). The language for `sh:name`/`sh:description`
+   and, for a URL, the HTTP timeouts and size cap come from the connection
+   details. Throws when no SHACL document or URL is set, or the document
+   cannot be fetched or parsed or has no shapes (an empty body from a proxy
+   parses as an empty document)."
   [database]
-  (let [details (:details database)
-        url     (or (shacl-url details)
-                    (throw (ex-info "The shacl sync strategy needs a SHACL URL" {})))]
+  (let [details            (:details database)
+        {:keys [text url]} (or (shacl-source details)
+                               (throw (ex-info "The shacl sync strategy needs a SHACL document or URL" {})))
+        lang               (or (:default-language details) "")
+        location           (some-> url uri/redact-userinfo)]
     (try
-      (or (not-empty (shacl/metadata url
-                                     (or (:default-language details) "")
-                                     (shacl-fetch-opts details)))
+      (or (not-empty (if text
+                       (shacl/metadata-from-text text lang)
+                       (shacl/metadata url lang (shacl-fetch-opts details))))
           (throw (ex-info "the document has no shapes" {})))
       (catch Exception t
-        (throw (ex-info (format "Failed to load SHACL document at %s: %s"
-                                (uri/redact-userinfo url) (ex-message t))
-                        {:url (uri/redact-userinfo url)}
+        (throw (ex-info (if location
+                          (format "Failed to load SHACL document at %s: %s" location (ex-message t))
+                          (format "Failed to parse the SHACL document from the connection settings: %s"
+                                  (ex-message t)))
+                        (cond-> {} location (assoc :url location))
                         t))))))
 
 (defn check-sync-settings!
   "Throw when connection `details` cannot be synced, so the connection form
-   says so: the shacl strategy needs a SHACL URL."
+   says so: the shacl strategy needs a SHACL document or URL, and a pasted
+   document must parse and have shapes. A URL is not fetched here."
   [details]
-  (when (and (= :shacl (sync-strategy details)) (not (shacl-url details)))
-    (throw (ex-info "The shacl sync strategy needs a SHACL URL" {}))))
+  (when (= :shacl (sync-strategy details))
+    (let [source (shacl-source details)]
+      (when-not source
+        (throw (ex-info "The shacl sync strategy needs a SHACL document or URL" {})))
+      (when (:text source)
+        (load-shacl-shapes {:details details})
+        nil))))
 
 (defn shacl-shapes
   "Return the SHACL shapes of `database` as [[load-shacl-shapes]] does, or
-   nil when the sync strategy is not `shacl`, no SHACL URL is configured, or
-   the document cannot be fetched or parsed (the error is logged)."
+   nil when the sync strategy is not `shacl`, no SHACL document or URL is
+   configured, or the document cannot be fetched or parsed (the error is
+   logged)."
   [database]
   (let [details (:details database)]
-    (when (and (shacl-url details) (= :shacl (sync-strategy details)))
+    (when (and (shacl-source details) (= :shacl (sync-strategy details)))
       (try
         (load-shacl-shapes database)
         (catch Exception t
