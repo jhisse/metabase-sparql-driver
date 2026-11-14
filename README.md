@@ -206,7 +206,7 @@ Query-time mapping (every strategy). SHACL sync reads `sh:datatype` instead — 
 
 | Driver Version       | Metabase Version  | Notes                                            |
 |:---------------------|:------------------|:-------------------------------------------------|
-| **v0.0.20+**         | v0.64.x           | Built and tested against Metabase v0.64.1.       |
+| **v0.0.20+**         | v0.64.x           | Built and tested against Metabase v0.64.6.2.     |
 | **v0.0.11 – v0.0.19** | v0.61.x          | Built and tested against Metabase v0.61.2.       |
 | **v0.0.10**          | v0.56.3 — v0.56.x | Requires `describe-database*` (added in 0.56.3). |
 | **v0.0.1 – v0.0.9**  | < v0.56.3         | Uses legacy `describe-database`.                 |
