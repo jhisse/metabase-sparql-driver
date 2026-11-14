@@ -295,7 +295,8 @@ jobs:
     needs: release
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
     permissions:
-      contents: read
+      actions: read
+      contents: write
       packages: write
     steps:
       - name: Checkout code
@@ -319,11 +320,34 @@ jobs:
           context: .
           platforms: linux/amd64,linux/arm64
           push: true
-          # :latest only moves on a stable tag, never on a pre-release.
-          tags: |
-            ${{ !contains(github.ref_name, '-') && format('ghcr.io/{0}:latest', github.repository) || '' }}
-            ghcr.io/${{ github.repository }}:${{ github.ref_name }}
+          tags: ghcr.io/${{ github.repository }}:${{ github.ref_name }}
           labels: |
             org.opencontainers.image.source=https://github.com/${{ github.repository }}
             org.opencontainers.image.description=Metabase + SPARQL Driver
             org.opencontainers.image.licenses=AGPL-3.0-only
+
+      - name: Scan image for vulnerabilities
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          image-ref: ghcr.io/${{ github.repository }}:${{ github.ref_name }}
+          format: table
+          exit-code: '1'
+          ignore-unfixed: true
+          vuln-type: os,library
+          severity: CRITICAL,HIGH
+
+      - name: Generate and publish image SBOM
+        uses: anchore/sbom-action@v0.24.3
+        with:
+          image: ghcr.io/${{ github.repository }}:${{ github.ref_name }}
+          format: cyclonedx-json
+          artifact-name: sparql-driver-image-sbom.cdx.json
+          upload-release-assets: true
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Promote stable image to latest
+        if: ${{ !contains(github.ref_name, '-') }}
+        run: |
+          docker buildx imagetools create \
+            --tag ghcr.io/${{ github.repository }}:latest \
+            ghcr.io/${{ github.repository }}:${{ github.ref_name }}
