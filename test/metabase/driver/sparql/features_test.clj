@@ -18,6 +18,7 @@
     :expressions/text
     :left-join
     :native-parameters
+    :nested-queries
     :metadata/key-constraints
     :regex
     :test/cannot-destroy-db
