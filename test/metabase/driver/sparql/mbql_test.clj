@@ -95,8 +95,14 @@
     (is (= [:field 5 nil] (arg-tok [:sum [:field 5 nil]])))
     (is (nil? (arg-tok [:count])))))
 
+(defn- project-agg
+  "Call `aggregation->projection` with the base-stage prefix `ag_`."
+  ([agg index token->var] (project-agg agg index token->var false))
+  ([agg index token->var count-all?]
+   (@#'mbql/aggregation->projection agg index token->var count-all? "ag_")))
+
 (deftest aggregation->projection-test
-  (let [f @#'mbql/aggregation->projection]
+  (let [f project-agg]
     (testing "arg-less count is a DISTINCT subject count in a base stage"
       (is (= {:select "(COUNT(DISTINCT ?subject) AS ?ag_0)" :var "ag_0"}
              (f [:count] 0 (constantly nil)))))
@@ -274,7 +280,7 @@
              (f [:starts-with [:field "naam" nil] "\") || true || (\""]))))))
 
 (deftest avg-max-count-field-projection-test
-  (let [f @#'mbql/aggregation->projection]
+  (let [f project-agg]
     (is (= {:select "(AVG(?amount) AS ?ag_0)" :var "ag_0"}
            (f [:avg [:field "amount" nil]] 0 (constantly "amount"))))
     (is (= {:select "(MAX(?amount) AS ?ag_2)" :var "ag_2"}
@@ -365,7 +371,7 @@
 
 (deftest order-by-test
   (let [ob     #(@#'mbql/compile-order-by % {"naam" "naam" "leeftijd" "leeftijd"} {})
-        agg-ob #(@#'mbql/compile-agg-order-by % (fn [t] (@#'mbql/var-for-token t {"naam" "naam"} {})))]
+        agg-ob #(@#'mbql/compile-agg-order-by % (fn [t] (@#'mbql/var-for-token t {"naam" "naam"} {})) "ag_")]
     (is (= "ORDER BY ASC(?naam)" (ob [[:asc [:field "naam" nil]]])))
     (is (= "ORDER BY DESC(?naam) ASC(?leeftijd)"
            (ob [[:desc [:field "naam" nil]] [:asc [:field "leeftijd" nil]]])))
@@ -481,13 +487,6 @@
 
 (defn- compile-stage* [stage]
   (parsed (@#'mbql/compile-stage stage)))
-
-(def ^:private reused-agg-alias-error
-  "KNOWN BUG: an aggregation on a derived stage re-binds `?ag_N`, which the
-  sub-SELECT already projects. SPARQL 1.1 §18.2.4.1 forbids an `AS` target that
-  is already in scope; RDF4J (and Jena) reject the query, Oxigraph tolerates it.
-  Tests asserting this message must flip to `(is (nil? …))` once it is fixed."
-  "projection alias 'ag_0' was previously used")
 
 (defn- compile-base-stage* [stage expected-cols]
   (parsed (@#'mbql/compile-base-stage stage expected-cols)))
@@ -962,11 +961,83 @@
             {:keys [sparql vars]}
             (@#'mbql/compile-stage {:source-query card
                                     :aggregation [[:min [:field "ag_0" nil]]]})]
-        (is (= reused-agg-alias-error (tu/sparql-syntax-error sparql)))
-        (is (= ["ag_0"] vars))
-        (is (str/includes? sparql "(MIN(?ag_0) AS ?ag_0)"))
+        (is (nil? (tu/sparql-syntax-error sparql)) sparql)
+        (is (= ["ag1_0"] vars))
+        (is (str/includes? sparql "(MIN(?ag_0) AS ?ag1_0)"))
         (testing "the outer stage adds no GROUP BY (only the inner card's remains)"
-          (is (= 1 (count (re-seq #"GROUP BY" sparql)))))))))
+          (is (= 1 (count (re-seq #"GROUP BY" sparql)))))))
+    (testing "each nesting level names its aggregations with its own prefix"
+      (let [counts          {:source-table 100 :aggregation [[:count]] :breakout [[:field 2 nil]]}
+            count-of-counts {:source-query        counts
+                             :aggregation         [[:count]]
+                             :breakout            [[:field "count" nil]]
+                             ::mbql/column-names  ["count" "count_2"]}
+            max-of          #(compile-stage* {:source-query count-of-counts
+                                              :aggregation  [[:max [:field % nil]]]})]
+        (testing "Lib names the breakout `count` and the new count `count_2`"
+          (let [{:keys [sparql vars]} (max-of "count")]
+            (is (= ["ag2_0"] vars))
+            (is (str/includes? sparql "(COUNT(DISTINCT ?subject) AS ?ag_0)"))
+            (is (str/includes? sparql "SELECT ?ag_0 (COUNT(*) AS ?ag1_0)"))
+            (is (str/includes? sparql "(MAX(?ag_0) AS ?ag2_0)")))
+          (is (str/includes? (:sparql (max-of "count_2")) "(MAX(?ag1_0) AS ?ag2_0)")))
+        (testing "without Lib's names, the columns keep their default names"
+          (let [unnamed #(compile-stage* {:source-query (dissoc count-of-counts ::mbql/column-names)
+                                          :aggregation  [[:max [:field % nil]]]})]
+            (is (str/includes? (:sparql (unnamed "count")) "(MAX(?ag_0) AS ?ag2_0)"))
+            (is (str/includes? (:sparql (unnamed "count_2")) "(MAX(?ag1_0) AS ?ag2_0)"))))))
+    (testing "a custom column takes its name from a passed-through column"
+      (let [counts  {:source-table 100 :aggregation [[:count]] :breakout [[:field 2 nil]]}
+            renamed {:source-query counts
+                     :expressions  {"count" [:* [:field "count" nil] 100]}
+                     :fields       [[:expression "count"] [:field "naam" nil] [:field "count" nil]]}]
+        (is (str/includes? (:sparql (compile-stage* {:source-query renamed
+                                                     :aggregation  [[:max [:field "count" nil]]]}))
+                           "(MAX(?count) AS ?ag1_0)"))
+        (testing "but not when it comes after the column"
+          (is (str/includes? (:sparql (compile-stage* {:source-query (assoc renamed :fields [[:field "naam" nil] [:field "count" nil] [:expression "count"]])
+                                                       :aggregation  [[:max [:field "count" nil]]]}))
+                             "(MAX(?ag_0) AS ?ag1_0)")))
+        (testing "unless the stage does not project it"
+          (is (str/includes? (:sparql (compile-stage* {:source-query (dissoc renamed :fields)
+                                                       :aggregation  [[:max [:field "count" nil]]]}))
+                             "(MAX(?ag_0) AS ?ag1_0)")))))
+    (testing "a stage that only filters passes the source's names through"
+      (let [counts   {:source-table 100 :aggregation [[:count]] :breakout [[:field 2 nil]]}
+            filtered {:source-query counts :filter [:> [:field "count" nil] 1]}
+            {:keys [sparql]} (compile-stage* {:source-query filtered
+                                              :aggregation  [[:max [:field "count" nil]]]})]
+        (is (str/includes? sparql "(MAX(?ag_0) AS ?ag1_0)"))))
+    (testing "an [:aggregation N] order term names the derived stage's own variable"
+      (let [card {:source-table 100 :aggregation [[:count]] :breakout [[:field 2 nil]]}
+            {:keys [sparql]}
+            (compile-stage* {:source-query card
+                             :aggregation  [[:count]]
+                             :breakout     [[:field "naam" nil]]
+                             :order-by     [[:desc [:aggregation 0]]]})]
+        (is (str/includes? sparql "ORDER BY DESC(?ag1_0)"))))
+    (testing "an outer filter on the source's aggregation still resolves to the source's variable"
+      (let [card {:source-table 100 :aggregation [[:count]] :breakout [[:field 2 nil]]}
+            {:keys [sparql vars]}
+            (compile-stage* {:source-query card
+                             :aggregation  [[:max [:field "count" nil]]]
+                             :filter       [:> [:field "count" nil] 1]})]
+        (is (= ["ag1_0"] vars))
+        (is (str/includes? sparql "FILTER (?ag_0 > 1)"))
+        (is (str/includes? sparql "(MAX(?ag_0) AS ?ag1_0)"))))))
+
+(deftest derived-stage-lib-names-with-join-test
+  (with-fixture
+    (testing "Lib lists a join's columns last, so names are not paired with :fields by position"
+      (let [{:keys [aliases]}
+            (compile-stage* {:source-query       {:source-table 100 :fields [[:field 1 nil] [:field 4 nil]]}
+                             :fields             [[:field 10 {:join-alias "Plaats"}] [:field "geboorteplaats" nil]]
+                             :joins              [{:alias     "Plaats"
+                                                   :condition [:= [:field "geboorteplaats" nil]
+                                                               [:field 1 {:join-alias "Plaats"}]]}]
+                             ::mbql/column-names ["geboorteplaats" "Plaats__label"]})]
+        (is (= {"geboorteplaats" "geboorteplaats" "Plaats__label" "Plaats__label"}
+               (select-keys aliases ["geboorteplaats" "Plaats__label"])))))))
 
 (deftest compile-derived-stage-passthrough-test
   (with-fixture
@@ -1070,7 +1141,7 @@
             (@#'mbql/compile-stage {:source-query card
                                     :aggregation  [[:count]]
                                     :filter [:= [:field "geboorte-datum" nil] "x"]})]
-        (is (= reused-agg-alias-error (tu/sparql-syntax-error sparql)))
+        (is (nil? (tu/sparql-syntax-error sparql)) sparql)
         (is (str/includes? sparql (str "FILTER (" (text= "geboorte_datum" "\"x\"") ")")))))
     (testing "an outer filter on a saved card is applied around the sub-SELECT"
       (let [card {:source-table 100 :aggregation [[:count]] :breakout [[:field 2 nil]]}
@@ -1088,8 +1159,8 @@
             (compile-stage* {:source-query card
                              :aggregation [[:count]]
                              :breakout [[:field "naam" nil]]})]
-        (is (= ["naam" "ag_0"] vars))
-        (is (str/includes? sparql "(COUNT(*) AS ?ag_0)"))
+        (is (= ["naam" "ag1_0"] vars))
+        (is (str/includes? sparql "(COUNT(*) AS ?ag1_0)"))
         (is (str/includes? sparql "GROUP BY ?naam"))))))
 
 (deftest compile-derived-stage-filter-on-aggregation-test
@@ -1110,10 +1181,32 @@
             (compile-stage* {:source-query card
                              :filter [:>= [:field "total" nil] 100]})]
         (is (str/includes? sparql "FILTER (?ag_0 >= 100)"))))
-    (testing "duplicate aggregation names are disambiguated count, count_2, …"
-      (let [f @#'mbql/aggregation-name->var]
-        (is (= {"count" "ag_0" "count_2" "ag_1"}
-               (f [[:count] [:distinct [:field 3 nil]]])))))))
+    (testing "a grouped stage's columns are named by Lib, else by their default names"
+      (let [f @#'mbql/grouped-name->var]
+        (is (= {"count" "ag_0" "count_2" "ag1_0"}
+               (f {:breakout [[:field "count" nil]] :aggregation [[:count]] ::mbql/column-names ["count" "count_2"]}
+                  ["ag_0" "ag1_0"] "ag1_")))
+        (testing "duplicate aggregation names are disambiguated count, count_2, …"
+          (is (= {"count" "ag_0" "count_2" "ag_1"}
+                 (f {:aggregation [[:count] [:distinct [:field 3 nil]]]} ["ag_0" "ag_1"] "ag_"))))
+        (testing "names that do not line up with the variables are not used"
+          (is (= {"count" "ag_0"}
+                 (f {:aggregation [[:count]] ::mbql/column-names ["x" "y" "count"]} ["ag_0"] "ag_"))))
+        (testing "breakouts that do not line up with the variables map no name, not a missing variable"
+          (is (= {"count" "ag_0"}
+                 (f {:breakout [[:field "naam" nil] [:field "naam" nil]] :aggregation [[:count]]}
+                    ["naam" "ag_0"] "ag_"))))
+        (testing "names follow Lib's generator: a taken suffix is suffixed again, case does not tell names apart"
+          (is (= {"count_2" "count_2" "count" "ag_0" "count_2_2" "ag_1" "count_3" "ag_2"}
+                 (f {:breakout [[:field "count_2" nil]] :aggregation [[:count] [:distinct [:field 3 nil]] [:count]]}
+                    ["count_2" "ag_0" "ag_1" "ag_2"] "ag_")))
+          (is (= {"Count" "Count" "count_2" "ag_0"}
+                 (f {:breakout [[:expression "Count"]] :aggregation [[:count]]}
+                    ["Count" "ag_0"] "ag_"))))
+        (testing "a breakout through a join is named after the join"
+          (is (= {"J__leeftijd" "J__leeftijd" "sum" "ag_0"}
+                 (f {:breakout [[:field 3 {:join-alias "J"}]] :aggregation [[:sum [:field 4 nil]]]}
+                    ["J__leeftijd" "ag_0"] "ag_"))))))))
 
 (deftest compile-derived-stage-filter-on-joined-breakout-test
   (with-fixture
@@ -1210,15 +1303,16 @@
                                                     :fields [[:expression "x-y"] [:expression "x y"]]
                                                     :expressions {"x-y" [:upper [:field 2 nil]]
                                                                   "x y" [:lower [:field 2 nil]]}})))
-      (testing "including the variables of date buckets and aggregations"
+      (testing "including the variables of date buckets"
         (is (thrown-with-msg? clojure.lang.ExceptionInfo #"Rename the custom column \"geboorte_datum_month\""
                               (@#'mbql/compile-stage {:source-table 100
                                                       :breakout [[:field 11 {:temporal-unit :month}]]
-                                                      :expressions {"geboorte_datum_month" [:upper [:field 2 nil]]}})))
-        (is (thrown-with-msg? clojure.lang.ExceptionInfo #"Rename the custom column \"ag_0\""
-                              (@#'mbql/compile-stage {:source-table 100
-                                                      :aggregation [[:count]]
-                                                      :expressions {"ag_0" [:upper [:field 2 nil]]}})))))))
+                                                      :expressions {"geboorte_datum_month" [:upper [:field 2 nil]]}}))))
+      (testing "but not of aggregations, which take a prefix no column uses"
+        (is (str/includes? (:sparql (compile-stage* {:source-table 100
+                                                     :aggregation [[:count]]
+                                                     :expressions {"ag_0" [:upper [:field 2 nil]]}}))
+                           "(COUNT(DISTINCT ?subject) AS ?ag1_0)"))))))
 
 ;; ---------------------------------------------------------------------------
 ;; Lib-driven projection (the column-count-mismatch fix)

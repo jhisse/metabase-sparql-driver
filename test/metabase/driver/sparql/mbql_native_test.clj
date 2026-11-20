@@ -99,6 +99,110 @@
           sparql    (->sparql (lib/filter base (lib/> count-col 1)))]
       (is (str/includes? sparql "FILTER (?ag_0 > 1)")))))
 
+(deftest nested-aggregation-test
+  (let [q        (tu/person-query)
+        counts   (-> q
+                     (lib/breakout (tu/column q lib/breakoutable-columns tu/rdfs-label))
+                     (lib/aggregate (lib/count))
+                     (lib/append-stage))
+        count-of (fn [stage] (first (filter #(= "count" (:name %)) (lib/aggregable-columns stage nil))))]
+    (testing "an aggregation over an aggregation binds a variable the sub-SELECT does not project"
+      (is (str/includes? (->sparql (lib/aggregate counts (lib/min (count-of counts))))
+                         "SELECT (MIN(?ag_0) AS ?ag1_0)")))
+    (testing "a count by count: Lib names the breakout `count` and the new count `count_2`"
+      (let [count-of-counts (-> counts
+                                (lib/breakout (tu/column counts lib/breakoutable-columns "count"))
+                                (lib/aggregate (lib/count))
+                                (lib/append-stage))
+            [by-count new-count] (lib/aggregable-columns count-of-counts nil)]
+        (is (str/includes? (->sparql (lib/aggregate count-of-counts (lib/max by-count)))
+                           "SELECT (MAX(?ag_0) AS ?ag2_0)"))
+        (is (str/includes? (->sparql (lib/aggregate count-of-counts (lib/max new-count)))
+                           "SELECT (MAX(?ag1_0) AS ?ag2_0)"))))
+    (testing "a stage that only filters keeps the aggregation's name for the next one"
+      (let [filtered (-> counts (lib/filter (lib/> (count-of counts) 0)) (lib/append-stage))]
+        (is (str/includes? (->sparql (lib/aggregate filtered (lib/max (count-of filtered))))
+                           "SELECT (MAX(?ag_0) AS ?ag1_0)"))))
+    (testing "the next stage finds each column by Lib's name, deduplicated and truncated as Lib does"
+      (let [named (fn [cols nm] (first (filter #(= nm (:lib/source-column-alias %)) cols)))
+            age   (tu/column q "age")]
+        (testing "a name already taken moves on (count_2_2)"
+          (let [two-counts (-> q
+                               (lib/breakout (tu/column q lib/breakoutable-columns tu/rdfs-label))
+                               (lib/aggregate (lib/count))
+                               (lib/aggregate (lib/distinct age))
+                               (lib/append-stage))
+                regrouped  (-> two-counts
+                               (lib/breakout (named (lib/breakoutable-columns two-counts) "count_2"))
+                               (lib/aggregate (lib/count))
+                               (lib/aggregate (lib/distinct (named (lib/aggregable-columns two-counts nil) "count")))
+                               (lib/append-stage))
+                sparql     (->sparql (lib/filter regrouped (lib/> (named (lib/filterable-columns regrouped) "count_2") 5)))]
+            (is (str/starts-with? sparql "SELECT ?ag_1 ?ag1_0 ?ag1_1\n"))
+            (is (str/includes? sparql "FILTER (?ag_1 > 5)"))
+            (is (str/includes? (->sparql (lib/aggregate regrouped (lib/max (named (lib/aggregable-columns regrouped nil) "count_2_2"))))
+                               "SELECT (MAX(?ag1_1) AS ?ag2_0)"))))
+        (testing "names that differ only in case"
+          (let [with-expr (lib/expression q "Count" (lib/+ age 1))
+                counted   (-> with-expr
+                              (lib/breakout (tu/column with-expr lib/breakoutable-columns "Count"))
+                              (lib/aggregate (lib/count))
+                              (lib/append-stage))]
+            (is (str/starts-with? (->sparql (lib/breakout counted (named (lib/breakoutable-columns counted) "count_2")))
+                                  "SELECT ?ag_0\n"))))
+        (testing "a name longer than Lib's 60-byte limit"
+          (let [long-name (str/join (repeat 70 "x"))
+                with-expr (lib/expression q long-name (lib/+ age 1))
+                counted   (-> with-expr
+                              (lib/breakout (tu/column with-expr lib/breakoutable-columns long-name))
+                              (lib/aggregate (lib/count))
+                              (lib/append-stage))]
+            (is (str/includes? (->sparql (lib/aggregate counted (lib/max (first (lib/aggregable-columns counted nil)))))
+                               (str "SELECT (MAX(?" long-name ") AS ?ag1_0)")))))))
+    (testing "a stage that drops an aggregation and reuses its name hands the next stage its own column"
+      (let [renamed (-> counts
+                        (lib/expression "count" (lib/* (count-of counts) 100))
+                        (as-> $ (lib/with-fields $ [(tu/column $ lib/fieldable-columns tu/rdfs-label)
+                                                    (lib/expression-ref $ "count")]))
+                        (lib/append-stage))]
+        (is (str/includes? (->sparql (lib/aggregate renamed (lib/max (count-of renamed))))
+                           "SELECT (MAX(?count) AS ?ag_0)"))))
+    (testing "a custom column listed before a source column of the same name takes that name"
+      (let [renamed (-> counts
+                        (lib/expression "count" (lib/* (count-of counts) 100))
+                        (as-> $ (lib/with-fields $ [(lib/expression-ref $ "count")
+                                                    (tu/column $ lib/fieldable-columns tu/rdfs-label)
+                                                    (count-of counts)]))
+                        (lib/append-stage))
+            [expr-count _ source-count] (lib/aggregable-columns renamed nil)]
+        (is (= ["count" "count_2"] (map :lib/source-column-alias [expr-count source-count])))
+        (is (str/includes? (->sparql (lib/aggregate renamed (lib/max expr-count)))
+                           "SELECT (MAX(?count) AS ?ag1_0)"))
+        (is (str/includes? (->sparql (lib/aggregate renamed (lib/max source-count)))
+                           "SELECT (MAX(?ag_0) AS ?ag1_0)"))))
+    (testing "the last stage picks and reorders the source's columns by Lib's names"
+      (let [label-col  #(tu/column % lib/fieldable-columns tu/rdfs-label)
+            picked     (fn [stage cols] (->sparql (lib/with-fields stage cols)))
+            with-count (fn [base] (-> base (lib/aggregate (lib/count)) (lib/append-stage)))
+            by-expr    (let [e (lib/expression q "Count" (lib/+ (tu/column q "age") 1))]
+                         (with-count (lib/breakout e (tu/column e lib/breakoutable-columns "Count"))))]
+        (is (str/starts-with? (picked counts [(count-of counts)]) "SELECT ?ag_0\n"))
+        (is (str/starts-with? (picked counts [(count-of counts) (label-col counts)])
+                              "SELECT ?ag_0 ?http___www_w3_org_2000_01_rdf_schema_label\n"))
+        (is (str/starts-with? (picked by-expr [(second (lib/fieldable-columns by-expr))]) "SELECT ?ag_0\n"))))
+    (testing "the prefix skips one a custom column of the same stage uses"
+      (is (str/includes? (->sparql (-> counts
+                                       (lib/expression "ag1_0" (lib/* (count-of counts) 2))
+                                       (lib/aggregate (lib/count))))
+                         "(COUNT(*) AS ?ag2_0)")))
+    (testing "the prefix skips one a native source already projects"
+      (is (str/includes? (->sparql (-> (lib/native-query tu/provider
+                                                         (str "PREFIX ex: <https://example.org/>\n"
+                                                              "SELECT (COUNT(?s) AS ?ag_0) WHERE { ?s a ex:Person }"))
+                                       (lib/append-stage)
+                                       (lib/aggregate (lib/count))))
+                         "SELECT (COUNT(*) AS ?ag1_0)")))))
+
 (deftest temporal-filters-test
   (let [q     (tu/person-query)
         born  (tu/column q "birthDate")
