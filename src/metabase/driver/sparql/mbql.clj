@@ -196,6 +196,27 @@
                     (remove #(= this-alias (field-token->join-alias %)))
                     first))))))))
 
+(defn- check-join-condition!
+  "Throw `unsupported-feature` unless `join` is implicit (it has `:fk-field-id`)
+   or its condition is the one shape the driver compiles: `[:= <column> <subject>]`,
+   where `<subject>` is the joined table's subject and `<column>` holds its IRI.
+   In a base stage `<column>` cannot be the subject; a derived stage reads the
+   joined values off the subject itself."
+  [{:keys [alias condition fk-field-id]} base-stage?]
+  (when-not fk-field-id
+    (let [[op & args]     (cond-> condition
+                            (and (= :and (first condition)) (= 2 (count condition))) second)
+          joined?         #(= alias (field-token->join-alias %))
+          [target & more] (filter joined? args)
+          source          (first (remove joined? args))
+          subject?        #(let [id (field-token->id %)] (or (= "subject" id) (id-field? id)))]
+      (when-not (and (= := op) (= 2 (count args)) (nil? more)
+                     (subject? target) (field-token->id source)
+                     (not (and base-stage? (subject? source))))
+        (throw (ex-info (format "The SPARQL driver cannot compile the join %s: it can only join on one condition, a column equal to the joined table's subject."
+                                (pr-str alias))
+                        {:type driver-api/qp.error-type.unsupported-feature}))))))
+
 (defn- condition->fk-field-id
   "Return the field id of the FK-source side of a join `:condition` (see [[condition->fk-ref]])."
   ([condition] (field-token->id (condition->fk-ref condition)))
@@ -1050,7 +1071,8 @@
 
    Aggregation and breakout-only queries project only breakout columns and
    aggregate expressions, with a `GROUP BY` over the breakouts. Throws when a
-   `:source-field` the stage would follow is not a foreign key.
+   `:source-field` the stage would follow is not a foreign key, or when a join
+   is one [[check-join-condition!]] rejects.
 
    When `expected-cols` (Lib's authoritative column list) is supplied for a
    non-aggregation stage, the SELECT projection is reconciled against it so the
@@ -1069,6 +1091,7 @@
         order-by      (:order-by inner)
         filter-clause (:filter inner)
         joins         (:joins inner)
+        _             (run! #(check-join-condition! % true) joins)
         aggregations  (:aggregation inner)
         breakout      (:breakout inner)
         ;; Grouped mode: a breakout without aggregations still groups (distinct
@@ -1489,7 +1512,7 @@
    `:aggregation`, `:breakout`, `:expressions`, `:filter`, `:order-by`, and
    explicit `:fields` projection are honored, resolved against the variables
    the sub-`SELECT` already projects (no triple patterns are needed at this
-   level).
+   level). Throws when a join is one [[check-join-condition!]] rejects.
 
    When `expected-cols` (Lib's authoritative column list) is supplied for a
    non-aggregation stage, the SELECT projection is reconciled against it so the
@@ -1505,6 +1528,7 @@
                         (compile-native-stage (:native source) (:source-metadata stage))
                         (compile-stage source))
         joins         (:joins stage)
+        _             (run! #(check-join-condition! % false) joins)
         alias->join   (into {} (for [j joins] [(:alias j) j]))
         remap-entries (for [tok   (:fields stage)
                             :let  [alias (field-token->join-alias tok)]
