@@ -7,6 +7,7 @@
    [clojure.set :as set]
    [metabase.driver-api.core :as driver-api]
    [metabase.driver.sparql.uri :as uri]
+   [metabase.lib.core :as lib]
    [metabase.lib.metadata.result-metadata :as result-metadata]
    [metabase.util.date-2 :as u.date]
    [metabase.util.log :as log])
@@ -830,57 +831,94 @@
           :median             "median"
           nil))))
 
-(defn- aggregation-name->var
-  "Map each aggregation in `aggregations` from the name a later stage references
-   it by ([[aggregation-output-name]]) to its SPARQL variable (`ag_0`, `ag_1`, …),
-   so an outer stage's filter/order-by on an aggregation result resolves. Duplicate
-   names are disambiguated `name`, `name_2`, `name_3`, … the way Metabase dedupes."
-  [aggregations]
-  (let [seen (atom {})]
+(defn- agg-var-prefix
+  "Return the prefix of a stage's aggregation variables: the first of `ag_`,
+   `ag1_`, `ag2_`, … that no variable in `bound-vars`, the variables already in
+   scope, starts with.
+   SPARQL 1.1 (§18.2.4.1) forbids an `AS` onto a variable in scope."
+  [bound-vars]
+  (first (for [p (cons "ag_" (map #(str "ag" % "_") (iterate inc 1)))
+               :when (not-any? #(str/starts-with? % p) bound-vars)]
+           p)))
+
+(defn- default-name->var
+  "Map a grouped stage's columns to their SPARQL variables `vars` (the
+   breakouts, then the aggregations named `<prefix>N`) by the names Lib's
+   generator gives their default names: a breakout's column or custom-column
+   name (`<alias>__<name>` through a join), an aggregation's
+   [[aggregation-output-name]]."
+  [breakout aggregations vars prefix]
+  (let [b-names (for [tok breakout
+                      :let [id    (field-token->id tok)
+                            alias (field-token->join-alias tok)
+                            nm    (cond
+                                    (expression-token? tok) (expression-token->name tok)
+                                    (string? id)            id
+                                    (integer? id)           (:name (field-id->metadata id)))]]
+                  ;; Lib names a breakout through a FK after the FK; it gets no name here
+                  (when (and nm (not (:source-field (field-token->opts tok))))
+                    (cond->> nm alias (str alias "__"))))
+        ;; breakouts sharing one variable are projected once, so vars no longer line up
+        b-vars  (if (= (count breakout) (- (count vars) (count aggregations)))
+                  vars
+                  (repeat nil))
+        unique  (lib/unique-name-generator)]
     (into {}
-          (keep-indexed
-           (fn [i agg]
-             (when-let [nm (aggregation-output-name agg)]
-               (let [n   (get (swap! seen update nm (fnil inc 0)) nm)
-                     nm* (if (> n 1) (str nm "_" n) nm)]
-                 [nm* (str "ag_" i)])))
-           aggregations))))
+          (keep (fn [[nm v]]
+                  (when nm
+                    (let [nm* (unique nm)]
+                      (when v [nm* v])))))
+          (concat (map vector b-names b-vars)
+                  (map-indexed (fn [i agg] [(aggregation-output-name agg) (str prefix i)]) aggregations)))))
+
+(defn- grouped-name->var
+  "Map each output column of a grouped `stage`, from the name a later stage
+   references it by, to its SPARQL variable. `vars` are the stage's SELECT
+   variables, in Lib's order: the breakouts, then the aggregations named with
+   `prefix`. The names are Lib's (`::column-names`, see [[with-column-names]]),
+   deduplicated across breakouts and aggregations (`count`, `count_2`, …) and
+   truncated the way Lib does. Without them, or when they do not line up one to
+   one with `vars`, the columns are mapped by their default names, by
+   [[default-name->var]]."
+  [stage vars prefix]
+  (let [names (::column-names stage)]
+    (if (and (seq names) (= (count names) (count vars)))
+      (zipmap names vars)
+      (default-name->var (:breakout stage) (:aggregation stage) vars prefix))))
 
 (defn- aggregation->projection
   "Compile one aggregation clause to a SPARQL projection
-   `{:select \"(EXPR AS ?ag_N)\" :var \"ag_N\"}`. `token->var` resolves a field
-   token to its SPARQL variable. Throws for an aggregation it cannot compile,
+   `{:select \"(EXPR AS ?<prefix>N)\" :var \"<prefix>N\"}`. `token->var`
+   resolves a field token to its SPARQL variable. Throws for an aggregation it cannot compile,
    which would otherwise drop the column.
 
    `[:count]` with no argument becomes `COUNT(DISTINCT ?subject)` in a base
    stage (so the multi-valued OPTIONAL fan-out does not inflate entity counts);
    when `count-all?` is true (derived stage, no `?subject` var) it becomes
    `COUNT(*)`."
-  ([agg index token->var]
-   (aggregation->projection agg index token->var false))
-  ([agg index token->var count-all?]
-   (let [agg     (unwrap-aggregation agg)
-         op      (when (sequential? agg) (first agg))
-         out     (str "ag_" index)
-         arg     (aggregation-arg-token agg)
-         arg-var (when arg (token->var arg))
-         expr    (case op
-                   :count    (cond
-                               arg-var    (format "COUNT(?%s)" arg-var)
-                               count-all? "COUNT(*)"
-                               :else      "COUNT(DISTINCT ?subject)")
-                   :distinct (when arg-var (format "COUNT(DISTINCT ?%s)" arg-var))
-                   :sum      (when arg-var (format "SUM(?%s)" arg-var))
-                   :avg      (when arg-var (format "AVG(?%s)" arg-var))
-                   :min      (when arg-var (format "MIN(?%s)" arg-var))
-                   :max      (when arg-var (format "MAX(?%s)" arg-var))
-                   nil)]
-     (when-not expr
-       (throw (ex-info (format "The SPARQL driver does not support the %s aggregation." (some-> op name))
-                       {:type driver-api/qp.error-type.unsupported-feature
-                        :clause agg})))
-     {:select (format "(%s AS ?%s)" expr out)
-      :var    out})))
+  [agg index token->var count-all? prefix]
+  (let [agg     (unwrap-aggregation agg)
+        op      (when (sequential? agg) (first agg))
+        out     (str prefix index)
+        arg     (aggregation-arg-token agg)
+        arg-var (when arg (token->var arg))
+        expr    (case op
+                  :count    (cond
+                              arg-var    (format "COUNT(?%s)" arg-var)
+                              count-all? "COUNT(*)"
+                              :else      "COUNT(DISTINCT ?subject)")
+                  :distinct (when arg-var (format "COUNT(DISTINCT ?%s)" arg-var))
+                  :sum      (when arg-var (format "SUM(?%s)" arg-var))
+                  :avg      (when arg-var (format "AVG(?%s)" arg-var))
+                  :min      (when arg-var (format "MIN(?%s)" arg-var))
+                  :max      (when arg-var (format "MAX(?%s)" arg-var))
+                  nil)]
+    (when-not expr
+      (throw (ex-info (format "The SPARQL driver does not support the %s aggregation." (some-> op name))
+                      {:type driver-api/qp.error-type.unsupported-feature
+                       :clause agg})))
+    {:select (format "(%s AS ?%s)" expr out)
+     :var    out}))
 
 (def ^:private temporal-bucket-exprs
   "SPARQL expression per breakout `:temporal-unit`, as a format string over the
@@ -939,14 +977,14 @@
   "Compile `order-by` for an aggregation query to an `ORDER BY` clause string,
    or nil. Order terms may reference a breakout column (`[:field …]` or
    `[:expression …]`, resolved by `token->var`) or an aggregation by index
-   (`[:aggregation N]`)."
-  [order-by token->var]
+   (`[:aggregation N]`, the variable `<prefix>N`, see [[agg-var-prefix]])."
+  [order-by token->var prefix]
   (when (seq order-by)
     (let [parts (for [[dir tok & _] order-by]
                   (order-term dir
                               (cond
                                 (and (vector? tok) (= :aggregation (first tok)))
-                                (str "ag_" (second tok))
+                                (str prefix (second tok))
                                 (and (vector? tok) (#{:field :expression} (first tok)))
                                 (token->var tok))
                               tok))]
@@ -1080,8 +1118,10 @@
    expects — see [[reconcile-base-projection]].
 
    Returns `{:sparql <query string> :vars <SELECT var names, in order>
-              :aliases <raw column var → temporal bucket var, and the name
-                        of a field with a suffixed var → its var>}`."
+              :aliases <raw column var → temporal bucket var, the name of a
+                        field with a suffixed var → its var, and in grouped mode
+                        each output column's name → its var
+                        (see [[grouped-name->var]])>}`."
   [inner expected-cols]
   (let [limit-part    (limit-clause inner)
         table-id      (:source-table inner)
@@ -1310,8 +1350,13 @@
                       []))
         _ (log/debugf "[mbql] Filters count: %d" (count filters))
         ;; --- SELECT / GROUP BY / ORDER BY ------------------------------------
+        ;; a property whose name sanitizes to `ag_0` already binds `?ag_0`
+        agg-prefix      (agg-var-prefix (concat (vals field-id->var)
+                                                (vals pair->target-var)
+                                                (vals alias->intermediate-var)
+                                                (map sanitize-var-name (keys expressions))))
         agg-projections (when agg?
-                          (map-indexed (fn [i a] (aggregation->projection a i token->var))
+                          (map-indexed (fn [i a] (aggregation->projection a i token->var false agg-prefix))
                                        aggregations))
         bucketed        (bucket-breakout breakout token->var)
         breakout-vars   (when agg? (:vars bucketed))
@@ -1392,7 +1437,7 @@
         group-by-clause (when (and agg? (seq breakout-vars))
                           (str "GROUP BY " (str/join " " (map #(str "?" %) breakout-vars))))
         order-clause (if agg?
-                       (compile-agg-order-by order-by (:token->var bucketed))
+                       (compile-agg-order-by order-by (:token->var bucketed) agg-prefix)
                        (compile-order-by order-by field-id->var pair->target-var))
         where-body  (->> (concat [(format "  ?subject a %s ." (uri/iri-ref class-uri))]
                                  triples-for-fields
@@ -1416,13 +1461,17 @@
     (log/debugf "[sparql.mbql] Compiled base stage: %s" query)
     {:sparql  query
      :vars    result-vars
-     :aliases (into (:aliases bucketed)
-                    ;; a later stage names a field by its name, which a suffixed
-                    ;; var (see [[build-var-aliases]]) no longer matches
-                    (for [[fid v] field-id->var
-                          :let [nm (:name (field-id->metadata fid))]
-                          :when (and nm (not= v (sanitize-var-name nm)))]
-                      [nm (get (:aliases bucketed) v v)]))}))
+     :aliases (merge (:aliases bucketed)
+                     ;; a later stage names a field by its name, which a suffixed
+                     ;; var (see [[build-var-aliases]]) no longer matches
+                     (into {}
+                           (for [[fid v] field-id->var
+                                 :let [nm (:name (field-id->metadata fid))
+                                       v  (get (:aliases bucketed) v v)]
+                                 :when (and nm (not= v (sanitize-var-name nm))
+                                            (or (not agg?) (some #{v} result-vars)))]
+                             [nm v]))
+                     (when agg? (grouped-name->var inner result-vars agg-prefix)))}))
 
 (defn- inner-var-for-ref
   "Determine the SPARQL variable a base/inner stage projects for `fk-ref` — a
@@ -1501,6 +1550,28 @@
      :prologue (str/trim prologue)
      :dataset  (str/join "\n" (re-seq dataset-clause-re head))}))
 
+(defn- fields-name->var
+  "Map the columns an explicit `fields` projects, from the names Lib gives them,
+   to their SPARQL variables: each column's own name (`<alias>__<name>` through
+   a join, a custom column's name) run through Lib's generator in Lib's order,
+   the stage's columns before a join's, so the later of two equal names is
+   `name_2`."
+  [fields token->var]
+  (let [unique (lib/unique-name-generator)]
+    (into {}
+          (keep (fn [tok]
+                  (let [id    (field-token->id tok)
+                        alias (field-token->join-alias tok)
+                        nm    (cond
+                                (expression-token? tok) (expression-token->name tok)
+                                (string? id)            id
+                                (integer? id)           (:name (field-id->metadata id)))
+                        v     (token->var tok)]
+                    (when nm
+                      (let [nm* (unique (cond->> nm alias (str alias "__")))]
+                        (when v [nm* v]))))))
+          (concat (remove field-token->join-alias fields) (filter field-token->join-alias fields)))))
+
 (defn- compile-derived-stage
   "Compile a derived MBQL stage (one with `:source-query`). These arise e.g.
    when a saved card / model is used as a source, when an FK display-value
@@ -1520,7 +1591,10 @@
    expects.
 
    Returns `{:sparql … :vars … :aliases …}` (see [[compile-base-stage]]), plus
-   the `:prologue` and `:dataset` of a native source ([[compile-native-stage]])."
+   the `:prologue` and `:dataset` of a native source ([[compile-native-stage]]).
+   An ungrouped stage passes through the source's `:aliases` whose variable it
+   still projects, with the names an explicit `:fields` gives its columns
+   ([[fields-name->var]]) on top."
   [stage expected-cols]
   (let [naming        (database-naming-context)
         source        (:source-query stage)
@@ -1550,12 +1624,10 @@
         ;; (a string-named source-query column) resolves to the name itself, at
         ;; every nesting level: sanitizing would rename a native `?idade_média`
         ;; to a variable no stage projects.
-        ;; Aggregation results are the exception: the inner stage names them `ag_N`,
-        ;; but a later stage references them by Lib's name (`count`, `sum`, …), so we
-        ;; add those aliases (drilling on an aggregation value relies on this).
+        ;; The inner stage's `:aliases` add the names Lib uses for columns whose
+        ;; var differs: aggregations (`count` → `ag_0`), temporal buckets, and
+        ;; deduplicated names (`count_2`); drilling on a value relies on them.
         field-id->var    (merge (into {} (for [v passthrough-vars] [v v]))
-                                (aggregation-name->var (:aggregation source))
-                                ;; a temporal bucket keeps its raw column name in Lib
                                 (:aliases inner))
         pair->target-var (into {} (for [{:keys [tid alias var]} remap-entries]
                                     [[tid alias] var]))
@@ -1567,8 +1639,10 @@
         agg?          (boolean (or (seq aggregations) (seq breakout)))
         filter-clause (:filter stage)
         order-by      (:order-by stage)
+        agg-prefix    (agg-var-prefix (concat passthrough-vars
+                                              (map sanitize-var-name (keys (:expressions stage)))))
         agg-projections (when agg?
-                          (vec (map-indexed (fn [i a] (aggregation->projection a i token->var true))
+                          (vec (map-indexed (fn [i a] (aggregation->projection a i token->var true agg-prefix))
                                             aggregations)))
         bucketed        (bucket-breakout breakout token->var)
         breakout-vars   (when agg? (:vars bucketed))
@@ -1580,8 +1654,9 @@
                               (vec (distinct vs)))))
         ;; When Lib's expected columns are known, reconcile the SELECT against them.
         ;; Remap columns resolve via `pair->target-var` (or an extra OPTIONAL); the rest
-        ;; match inner vars by desired alias or Lib name (`count` → `ag_0`) before
-        ;; position, since an FK remap reorders the sub-SELECT.
+        ;; match inner vars by the source's name for the column (`count` → `ag_0`),
+        ;; then by desired alias, then by Lib name, before position, since an FK
+        ;; remap reorders the sub-SELECT.
         reconciled    (when (and expected-cols (not agg?))
                         (let [inner-vars  (atom (:vars inner))
                               placeholder (atom 0)]
@@ -1612,7 +1687,11 @@
                                  (seq @inner-vars)
                                  (let [unused (set @inner-vars)
                                        v      (or (some unused
-                                                        [(some-> (:lib/desired-column-alias col) sanitize-var-name)
+                                                        ;; the source's name for the column first: the
+                                                        ;; inner `:aliases` key Lib's names to their vars
+                                                        [(when-not (:fk-field-id col)
+                                                           (get field-id->var (:lib/source-column-alias col)))
+                                                         (some-> (:lib/desired-column-alias col) sanitize-var-name)
                                                          (when-not (:fk-field-id col)
                                                            (get field-id->var (:name col)))])
                                                   (first @inner-vars))]
@@ -1626,7 +1705,7 @@
         ;; Lib-name → SPARQL-var, so an outer filter/order-by referencing an inner
         ;; column by Lib's name resolves even when the driver's invented var name
         ;; differs (joined breakout columns become `?<alias>__<field>`, aggregations
-        ;; become `?ag_N`). `reconciled` produces exactly one var per `expected-col`
+        ;; `?ag_N` or `?agK_N`, see [[agg-var-prefix]]). `reconciled` produces exactly one var per `expected-col`
         ;; in order, so they zip positionally; both `:name` and any
         ;; `:lib/desired-column-alias` are keyed in case the ref uses either.
         expected-name->var (when reconciled
@@ -1657,7 +1736,7 @@
         group-by-clause (when (and agg? (seq breakout-vars))
                           (str "GROUP BY " (str/join " " (map #(str "?" %) breakout-vars))))
         order-clause  (if agg?
-                        (compile-agg-order-by order-by (:token->var bucketed))
+                        (compile-agg-order-by order-by (:token->var bucketed) agg-prefix)
                         (compile-order-by order-by outer-field-id->var pair->target-var))
         filters       (when filter-clause
                         (or (compile-basic-filter filter-clause outer-field-id->var pair->target-var) []))
@@ -1681,7 +1760,12 @@
     (log/debugf "[sparql.mbql] Compiled derived stage: %s" query)
     {:sparql   query
      :vars     result-vars
-     :aliases  (:aliases bucketed)
+     :aliases  (if agg?
+                 (merge (:aliases bucketed) (grouped-name->var stage result-vars agg-prefix))
+                 ;; the inner columns pass through under the same names; an explicit
+                 ;; `:fields` names them anew, the way Lib does
+                 (merge (into {} (filter (comp (set result-vars) val)) (:aliases inner))
+                        (fields-name->var (:fields stage) token->var)))
      :prologue (:prologue inner)
      :dataset  (:dataset inner)}))
 
@@ -1710,6 +1794,42 @@
                  (.getMessage e))
       nil)))
 
+(defn- stage-column-names
+  "Return Lib's names for the columns each stage of `query` (pMBQL) returns, by
+   stage index: the names the next stage references them by. Nil for the last
+   stage, which no stage references, and for a stage whose names Lib cannot
+   compute."
+  [query]
+  ;; nothing references the last stage's columns by name
+  (conj (mapv (fn [i]
+                (let [stage (lib/query-stage query i)]
+                  ;; a native source's columns are its own variable names
+                  (when-not (= :mbql.stage/native (:lib/type stage))
+                    (try
+                      (mapv :lib/desired-column-alias (lib/returned-columns query i stage))
+                      (catch Exception e
+                        (log/debugf "[sparql.mbql] Could not compute the column names of stage %d from Lib: %s" i (.getMessage e))
+                        nil)))))
+              (range (dec (count (:stages query)))))
+        nil))
+
+(defn- with-column-names
+  "Attach to each stage of `inner` (a legacy `:query`, its sources nested in
+   `:source-query`) its Lib column `names` as `::column-names`. `names` is by
+   stage index, innermost first. Returns `inner` unchanged when the number of
+   stages differs."
+  [inner names]
+  (let [depth (count (take-while some? (iterate :source-query inner)))]
+    (if (not= depth (count names))
+      (do (when (some some? names)
+            (log/warnf "[sparql.mbql] Lib returned names for %d stages, the query has %d; later stages resolve aggregations by their default names"
+                       (count names) depth))
+          inner)
+      ((fn attach [stage i]
+         (cond-> (assoc stage ::column-names (nth names i))
+           (:source-query stage) (update :source-query attach (dec i))))
+       inner (dec depth)))))
+
 (defn mbql->native
   "Compile a Metabase query into a native SPARQL map `{:query <string> :mbql? true}`.
 
@@ -1725,7 +1845,8 @@
   [_driver outer-query]
   (let [expected-cols    (expected-result-columns outer-query)
         legacy-query     (driver-api/->legacy-MBQL outer-query)
-        {:keys [sparql vars prologue dataset]} (compile-stage (:query legacy-query) expected-cols)
+        inner-query      (with-column-names (:query legacy-query) (stage-column-names outer-query))
+        {:keys [sparql vars prologue dataset]} (compile-stage inner-query expected-cols)
         sparql           (cond->> sparql
                            (seq dataset)  (#(str/replace-first % "\nWHERE {" (str "\n" dataset "\nWHERE {")))
                            (seq prologue) (str prologue "\n"))]
