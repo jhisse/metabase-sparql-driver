@@ -15,12 +15,14 @@
    (java.time.format DateTimeFormatter)))
 
 (defn- sanitize-var-name
-  "Return `s` as a SPARQL variable name: characters outside `[A-Za-z0-9_]`
-   become `_`, a leading digit gets a `_` prefix, and a blank result is `v`."
+  "Return `s` as a SPARQL variable name: characters the SPARQL 1.1 `VARNAME`
+   production does not allow become `_`, a first character it allows only later
+   (a digit, `·`, a combining mark, `‿` or `⁀`) gets a `_` prefix, and a blank
+   result is `v`. Letters outside ASCII are kept, so `имя` and `вес` stay distinct."
   [s]
   (let [base (-> (str s)
-                 (str/replace #"[^A-Za-z0-9_]" "_")
-                 (str/replace #"^([0-9])" "_$1"))]
+                 (str/replace #"[^A-Za-z0-9_\u00B7\u00C0-\u00D6\u00D8-\u00F6\u00F8-\u02FF\u0300-\u036F\u0370-\u037D\u037F-\u1FFF\u200C-\u200D\u203F-\u2040\u2070-\u218F\u2C00-\u2FEF\u3001-\uD7FF\uF900-\uFDCF\uFDF0-\uFFFD]" "_")
+                 (str/replace #"^([0-9\u00B7\u0300-\u036F\u203F-\u2040])" "_$1"))]
     (if (str/blank? base) "v" base)))
 
 (defn- field-token->id
@@ -491,13 +493,19 @@
 
 (defn- build-var-aliases
   "Return a map from each of `field-ids` to its SPARQL variable: the sanitized
-   field name, or `f_<id>` when the field has no metadata."
+   field name, or `f_<id>` when the field has no metadata. When several fields
+   sanitize to the same name (`a-b` and `a_b`), each of them gets `<name>_<id>`
+   instead, so no two columns share a variable."
   [field-ids]
-  (let [aliases (into {}
+  (let [names   (into {}
                       (for [fid field-ids
                             :let [meta (field-id->metadata fid)
                                   nm   (or (:name meta) (str "f_" fid))]]
-                        [fid (sanitize-var-name nm)]))]
+                        [fid (sanitize-var-name nm)]))
+        counts  (frequencies (vals names))
+        aliases (into {}
+                      (for [[fid nm] names]
+                        [fid (if (> (counts nm) 1) (str nm "_" fid) nm)]))]
     (log/debugf "[mbql] Built %d var aliases" (count aliases))
     aliases))
 
@@ -1004,6 +1012,7 @@
            (and fid (not alias) (not (id-field? fid)) (:name (field-id->metadata fid)))
            (let [nm   (:name (field-id->metadata fid))
                  v    (sanitize-var-name nm)
+                 v    (if (some #{v} (vals field-id->var)) (str v "_" fid) v)
                  prop (uri/absolute-uri nm naming)]
              (-> acc
                  (update :vars conj v)
@@ -1049,7 +1058,8 @@
    expects — see [[reconcile-base-projection]].
 
    Returns `{:sparql <query string> :vars <SELECT var names, in order>
-              :aliases <raw column var → temporal bucket var>}`."
+              :aliases <raw column var → temporal bucket var, and the name
+                        of a field with a suffixed var → its var>}`."
   [inner expected-cols]
   (let [limit-part    (limit-clause inner)
         table-id      (:source-table inner)
@@ -1383,7 +1393,13 @@
     (log/debugf "[sparql.mbql] Compiled base stage: %s" query)
     {:sparql  query
      :vars    result-vars
-     :aliases (:aliases bucketed)}))
+     :aliases (into (:aliases bucketed)
+                    ;; a later stage names a field by its name, which a suffixed
+                    ;; var (see [[build-var-aliases]]) no longer matches
+                    (for [[fid v] field-id->var
+                          :let [nm (:name (field-id->metadata fid))]
+                          :when (and nm (not= v (sanitize-var-name nm)))]
+                      [nm (get (:aliases bucketed) v v)]))}))
 
 (defn- inner-var-for-ref
   "Determine the SPARQL variable a base/inner stage projects for `fk-ref` — a
@@ -1395,6 +1411,8 @@
   (let [id (field-token->id fk-ref)]
     (cond
       (and (integer? id) (id-field? id)) "subject"
+      ;; Does not know the `<name>_<id>` suffix [[build-var-aliases]] adds on a
+      ;; collision, so a FK column that collides after sanitizing gets no remap.
       (integer? id) (sanitize-var-name (:name (field-id->metadata id)))
       (string? id)  (sanitize-var-name id)
       :else         nil)))

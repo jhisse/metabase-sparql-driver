@@ -26,6 +26,13 @@
     (is (= "a_b_c" (f "a.b/c")))
     (testing "a leading digit is escaped"
       (is (= "_1col" (f "1col"))))
+    (testing "letters SPARQL allows in a variable name are kept"
+      (is (= "имя" (f "имя")))
+      (is (= "café" (f "café"))))
+    (testing "a character outside the BMP is replaced: RDF4J rejects it in a variable"
+      (is (= "_x" (f "😀x"))))
+    (testing "a leading character valid only after the first is escaped"
+      (is (= "_·x" (f "·x"))))
     (testing "blank input yields a usable default"
       (is (= "v" (f ""))))))
 
@@ -507,6 +514,46 @@
       (is (str/includes? sparql "SELECT ?subject ?naam ?leeftijd"))
       (is (str/includes? sparql (str "?subject a <" base "Persoon> .")))
       (is (str/includes? sparql (str "OPTIONAL { ?subject <" base "naam> ?naam . }"))))))
+
+(defn- compile-two-fields
+  "Compile a base stage projecting the subject and fields 2 and 3 named `a` and `b`."
+  [a b]
+  (with-redefs-fn
+    {#'mbql/field-id->metadata        {1 {:name "subject"} 2 {:name a} 3 {:name b}}
+     #'mbql/table-id->class-uri       (constantly (str base "Persoon"))
+     #'mbql/database-naming-context   (constantly {:default-graph base :prefixes []})
+     #'mbql/database-default-language (constantly "")}
+    #(compile-stage* {:source-table 100 :fields [[:field 1 nil] [:field 2 nil] [:field 3 nil]]})))
+
+(deftest compile-base-stage-var-collision-test
+  (testing "fields whose names sanitize to the same var each get their own, suffixed by id"
+    (let [{:keys [sparql vars]} (compile-two-fields "a-b" "a_b")]
+      (is (= ["subject" "a_b_2" "a_b_3"] vars))
+      (is (str/includes? sparql "SELECT ?subject ?a_b_2 ?a_b_3"))
+      (is (str/includes? sparql (str "OPTIONAL { ?subject <" base "a-b> ?a_b_2 . }")))
+      (is (str/includes? sparql (str "OPTIONAL { ?subject <" base "a_b> ?a_b_3 . }"))))))
+
+(deftest compile-derived-stage-var-collision-test
+  (testing "a later stage reaches a suffixed var by the field's name"
+    (let [{:keys [sparql]}
+          (with-redefs-fn
+            {#'mbql/field-id->metadata        {1 {:name "subject"} 2 {:name "a-b"} 3 {:name "a_b"}}
+             #'mbql/table-id->class-uri       (constantly (str base "Persoon"))
+             #'mbql/database-naming-context   (constantly {:default-graph base :prefixes []})
+             #'mbql/database-default-language (constantly "")}
+            #(compile-derived-stage* {:source-query {:source-table 100
+                                                     :breakout     [[:field 2 nil] [:field 3 nil]]
+                                                     :aggregation  [[:count]]}
+                                      :filter       [:= [:field "a_b" {:base-type :type/Text}]
+                                                     [:value "x" {:base_type :type/Text}]]}
+                                     nil))]
+      (is (str/includes? sparql "FILTER (STR(?a_b_3) = \"x\")") sparql))))
+
+(deftest compile-base-stage-unicode-var-test
+  (testing "non-ASCII names keep their letters, so they do not collide"
+    (let [{:keys [sparql vars]} (compile-two-fields "имя" "вес")]
+      (is (= ["subject" "имя" "вес"] vars))
+      (is (str/includes? sparql "SELECT ?subject ?имя ?вес")))))
 
 (deftest compile-base-stage-filter-test
   (with-fixture
