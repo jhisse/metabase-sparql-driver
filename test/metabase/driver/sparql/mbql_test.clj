@@ -992,6 +992,62 @@
                            (str "OPTIONAL { ?geboorteplaats_node <" base "label> ?Plaats__label . "
                                 "FILTER(?geboorteplaats_node = ?geboorteplaats) }")))))))
 
+(deftest compile-stage-join-condition-test
+  (with-fixture
+    (let [unsupported-type (fn [stage]
+                             (try (@#'mbql/compile-stage stage)
+                                  nil
+                                  (catch clojure.lang.ExceptionInfo e
+                                    (is (re-find #"join \"C\": it can only join on one condition" (ex-message e)))
+                                    (:type (ex-data e)))))
+          base-stage       (fn [join]
+                             {:source-table 100
+                              :fields       [[:field 1 nil] [:field 10 {:join-alias "C"}]]
+                              :joins        [(merge {:alias "C"} join)]})
+          derived-stage    (fn [condition]
+                             {:source-query {:source-table 100
+                                             :fields       [[:field 1 nil] [:field 10 nil]]}
+                              :fields       [[:field "label" nil] [:field 10 {:join-alias "C"}]]
+                              :joins        [{:alias "C" :condition condition}]})]
+      (testing "rejected"
+        (doseq [[desc stage] [["neither side is the subject"
+                               (base-stage {:condition [:= [:field 10 nil] [:field 10 {:join-alias "C"}]]})]
+                              ["the joined side is not the subject"
+                               (base-stage {:condition [:= [:field 1 nil] [:field 4 {:join-alias "C"}]]})]
+                              ["the subject on this table's side of a base stage"
+                               (base-stage {:condition [:= [:field 1 nil] [:field 1 {:join-alias "C"}]]})]
+                              ["two conditions"
+                               (base-stage {:condition [:and [:= [:field 4 nil] [:field 1 {:join-alias "C"}]]
+                                                        [:= [:field 10 nil] [:field 10 {:join-alias "C"}]]]})]
+                              ["not an equality"
+                               (base-stage {:condition [:< [:field 4 nil] [:field 1 {:join-alias "C"}]]})]
+                              ["neither side is the subject, in a derived stage"
+                               (derived-stage [:= [:field "label" nil] [:field 10 {:join-alias "C"}]])]]]
+          (testing desc
+            (is (= driver-api/qp.error-type.unsupported-feature (unsupported-type stage)))))))
+    (testing "accepted"
+      (doseq [[desc stage] [["the operands in either order"
+                             {:source-table 100
+                              :fields       [[:field 1 nil] [:field 10 {:join-alias "C"}]]
+                              :joins        [{:alias "C" :condition [:= [:field 1 {:join-alias "C"}] [:field 4 nil]]}]}]
+                            ["one condition wrapped in :and"
+                             {:source-table 100
+                              :fields       [[:field 1 nil] [:field 10 {:join-alias "C"}]]
+                              :joins        [{:alias "C" :condition [:and [:= [:field 4 nil] [:field 1 {:join-alias "C"}]]]}]}]
+                            ["the subject on the source side of a derived stage"
+                             {:source-query {:source-table 100
+                                             :fields       [[:field 1 nil] [:field 10 nil]]}
+                              :fields       [[:field "subject" nil] [:field 10 {:join-alias "C"}]]
+                              :joins        [{:alias "C" :condition [:= [:field "subject" nil] [:field 1 {:join-alias "C"}]]}]}]
+                            ["a joined table Metabase wraps in a sub-query (a remapped FK column)"
+                             {:source-table 100
+                              :fields       [[:field 1 nil] [:field 10 {:join-alias "C"}]]
+                              :joins        [{:alias        "C"
+                                              :source-query {:source-table 100}
+                                              :condition    [:= [:field 4 nil] [:field 1 {:join-alias "C"}]]}]}]]]
+        (testing desc
+          (is (string? (:sparql (compile-stage* stage)))))))))
+
 (deftest compile-derived-stage-over-temporal-bucket-test
   (with-fixture
     (testing "an outer stage finds a bucketed column by its raw name"
