@@ -34,6 +34,7 @@
 ;; Implements database-supports? multimethod to define supported features.
 (doseq [[feature supported?] {:metadata/key-constraints true ;; FKs come from SHACL when configured; harmless when not
                               :nested-fields false
+                              :nested-queries true ;; a source stage or saved question compiles to a sub-SELECT
                               :nested-field-columns false
                               :set-timezone false
                               :standard-deviation-aggregations false
@@ -99,7 +100,6 @@
 ;; they fall through to its :default (false).
 (doseq [feature [:basic-aggregations
                  :expression-aggregations
-                 :nested-queries
                  :temporal-extract
                  :date-arithmetics
                  :now]]
