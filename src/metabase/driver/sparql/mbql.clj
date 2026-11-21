@@ -731,11 +731,15 @@
           :replace (let [[txt find repl] args
                          find-str (if (string? find) find (second find))
                          repl-str (if (string? repl) repl (second repl))]
-                     ;; `\` and `$` are special in a REPLACE replacement string.
-                     (format "REPLACE(%s, %s, %s)"
-                             (s txt)
-                             (uri/string-literal (regex-escape find-str))
-                             (uri/string-literal (str/replace (str repl-str) #"[\\$]" "\\\\$0"))))
+                     ;; An empty pattern matches between every character (or is an
+                     ;; error, FORX0003); replacing nothing returns the text.
+                     (if (empty? (str find-str))
+                       (s txt)
+                       ;; `\` and `$` are special in a REPLACE replacement string.
+                       (format "REPLACE(%s, %s, %s)"
+                               (s txt)
+                               (uri/string-literal (regex-escape find-str))
+                               (uri/string-literal (str/replace (str repl-str) #"[\\$]" "\\\\$0")))))
           :regex-match-first
           ;; REPLACE returns its input unchanged when nothing matches, so a
           ;; non-matching row gets null from the REGEX guard instead. "s" lets
