@@ -1440,6 +1440,49 @@
                                  {:id 4 :name "geboorteplaats"}])]
             (is (= ["Person__via__knows__http___www_w3_org_2000_01_rdf_schema_label" "subject" "geboorteplaats"] vars))))))))
 
+(deftest derived-stage-join-fk-display-test
+  (with-redefs-fn {#'mbql/field-id->metadata (fn [id] (get (assoc fixture-fields 13 {:name "provincie" :semantic-type :type/FK}) id))
+                   #'mbql/table-id->class-uri (constantly (str base "Persoon"))
+                   #'mbql/database-naming-context (constantly {:default-graph base :prefixes []})
+                   #'mbql/database-default-language (constantly "")}
+    (fn []
+      (let [card {:source-table 100 :fields [[:field 1 nil] [:field 4 nil]]}
+            join {:alias "Plaats" :condition [:= [:field "geboorteplaats" nil] [:field 1 {:join-alias "Plaats"}]]}
+            hop  (str "?geboorteplaats_node <" base "provincie> ?Plaats__provincie_subject . "
+                      "?Plaats__provincie_subject <" base "label> ?Plaats__provincie__label .")]
+        (testing "a FK column's display value inside a join is read one hop past the joined entity"
+          (let [{:keys [sparql vars]} (compile-derived-stage*
+                                       {:source-query card
+                                        :joins  [join]
+                                        :fields [[:field "geboorteplaats" nil]
+                                                 [:field 10 {:join-alias "Plaats"}]
+                                                 [:field 13 {:join-alias "Plaats"}]
+                                                 [:field 10 {:join-alias "Plaats" :source-field 13}]]}
+                                       nil)]
+            (is (= ["geboorteplaats" "Plaats__label" "Plaats__provincie" "Plaats__provincie__label"] vars))
+            (is (str/includes? sparql hop))))
+        (testing "and so is one only Lib expects, marked by its FK"
+          (let [{:keys [sparql vars]} (compile-derived-stage*
+                                       {:source-query card :joins [join]}
+                                       [{:name "geboorteplaats"}
+                                        {:id 10 :lib/join-alias "Plaats"}
+                                        {:id 10 :lib/join-alias "Plaats" :lib/original-fk-field-id 13}])]
+            (is (= ["geboorteplaats" "Plaats__label" "Plaats__provincie__label"] vars))
+            (is (str/includes? sparql hop))))
+        (testing "the FK target's subject is the node the hop reaches"
+          (let [{:keys [sparql vars]} (compile-derived-stage*
+                                       {:source-query card :joins [join]}
+                                       [{:name "geboorteplaats"}
+                                        {:id 1 :lib/join-alias "Plaats" :lib/original-fk-field-id 13}])]
+            (is (= ["geboorteplaats" "Plaats__provincie_subject"] vars))
+            (is (str/includes? sparql (str "?geboorteplaats_node <" base "provincie> ?Plaats__provincie_subject .")))))
+        (testing "a hop through a field that is not a foreign key fails"
+          (is (thrown-with-msg? clojure.lang.ExceptionInfo #"cannot follow label: it is not a foreign key"
+                                (compile-derived-stage*
+                                 {:source-query card :joins [join]
+                                  :fields [[:field "geboorteplaats" nil] [:field 10 {:join-alias "Plaats" :source-field 10}]]}
+                                 nil))))))))
+
 (deftest derived-stage-joined-subject-test
   (with-fixture
     (let [card  {:source-table 100 :fields [[:field 1 nil] [:field 4 nil]]}
