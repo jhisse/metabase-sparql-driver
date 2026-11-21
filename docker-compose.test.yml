@@ -10,7 +10,7 @@ services:
   oxigraph:
     profiles: ["oxigraph"]
     # Pin the tag for reproducibility; never use `latest`.
-    image: ghcr.io/oxigraph/oxigraph:0.4.11
+    image: ghcr.io/oxigraph/oxigraph:0.5.13
     command: ["serve", "--bind", "0.0.0.0:7878"]
     ports:
       - "127.0.0.1:7878:7878"
