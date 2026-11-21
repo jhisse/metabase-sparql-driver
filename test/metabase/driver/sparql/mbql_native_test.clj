@@ -7,6 +7,7 @@
   harness e2e_test.clj needs."
   (:require [clojure.string :as str]
             [clojure.test :refer :all]
+            [metabase.driver.sparql.mbql :as mbql]
             [metabase.driver.sparql.test-util :as tu]
             [metabase.lib.core :as lib]
             [metabase.lib.metadata :as lib.metadata]))
@@ -231,7 +232,13 @@
       (doseq [unit [:day :week :month :quarter :year]]
         (is (str/includes? (->sparql (lib/filter q (lib/time-interval born -2 unit)))
                            "?birthDate >=")
-            (name unit))))))
+            (name unit))))
+    (testing "a relative filter starting from an offset compiles"
+      (with-redefs [mbql/query-zone (constantly (java.time.ZoneId/of "UTC"))
+                    mbql/query-now  (constantly (java.time.ZonedDateTime/parse "2026-09-26T10:15:30Z"))]
+        (let [sparql (->sparql (lib/filter q (lib/relative-time-interval born -30 :year -1 :year)))]
+          (is (str/includes? sparql (str "?birthDate >= \"1995-01-01\"^^" xsd "date>")))
+          (is (str/includes? sparql (str "?birthDate < \"2025-01-01\"^^" xsd "date>"))))))))
 
 (deftest custom-columns-test
   (let [q      (tu/person-query)

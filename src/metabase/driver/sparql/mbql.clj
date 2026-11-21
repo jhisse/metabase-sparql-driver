@@ -355,17 +355,44 @@
   ^ZonedDateTime []
   (ZonedDateTime/now (query-zone)))
 
+(declare temporal-clause?)
+
+(defn- shifted-datetime
+  "Split `[:+|:- …]` into `[datetime intervals]` when it shifts one datetime by
+   intervals (`[:+ <datetime> [:interval -1 :year]]`, a relative filter
+   \"starting from\"), else nil. `:+` takes the datetime on either side; `:-`
+   only before the intervals."
+  [[tag & args]]
+  (when (#{:+ :-} tag)
+    (let [[ts ivs] (if (= :- tag)
+                     [(take 1 args) (rest args)]
+                     ((juxt filter remove) temporal-clause? args))]
+      (when (and (= 1 (count ts))
+                 (temporal-clause? (first ts))
+                 (seq ivs)
+                 (every? #(and (vector? %) (= :interval (first %)) (int? (second %))) ivs))
+        [(first ts) ivs]))))
+
 (defn- temporal-clause?
+  "True for an absolute or relative datetime, and for one shifted by intervals
+   (see [[shifted-datetime]])."
   [x]
-  (and (vector? x) (contains? #{:absolute-datetime :relative-datetime} (first x))))
+  (and (vector? x)
+       (or (contains? #{:absolute-datetime :relative-datetime} (first x))
+           (some? (shifted-datetime x)))))
 
 (defn- temporal-clause->value
   "Resolve `[:absolute-datetime t unit]` / `[:relative-datetime n unit]` to a
    java.time value. A relative datetime is the start of `unit`, `n` units from
    now (the same semantics as the SQL and Mongo drivers); `:current` or a
-   missing unit gives the current time itself, untruncated."
-  [[tag a b]]
+   missing unit gives the current time itself, untruncated. A `:+`/`:-` clause
+   shifts its datetime by each of its intervals ([[shifted-datetime]])."
+  [[tag a b :as clause]]
   (case tag
+    (:+ :-)            (let [[dt ivs] (shifted-datetime clause)]
+                         (reduce (fn [t [_ n unit]] (u.date/add t unit (if (= tag :-) (- n) n)))
+                                 (temporal-clause->value dt)
+                                 ivs))
     :absolute-datetime (if (string? a) (u.date/parse a) a)
     :relative-datetime (let [now (query-now)]
                          (if (or (= a :current) (contains? #{nil :default} b))
