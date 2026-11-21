@@ -338,6 +338,23 @@
                  (f [:>= [:field 1 nil] [:relative-datetime -30 :year]])))
           (is (= (str "(?geboren < \"2026-10-01\"" date ")")
                  (f [:< [:field 1 nil] [:relative-datetime 1 :quarter]])))))
+      (testing "a datetime shifted by intervals (a relative filter \"starting from\") adds each of them"
+        (is (= (str "(?geboren >= \"1995-01-01\"" date ")")
+               (f [:>= [:field 1 nil] [:+ [:relative-datetime -30 :year] [:interval -1 :year]]])))
+        (is (= (str "(?geboren < \"2026-08-25\"" date ")")
+               (f [:< [:field 1 nil] [:- [:relative-datetime 0 :month] [:interval 1 :week]]])))
+        (is (= (str "(?geboren >= \"2025-07-01\"" date ")")
+               (f [:>= [:field 1 nil] [:+ [:relative-datetime 0 :month] [:interval -1 :year] [:interval -2 :month]]])))
+        (is (= (str "(?geboren >= \"1995-01-01\"" date ")")
+               (f [:>= [:field 1 nil] [:+ [:interval -1 :year] [:relative-datetime -30 :year]]])))
+        (is (= (str "(" (dt-cmp "gewijzigd" ">=" "2024-01-01T02:00:00Z" "2024-01-01T02:00:00") ")")
+               (f [:>= [:field 2 nil] [:+ [:absolute-datetime #t "2024-01-01T00:00Z" :default] [:interval 2 :hour]]])))
+        (testing "but not a shift by a number, by a datetime, or of an interval"
+          (doseq [bound [[:+ [:relative-datetime 0 :day] 5]
+                         [:- [:relative-datetime 0 :day] [:relative-datetime -1 :day]]
+                         [:- [:interval 1 :week] [:relative-datetime 0 :month]]
+                         [:+ [:relative-datetime 0 :day] [:interval 1.5 :day]]]]
+            (is (thrown? clojure.lang.ExceptionInfo (f [:< [:field 1 nil] bound])) (pr-str bound)))))
       (testing ":current resolves to now"
         (is (= (str "(" (dt-cmp "gewijzigd" "<=" "2026-09-26T10:15:30Z" "2026-09-26T10:15:30") ")")
                (f [:<= [:field 2 nil] [:relative-datetime :current]]))))
