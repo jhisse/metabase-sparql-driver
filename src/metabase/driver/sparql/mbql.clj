@@ -1117,6 +1117,28 @@
      {:vars [] :triples []}
      expected-cols)))
 
+(defn- fields-name->var
+  "Map the columns an explicit `fields` projects, from the names Lib gives them,
+   to their SPARQL variables: each column's own name (`<alias>__<name>` through
+   a join, a custom column's name) run through Lib's generator in Lib's order,
+   the stage's columns before a join's, so the later of two equal names is
+   `name_2`."
+  [fields token->var]
+  (let [unique (lib/unique-name-generator)]
+    (into {}
+          (keep (fn [tok]
+                  (let [id    (field-token->id tok)
+                        alias (field-token->join-alias tok)
+                        nm    (cond
+                                (expression-token? tok) (expression-token->name tok)
+                                (string? id)            id
+                                (integer? id)           (:name (field-id->metadata id)))
+                        v     (token->var tok)]
+                    (when nm
+                      (let [nm* (unique (cond->> nm alias (str alias "__")))]
+                        (when v [nm* v]))))))
+          (concat (remove field-token->join-alias fields) (filter field-token->join-alias fields)))))
+
 (defn- compile-base-stage
   "Compile a base MBQL stage (one with `:source-table`) to a SPARQL query.
 
@@ -1148,9 +1170,9 @@
 
    Returns `{:sparql <query string> :vars <SELECT var names, in order>
               :aliases <raw column var → temporal bucket var, the name of a
-                        field with a suffixed var → its var, and in grouped mode
-                        each output column's name → its var
-                        (see [[grouped-name->var]])>}`."
+                        field with a suffixed var → its var, and each output
+                        column's Lib name → its var (see [[grouped-name->var]]
+                        and [[fields-name->var]])>}`."
   [inner expected-cols]
   (let [limit-part    (limit-clause inner)
         table-id      (:source-table inner)
@@ -1490,7 +1512,11 @@
     (log/debugf "[sparql.mbql] Compiled base stage: %s" query)
     {:sparql  query
      :vars    result-vars
-     :aliases (merge (:aliases bucketed)
+     :aliases (merge (when-not agg?
+                       ;; Lib names a joined column `<alias>__<name>`, truncated
+                       (into {} (filter (comp (set result-vars) val))
+                             (fields-name->var fields token->var)))
+                     (:aliases bucketed)
                      ;; a later stage names a field by its name, which a suffixed
                      ;; var (see [[build-var-aliases]]) no longer matches
                      (into {}
@@ -1503,20 +1529,22 @@
                      (when agg? (grouped-name->var inner result-vars agg-prefix)))}))
 
 (defn- inner-var-for-ref
-  "Determine the SPARQL variable a base/inner stage projects for `fk-ref` — a
-   `[:field id-or-name …]` token referenced by an outer join condition. The
-   inner stage names variables by the sanitized field name, so this stays
-   consistent whether the outer condition kept the numeric id or degraded to a
-   source-query column name string."
-  [fk-ref]
-  (let [id (field-token->id fk-ref)]
-    (cond
-      (and (integer? id) (id-field? id)) "subject"
-      ;; Does not know the `<name>_<id>` suffix [[build-var-aliases]] adds on a
-      ;; collision, so a FK column that collides after sanitizing gets no remap.
-      (integer? id) (sanitize-var-name (:name (field-id->metadata id)))
-      (string? id)  (sanitize-var-name id)
-      :else         nil)))
+  "Return the SPARQL variable the source sub-SELECT `inner` projects for
+   `fk-ref`, the column a join condition over a source names: a field by its
+   name (through the source's aliases, for a suffixed var on a collision, see
+   [[build-var-aliases]]), else by the column `id->name` (the source
+   metadata) says it became; a source column by its name. The first name the
+   source projects wins, else the sanitized form of the first."
+  [fk-ref {:keys [vars aliases]} id->name]
+  (let [id        (field-token->id fk-ref)
+        names     (filter string? [(cond
+                                     (and (integer? id) (id-field? id)) "subject"
+                                     (integer? id)                      (:name (field-id->metadata id))
+                                     :else                              id)
+                                   (get id->name id)])
+        projected (set vars)]
+    (or (some #(or (projected %) (projected (get aliases %))) names)
+        (some-> (first names) sanitize-var-name))))
 
 (def ^:private prologue-re
   "Match the prologue at the start of a SPARQL query: whitespace, `#` comments,
@@ -1579,28 +1607,6 @@
      :prologue (str/trim prologue)
      :dataset  (str/join "\n" (re-seq dataset-clause-re head))}))
 
-(defn- fields-name->var
-  "Map the columns an explicit `fields` projects, from the names Lib gives them,
-   to their SPARQL variables: each column's own name (`<alias>__<name>` through
-   a join, a custom column's name) run through Lib's generator in Lib's order,
-   the stage's columns before a join's, so the later of two equal names is
-   `name_2`."
-  [fields token->var]
-  (let [unique (lib/unique-name-generator)]
-    (into {}
-          (keep (fn [tok]
-                  (let [id    (field-token->id tok)
-                        alias (field-token->join-alias tok)
-                        nm    (cond
-                                (expression-token? tok) (expression-token->name tok)
-                                (string? id)            id
-                                (integer? id)           (:name (field-id->metadata id)))
-                        v     (token->var tok)]
-                    (when nm
-                      (let [nm* (unique (cond->> nm alias (str alias "__")))]
-                        (when v [nm* v]))))))
-          (concat (remove field-token->join-alias fields) (filter field-token->join-alias fields)))))
-
 (defn- compile-derived-stage
   "Compile a derived MBQL stage (one with `:source-query`). These arise e.g.
    when a saved card / model is used as a source, when an FK display-value
@@ -1633,12 +1639,18 @@
         joins         (:joins stage)
         _             (run! #(check-join-condition! % false) joins)
         alias->join   (into {} (for [j joins] [(:alias j) j]))
+        ;; A saved question's column can be referenced by field id; the source
+        ;; metadata names the column that field became.
+        id->name      (let [cols (filter (comp integer? :id) (:source-metadata stage))
+                            uses (frequencies (map :id cols))]
+                        ;; a field behind several columns (a date and its bucket) is ambiguous
+                        (into {} (for [{:keys [id name]} cols :when (= 1 (uses id))] [id name])))
         remap-entries (for [tok   (:fields stage)
                             :let  [alias (field-token->join-alias tok)]
                             :when alias
                             :let  [tid    (field-token->id tok)
                                    join   (get alias->join alias)
-                                   fk-var (some-> join :condition condition->fk-ref inner-var-for-ref)
+                                   fk-var (some-> join :condition condition->fk-ref (inner-var-for-ref inner id->name))
                                    nm     (when (integer? tid) (:name (field-id->metadata tid)))
                                    prop   (when nm (uri/absolute-uri nm naming))
                                    rvar   (joined-var-name alias (or nm (str "f_" tid)))]
@@ -1658,12 +1670,6 @@
         ;; deduplicated names (`count_2`); drilling on a value relies on them.
         by-name          (merge (into {} (for [v passthrough-vars] [v v]))
                                 (:aliases inner))
-        ;; A saved question's column can be referenced by field id; the source
-        ;; metadata names the column that field became.
-        id->name         (let [cols (filter (comp integer? :id) (:source-metadata stage))
-                               uses (frequencies (map :id cols))]
-                           ;; a field behind several columns (a date and its bucket) is ambiguous
-                           (into {} (for [{:keys [id name]} cols :when (= 1 (uses id))] [id name])))
         field-id->var    (into by-name
                                (for [[fid nm] id->name
                                      :let  [v (or (get by-name nm) (some->> nm sanitize-var-name (get by-name)))]
@@ -1705,7 +1711,7 @@
                              (let [tid   (:id col)
                                    alias (:lib/join-alias col)
                                    join  (when alias (get alias->join alias))
-                                   fk-var (some-> join :condition condition->fk-ref inner-var-for-ref)
+                                   fk-var (some-> join :condition condition->fk-ref (inner-var-for-ref inner id->name))
                                    nm    (when (integer? tid) (:name (field-id->metadata tid)))
                                    expr-nm (or (:lib/expression-name col)
                                                (when (= :source/expressions (:lib/source col)) (:name col)))]

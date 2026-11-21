@@ -460,10 +460,25 @@
                   (catch clojure.lang.ExceptionInfo e (:type (ex-data e)))))))))
 
 (deftest inner-var-for-ref-test
-  (let [f @#'mbql/inner-var-for-ref]
+  (let [f     @#'mbql/inner-var-for-ref
+        inner {:vars ["ag_0" "geboorte_plaats" "worksFor_7"] :aliases {"worksFor" "worksFor_7"}}]
     (testing "a source-query column (string id) resolves to its sanitized name"
-      (is (= "ag_0" (f [:field "ag_0" nil])))
-      (is (= "geboorte_plaats" (f [:field "geboorte-plaats" nil]))))))
+      (is (= "ag_0" (f [:field "ag_0" nil] inner {})))
+      (is (= "geboorte_plaats" (f [:field "geboorte-plaats" nil] inner {}))))
+    (testing "a column the source renamed resolves through its aliases"
+      (is (= "worksFor_7" (f [:field "worksFor" nil] inner {}))))
+    (with-redefs-fn {#'mbql/field-id->metadata {1 {:name "subject"} 2 {:name "naam"} 4 {:name "geboorteplaats"}}}
+      (fn []
+        (testing "a field id resolves to the column the source metadata says it became"
+          (is (= "geboorte_plaats" (f [:field 4 nil] inner {4 "geboorte_plaats"}))))
+        (testing "an alias to a var the source does not project is skipped"
+          (is (= "naam" (f [:field 2 nil] {:vars ["naam"] :aliases {"naam" "naam_9"}} {}))))
+        (testing "the subject field resolves to ?subject"
+          (is (= "subject" (f [:field 1 nil] {:vars ["subject"]} {}))))
+        (testing "a field id resolves by its name through the source's aliases"
+          (is (= "naam_2" (f [:field 2 nil] {:vars ["naam_2"] :aliases {"naam" "naam_2"}} {}))))
+        (testing "the field's own column wins over the source metadata's name"
+          (is (= "naam" (f [:field 2 nil] {:vars ["naam" "P__naam"]} {2 "P__naam"}))))))))
 
 ;; ---------------------------------------------------------------------------
 ;; Stage compilation (metadata accessors stubbed)
@@ -1408,7 +1423,22 @@
                             [{:id 2} {:id 3} {:id 99 :lib/join-alias "Missing"}])]
         (is (= 3 (count vars)))
         (is (= ["naam" "ag_0"] (take 2 vars)))
-        (is (str/starts-with? (last vars) "undefined_"))))))
+        (is (str/starts-with? (last vars) "undefined_"))))
+    (testing "a joined column is matched by Lib's name, not by its position in the sub-SELECT"
+      ;; Lib truncates a long `<alias>__<name>` and appends a hash
+      (with-redefs-fn {#'mbql/field-id->metadata
+                       (fn [id] (get (assoc fixture-fields 12 {:name tu/rdfs-label}) id))}
+        (fn []
+          (let [alias "Person__via__knows"
+                card  {:source-table 100
+                       :fields [[:field 1 nil] [:field 4 nil] [:field 12 {:join-alias alias :source-field 4}]]
+                       :joins  [{:alias alias :fk-field-id 4}]}
+                {:keys [vars]} (compile-derived-stage*
+                                {:source-query card}
+                                [{:id 12 :lib/source-column-alias "Person__via__knows__http://www.w3.org/2000/01/rdf-s_bb1f861d"}
+                                 {:id 1 :name "subject"}
+                                 {:id 4 :name "geboorteplaats"}])]
+            (is (= ["Person__via__knows__http___www_w3_org_2000_01_rdf_schema_label" "subject" "geboorteplaats"] vars))))))))
 
 (deftest compile-base-stage-lang-filter-test
   (testing "rdf:langString columns get a LANG filter when a default language is set"
