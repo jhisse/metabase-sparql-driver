@@ -12,8 +12,8 @@
  :aliases
  {:dev
   {:extra-deps
-   {clj-kondo/clj-kondo {:mvn/version "2023.05.18"}
-    cljfmt/cljfmt {:mvn/version "0.9.2"}}}
+   {clj-kondo/clj-kondo {:mvn/version "2026.10.26"}
+    dev.weavejester/cljfmt {:mvn/version "0.16.6"}}}
   
   :lint
   {:main-opts ["-m" "clj-kondo.main" "--lint" "src"]}
@@ -21,8 +21,8 @@
   :format
   {:main-opts ["-m" "cljfmt.main" "fix"]}
   
-  :splint {:extra-deps {io.github.noahtheduke/splint {:mvn/version "1.21.0"}
-                                org.clojure/clojure {:mvn/version "1.11.1"}}
+  :splint {:extra-deps {io.github.noahtheduke/splint {:mvn/version "1.25.0"}
+                                org.clojure/clojure {:mvn/version "1.12.7"}}
                    :main-opts ["-m" "noahtheduke.splint"]}
   
   :test

@@ -394,17 +394,17 @@
     (if date?
       (str "\"" (condp instance? t
                   LocalDate      t
-                  LocalDateTime  (.toLocalDate ^LocalDateTime t)
-                  OffsetDateTime (.toLocalDate ^OffsetDateTime t)
-                  ZonedDateTime  (.toLocalDate (.withZoneSameInstant ^ZonedDateTime t (query-zone))))
+                  LocalDateTime  (LocalDateTime/.toLocalDate t)
+                  OffsetDateTime (OffsetDateTime/.toLocalDate t)
+                  ZonedDateTime  (ZonedDateTime/.toLocalDate (ZonedDateTime/.withZoneSameInstant t (query-zone))))
            "\"^^" xsd-date)
       (let [^ZonedDateTime zdt (condp instance? t
-                                 LocalDate      (.atStartOfDay ^LocalDate t (query-zone))
-                                 LocalDateTime  (.atZone ^LocalDateTime t (query-zone))
-                                 OffsetDateTime (.atZoneSameInstant ^OffsetDateTime t (query-zone))
-                                 ZonedDateTime  (.withZoneSameInstant ^ZonedDateTime t (query-zone)))]
-        {:tz    (str "\"" (.format xsd-datetime-format zdt) "\"^^" xsd-datetime)
-         :local (str "\"" (.format xsd-local-datetime-format zdt) "\"^^" xsd-datetime)}))))
+                                 LocalDate      (LocalDate/.atStartOfDay t (query-zone))
+                                 LocalDateTime  (LocalDateTime/.atZone t (query-zone))
+                                 OffsetDateTime (OffsetDateTime/.atZoneSameInstant t (query-zone))
+                                 ZonedDateTime  (ZonedDateTime/.withZoneSameInstant t (query-zone)))]
+        {:tz    (str "\"" (DateTimeFormatter/.format xsd-datetime-format zdt) "\"^^" xsd-datetime)
+         :local (str "\"" (DateTimeFormatter/.format xsd-local-datetime-format zdt) "\"^^" xsd-datetime)}))))
 
 (defn- compare-expr
   "Render the comparison `?var op term`. For a `{:tz … :local …}` dateTime bound, compare each value
@@ -1831,7 +1831,7 @@
     (not-empty (result-metadata/returned-columns outer-query []))
     (catch Exception e
       (log/warnf "[sparql.mbql] Could not compute expected columns from Lib: %s"
-                 (.getMessage e))
+                 (Exception/.getMessage e))
       nil)))
 
 (defn- stage-column-names
@@ -1848,7 +1848,7 @@
                     (try
                       (mapv :lib/desired-column-alias (lib/returned-columns query i stage))
                       (catch Exception e
-                        (log/debugf "[sparql.mbql] Could not compute the column names of stage %d from Lib: %s" i (.getMessage e))
+                        (log/debugf "[sparql.mbql] Could not compute the column names of stage %d from Lib: %s" i (Exception/.getMessage e))
                         nil)))))
               (range (dec (count (:stages query)))))
         nil))

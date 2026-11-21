@@ -40,7 +40,7 @@
     (try
       (json/decode+kw config-str)
       (catch Exception e
-        (log/errorf "Error parsing schema configuration: %s" (.getMessage e))
+        (log/errorf "Error parsing schema configuration: %s" (Exception/.getMessage e))
         nil))))
 
 (defn- build-pk-field

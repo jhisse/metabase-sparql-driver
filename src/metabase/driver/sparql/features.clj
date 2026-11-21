@@ -10,6 +10,7 @@
 (defmulti database-supports?
   "True when the SPARQL endpoint of `database` supports `feature`. Dispatches
    on the feature keyword; features without a method are unsupported."
+  {:arglists '([driver feature database])}
   (fn [_driver feature _database] feature))
 
 ;; Default implementation for unsupported features
