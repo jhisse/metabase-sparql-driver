@@ -1440,6 +1440,39 @@
                                  {:id 4 :name "geboorteplaats"}])]
             (is (= ["Person__via__knows__http___www_w3_org_2000_01_rdf_schema_label" "subject" "geboorteplaats"] vars))))))))
 
+(deftest derived-stage-joined-subject-test
+  (with-fixture
+    (let [card  {:source-table 100 :fields [[:field 1 nil] [:field 4 nil]]}
+          join  {:alias "Plaats" :condition [:= [:field "geboorteplaats" nil] [:field 1 {:join-alias "Plaats"}]]}
+          bound "BIND(?geboorteplaats AS ?Plaats__subject)"]
+      (testing "a joined table's subject, picked in `:fields`, is the FK value"
+        (let [{:keys [sparql vars]} (compile-derived-stage*
+                                     {:source-query card
+                                      :joins  [join]
+                                      :fields [[:field "geboorteplaats" nil] [:field 1 {:join-alias "Plaats"}]]}
+                                     nil)]
+          (is (= ["geboorteplaats" "Plaats__subject"] vars))
+          (is (str/includes? sparql bound))
+          (is (not (str/includes? sparql (str base "subject>"))))))
+      (testing "and so is one only Lib expects"
+        (let [{:keys [sparql vars]} (compile-derived-stage*
+                                     {:source-query card :joins [join]}
+                                     [{:name "geboorteplaats"} {:id 1 :lib/join-alias "Plaats"}])]
+          (is (= ["geboorteplaats" "Plaats__subject"] vars))
+          (is (str/includes? sparql bound))
+          (is (not (str/includes? sparql (str base "subject>"))))))
+      (testing "a subject listed twice is bound once"
+        (let [subj [:field 1 {:join-alias "Plaats"}]
+              {:keys [sparql]} (compile-derived-stage*
+                                {:source-query card :joins [join]
+                                 :fields [[:field "geboorteplaats" nil] subj subj]}
+                                nil)]
+          (is (= 1 (count (re-seq #"AS \?Plaats__subject\)" sparql)))))
+        (let [{:keys [sparql]} (compile-derived-stage*
+                                {:source-query card :joins [join]}
+                                [{:name "geboorteplaats"} {:id 1 :lib/join-alias "Plaats"} {:id 1 :lib/join-alias "Plaats"}])]
+          (is (= 1 (count (re-seq #"AS \?Plaats__subject\)" sparql)))))))))
+
 (deftest compile-base-stage-lang-filter-test
   (testing "rdf:langString columns get a LANG filter when a default language is set"
     (with-redefs-fn
