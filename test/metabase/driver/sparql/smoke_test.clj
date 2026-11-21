@@ -3,7 +3,7 @@
    against a real SPARQL endpoint.
 
    These are tagged `^:integration` and are EXCLUDED from the hermetic `make test`
-   run. They are driven by `make smoke`, which starts an ephemeral Oxigraph
+   run. They are driven by `make smoke`, which starts an ephemeral SPARQL
    endpoint (docker-compose.test.yml), seeds it with test/resources/fixtures/smoke.ttl
    into the named graph <https://example.org/> (and smoke-shapes.ttl into
    <https://example.org/shapes> for the SHACL sync tests), and points `SPARQL_TEST_ENDPOINT`

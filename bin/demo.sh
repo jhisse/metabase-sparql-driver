@@ -12,6 +12,11 @@
 # a future browser suite). Requires Docker (Compose v2), curl and python3.
 set -euo pipefail
 
+# Always Oxigraph: the compose metabase service depends on it.
+if [ "${SPARQL_ENGINE:-oxigraph}" != oxigraph ]; then
+  echo "WARNING: ignoring SPARQL_ENGINE=$SPARQL_ENGINE: make demo and make e2e run on Oxigraph" >&2
+fi
+SPARQL_ENGINE=oxigraph
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
 COMPOSE="$COMPOSE --profile demo"
@@ -31,7 +36,7 @@ up() {
 
   echo "==> Starting Oxigraph and Metabase"
   $COMPOSE up -d
-  wait_for_oxigraph
+  wait_for_endpoint
   seed_fixtures
 
   echo -n "==> Waiting for Metabase (first start takes a minute or two) "

@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 #
-# Smoke / integration harness: bring up an ephemeral Oxigraph SPARQL endpoint,
-# seed it with the test fixture and its SHACL shapes, run the :integration-tagged tests against it,
+# Smoke / integration harness: bring up an ephemeral SPARQL endpoint (the
+# SPARQL_ENGINE from bin/lib.sh, Oxigraph by default), seed it with the test
+# fixture and its SHACL shapes, run the :integration-tagged tests against it,
 # and always tear the container down.
 #
 # Invoked by `make smoke`. Requires Docker (with Compose v2), curl, python3 and a
@@ -11,20 +12,20 @@ set -euo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
 teardown() {
-  echo "==> Tearing down Oxigraph"
+  echo "==> Tearing down $SPARQL_ENGINE"
   $COMPOSE down -v >/dev/null 2>&1 || true
 }
-# `make demo` shares this compose project: reuse its Oxigraph and leave it running.
-if [ -n "$($COMPOSE ps -q oxigraph 2>/dev/null)" ]; then
-  echo "==> Oxigraph already running (make demo?): reusing it, no teardown"
+# `make demo` shares this compose project: reuse its endpoint and leave it running.
+if [ -n "$($COMPOSE ps -q "$SPARQL_ENGINE" 2>/dev/null)" ]; then
+  echo "==> $SPARQL_ENGINE already running (make demo?): reusing it, no teardown"
 else
   trap teardown EXIT
 fi
 
-echo "==> Starting Oxigraph"
+echo "==> Starting $SPARQL_ENGINE"
 $COMPOSE up -d
 
-wait_for_oxigraph
+wait_for_endpoint
 seed_fixtures
 
 echo "==> Running :integration tests"

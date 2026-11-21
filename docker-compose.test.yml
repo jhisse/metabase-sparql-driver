@@ -1,4 +1,6 @@
-# Ephemeral SPARQL endpoint for the smoke/integration suite.
+# Ephemeral SPARQL endpoints for the smoke/integration suite, one per engine,
+# each under a profile named after it that bin/lib.sh enables (SPARQL_ENGINE).
+# A manual run enables it too: `--profile oxigraph` (plus `--profile demo` for Metabase).
 # Brought up, seeded, and torn down by bin/smoke-test.sh (and by `make smoke`).
 # Not used by the hermetic `make test` run.
 #
@@ -6,6 +8,7 @@
 # (bin/demo.sh, `make demo` / `make e2e`). `make smoke` does not enable it.
 services:
   oxigraph:
+    profiles: ["oxigraph"]
     # Pin the tag for reproducibility; never use `latest`.
     image: ghcr.io/oxigraph/oxigraph:0.4.11
     command: ["serve", "--bind", "0.0.0.0:7878"]

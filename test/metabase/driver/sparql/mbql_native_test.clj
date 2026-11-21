@@ -32,8 +32,12 @@
   (testing "a bare table query projects every Lib column, subject first"
     (let [sparql (->sparql (tu/person-query))]
       (is (= "subject" (first (select-vars sparql))))
-      (is (= 7 (count (select-vars sparql))))
-      (is (str/includes? sparql "?subject a <https://example.org/Person> .")))))
+      ;; Lib's 8 columns, then the display values of the knows and worksFor FKs
+      (is (= 10 (count (select-vars sparql))))
+      (is (str/includes? sparql "?subject a <https://example.org/Person> ."))))
+  (testing "a table without FKs projects only its own columns"
+    (is (= ["subject" "http___www_w3_org_2000_01_rdf_schema_label" "population"]
+           (select-vars (->sparql (tu/city-query)))))))
 
 (deftest fields-projection-follows-lib-test
   (testing "with-fields narrows the SELECT to exactly Lib's returned columns"
@@ -246,11 +250,11 @@
         age    (tu/column q "age")
         shout  (lib/expression q "shout" (lib/upper label))
         ref    #(lib/expression-ref % "shout")]
-    (testing "a custom column is bound and projected after Lib's columns"
+    (testing "a custom column is bound and projected after Lib's columns, before the FK display values"
       (let [sparql (->sparql shout)]
         (is (re-find #"BIND\(UCASE\(STR\(\?\w+\)\) AS \?shout\)" sparql))
-        (is (= "shout" (last (select-vars sparql))))
-        (is (= 8 (count (select-vars sparql))))))
+        (is (= "shout" (nth (select-vars sparql) 8)))
+        (is (= 11 (count (select-vars sparql))))))
     (testing "filter and order-by reference the custom column's variable"
       (let [sparql (->sparql (-> shout
                                  (lib/filter (lib/= (ref shout) "ALICE"))
@@ -270,8 +274,8 @@
             inner  (tu/column outer lib/visible-columns "shout")
             sparql (->sparql (lib/expression outer "whisper" (lib/lower inner)))]
         (is (str/includes? sparql "BIND(LCASE(STR(?shout)) AS ?whisper)"))
-        (is (= ["shout" "whisper"] (take-last 2 (select-vars sparql))))
-        (is (= 9 (count (select-vars sparql))))))
+        (is (= ["shout" "whisper"] (subvec (vec (select-vars sparql)) 8 10)))
+        (is (= 12 (count (select-vars sparql))))))
     (testing "replace with an empty search keeps the text"
       (is (re-find #"BIND\(STR\(\?\w+\) AS \?same\)"
                    (->sparql (lib/expression q "same" (lib/replace label "" "x"))))))))

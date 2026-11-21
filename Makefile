@@ -86,7 +86,8 @@ test:
 	clojure -X:test :excludes '[:integration]'
 	@echo "Tests completed."
 
-# Run the smoke/integration suite against an ephemeral Oxigraph endpoint.
+# Run the smoke/integration suite against an ephemeral SPARQL endpoint: Oxigraph, or the
+# SPARQL_ENGINE given (make smoke SPARQL_ENGINE=<name>, or from the environment; see bin/lib.sh).
 # Requires Docker (Compose v2), curl, python3, Java 25+ and an initialized metabase/ submodule.
 smoke:
 	@echo "Running smoke/integration tests..."

@@ -57,7 +57,7 @@
 (defn skip-without-live-endpoint
   "`use-fixtures :once` guard for every :integration namespace: only run against
   a live endpoint (i.e. under `make smoke`, which sets SPARQL_TEST_ENDPOINT and
-  seeds Oxigraph). Under any tag-agnostic runner (cloverage / `make coverage`,
+  seeds the endpoint). Under any tag-agnostic runner (cloverage / `make coverage`,
   or a bare `clojure -X:test`) the env is unset and the whole namespace is
   skipped, so no live HTTP is ever attempted."
   [t]
@@ -73,45 +73,83 @@
   (when (System/getenv "METABASE_E2E_URL")
     (t)))
 
+(def ex
+  "Namespace of the fixture's classes, properties and resources (smoke.ttl's `ex:`)."
+  "https://example.org/")
+
 (def rdfs-label
   "Name of the fixture's label column: a foreign-prefix property, so sync keeps
   it as its full URI."
   "http://www.w3.org/2000/01/rdf-schema#label")
 
-(def ^:private person-table
+(defn- table [id table-name]
   {:lib/type     :metadata/table
-   :id           100
+   :id           id
    :db-id        1
-   :name         "Person"
-   :display-name "Person"})
+   :name         table-name
+   :display-name table-name})
 
-(defn- col [id position col-name base-type database-type]
+(def ^:private person-table (table 100 "Person"))
+(def ^:private company-table (table 200 "Company"))
+(def ^:private city-table (table 300 "City"))
+
+(defn- col [table id position col-name base-type database-type]
   {:lib/type      :metadata/column
    :id            id
-   :table-id      (:id person-table)
+   :table-id      (:id table)
    :position      position
    :name          col-name
    :display-name  col-name
    :base-type     base-type
    :database-type database-type})
 
-(def ^:private person-fields
-  ;; Mirrors what describe-table discovers for Person in the smoke fixture
-  ;; (provider-matches-live-schema-test in e2e_test.clj keeps the two in sync).
-  ;; age is declared Integer so Lib accepts numeric filters on it; the compiler
-  ;; itself only reads :name/:table-id. knows carries the "uri" marker the
-  ;; auto-sync discovery now stamps on IRI-valued properties (?isIri), so
-  ;; equality filters on it compile to <iri> terms. birthDate / updated are
-  ;; declared temporal for the same reason as age: auto-sync types them as text.
-  [(col 101 0 "subject" :type/Text "uri")
-   (col 102 1 rdfs-label :type/Text "string")
-   (col 103 2 "age" :type/Integer "string")
-   (col 104 3 "knows" :type/Text "uri")
-   (col 105 4 "birthDate" :type/Date "string")
-   (col 106 5 "updated" :type/DateTime "string")
+(defn- fk
+  "Make `column` a FK to the subject field `target-id`, displayed as the field
+  `label-id` through an external remap: what SHACL sync and the post-sync hook
+  (dimensions.clj) record for a `sh:class` property with
+  `sban:displayValueProperty`. The remap has the keys of Metabase's own test
+  providers (metabase.lib.test-util.metadata-providers.remap), with the `:name`
+  dimensions.clj records: the FK's display name."
+  [column target-id label-id]
+  (assoc column
+         :semantic-type      :type/FK
+         :fk-target-field-id target-id
+         :lib/external-remap {:lib/type :metadata.column.remapping/external
+                              :id       (* 10 (:id column))
+                              :name     (:display-name column)
+                              :field-id label-id}))
+
+(def ^:private fields
+  ;; Mirrors what describe-table discovers in the smoke fixture
+  ;; (provider-matches-live-schema-test in e2e_test.clj checks that every
+  ;; column name exists there), typed after smoke-shapes.ttl so Lib accepts numeric, temporal and boolean
+  ;; filters (auto-sync types every literal as text). The compiler itself only
+  ;; reads :name/:table-id. IRI-valued properties carry the "uri" marker
+  ;; sync stamps on them, so equality filters compile to <iri> terms. The FKs
+  ;; and their display values mirror smoke-shapes.ttl (sh:class and
+  ;; sban:displayValueProperty rdfs:label); shacl-fks-test in smoke_test.clj
+  ;; checks the three FKs and their target tables on the live SHACL sync, and
+  ;; metabase_api_test.clj the display-value remap in a real Metabase.
+  [(col person-table 101 0 "subject" :type/Text "uri")
+   (col person-table 102 1 rdfs-label :type/Text "string")
+   (col person-table 103 2 "age" :type/Integer "string")
+   (fk (col person-table 104 3 "knows" :type/Text "uri") 101 102)
+   (col person-table 105 4 "birthDate" :type/Date "string")
+   (col person-table 106 5 "updated" :type/DateTime "string")
    ;; Language-tagged in the fixture; "langString" is what SHACL sync stamps on
    ;; rdf:langString properties, which the Default Language filter reads.
-   (col 107 6 "nickname" :type/Text "langString")])
+   (col person-table 107 6 "nickname" :type/Text "langString")
+   (fk (col person-table 108 7 "worksFor" :type/Text "uri") 201 202)
+   (col company-table 201 0 "subject" :type/Text "uri")
+   (col company-table 202 1 rdfs-label :type/Text "string")
+   (col company-table 203 2 "foundedOn" :type/Date "string")
+   (col company-table 204 3 "employees" :type/Integer "string")
+   (col company-table 205 4 "revenue" :type/Float "string")
+   (col company-table 206 5 "listed" :type/Boolean "string")
+   (fk (col company-table 207 6 "headquarters" :type/Text "uri") 301 302)
+   (col city-table 301 0 "subject" :type/Text "uri")
+   (col city-table 302 1 rdfs-label :type/Text "string")
+   (col city-table 303 2 "population" :type/Integer "string")])
 
 (def native-card
   "A saved native question over the fixture: a question built on it compiles
@@ -136,7 +174,8 @@
   prologue with a comment and BASE ahead of a SELECT that ends in a comment
   (id 3); FROM and FROM NAMED clauses, with a full and a prefixed IRI (id 4); a non-ASCII variable (id 5);
   a Virtuoso DEFINE pragma (id 6); SELECT * with no recorded columns (id 7); a saved MBQL
-  question on card 5, so a question on it nests two stages (id 8)."
+  question on card 5, so a question on it nests two stages (id 8); a saved MBQL question
+  over the Person table (id 9)."
   (let [with-query (fn [id sparql & [cols]]
                      (cond-> (-> native-card
                                  (assoc :id id)
@@ -167,7 +206,10 @@
                         "SELECT * WHERE { " person " }")
        [])
      (-> (with-query 8 "" idade-cols)
-         (assoc :dataset-query {:database 1 :type :query :query {:source-table "card__5"}}))]))
+         (assoc :dataset-query {:database 1 :type :query :query {:source-table "card__5"}}))
+     (-> (with-query 9 "")
+         (dissoc :result-metadata)
+         (assoc :dataset-query {:database 1 :type :query :query {:source-table (:id person-table)}}))]))
 
 (def provider
   "Minimal MetadataProvider over the fixture's schema. Carries the endpoint and
@@ -182,8 +224,8 @@
        :details  (:details db)})
     (metadatas [_ metadata-spec]
       (let [objects (case (:lib/type metadata-spec)
-                      :metadata/table  [person-table]
-                      :metadata/column person-fields
+                      :metadata/table  [person-table company-table city-table]
+                      :metadata/column fields
                       :metadata/card   native-cards
                       [])]
         (into []
@@ -191,10 +233,23 @@
               objects)))
     (setting [_ _] nil)))
 
+(defn- table-query [table]
+  (lib/query provider (lib.metadata/table provider (:id table))))
+
 (defn person-query
   "A fresh pMBQL query over the Person table."
   []
-  (lib/query provider (lib.metadata/table provider (:id person-table))))
+  (table-query person-table))
+
+(defn company-query
+  "A fresh pMBQL query over the Company table."
+  []
+  (table-query company-table))
+
+(defn city-query
+  "A fresh pMBQL query over the City table."
+  []
+  (table-query city-table))
 
 (defn native-card-query
   "A fresh pMBQL query whose source is the card `id` of [[native-cards]],

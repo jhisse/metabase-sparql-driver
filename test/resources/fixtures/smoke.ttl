@@ -1,6 +1,6 @@
 # Fixture dataset for the smoke/integration suite (test/metabase/driver/sparql/smoke_test.clj).
 #
-# Loaded into an ephemeral Oxigraph endpoint by bin/smoke-test.sh via the SPARQL
+# Loaded into an ephemeral SPARQL endpoint by bin/smoke-test.sh via the SPARQL
 # Graph Store Protocol. Three RDF classes (Person, Company, City) so describe-database
 # discovers several "tables", with typed properties and IRI links between them
 # (knows, worksFor, headquarters) that smoke-shapes.ttl declares as SHACL FKs. `updated` is timezoned for Alice and local for Bob,
