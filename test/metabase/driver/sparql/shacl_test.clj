@@ -221,7 +221,7 @@
 (defn- stream
   "An InputStream over the UTF-8 bytes of `s`, as clj-http returns with `:as :stream`."
   [^String s]
-  (java.io.ByteArrayInputStream. (.getBytes s "UTF-8")))
+  (java.io.ByteArrayInputStream. (String/.getBytes s "UTF-8")))
 
 (deftest fetch-shacl-test
   (let [req (atom nil)
@@ -330,7 +330,7 @@
 
 (deftest guarded-resolver-test
   ;; IP literals keep DNS out: 192.0.2.0/24 (RFC 5737) is public.
-  (let [resolve (fn [resolver host] (.resolve ^org.apache.http.conn.DnsResolver resolver host))]
+  (let [resolve (fn [resolver host] (org.apache.http.conn.DnsResolver/.resolve resolver host))]
     (testing "after a public SHACL host, internal addresses are refused"
       (doseq [internal ["127.0.0.1" "10.0.0.1" "172.16.0.1" "192.168.1.1" "169.254.169.254"
                         "100.100.100.200" "100.64.0.1" "0.1.2.3" "::1" "fd00::1" "fe80::1"]]

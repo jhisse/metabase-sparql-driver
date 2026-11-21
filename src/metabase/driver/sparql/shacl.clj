@@ -24,6 +24,7 @@
             [metabase.util.log :as log])
   (:import (java.io ByteArrayOutputStream InputStream StringReader)
            (java.net Inet4Address InetAddress URL UnknownHostException)
+           (java.util Optional)
            (org.apache.http.client.methods HttpUriRequest)
            (org.apache.http.conn DnsResolver)
            (org.eclipse.rdf4j.model BNode IRI Literal Resource Statement Value)
@@ -71,14 +72,14 @@
    or `{:type :unknown :value …}`."
   [^Value v]
   (cond
-    (instance? IRI v)     {:type :iri :value (.stringValue v)}
-    (instance? BNode v)   {:type :bnode :id (.getID ^BNode v)}
+    (instance? IRI v)     {:type :iri :value (Value/.stringValue v)}
+    (instance? BNode v)   {:type :bnode :id (BNode/.getID v)}
     (instance? Literal v) (let [^Literal lit v]
                             {:type     :literal
-                             :value    (.getLabel lit)
-                             :datatype (.stringValue (.getDatatype lit))
-                             :lang     (let [opt (.getLanguage lit)]
-                                         (when (.isPresent opt) (.get opt)))})
+                             :value    (Literal/.getLabel lit)
+                             :datatype (IRI/.stringValue (Literal/.getDatatype lit))
+                             :lang     (let [opt (Literal/.getLanguage lit)]
+                                         (when (Optional/.isPresent opt) (Optional/.get opt)))})
     :else                 {:type :unknown :value (str v)}))
 
 (def ^:private default-connect-timeout-ms 10000)
@@ -101,16 +102,16 @@
   (let [out (ByteArrayOutputStream.)
         buf (byte-array 8192)]
     (loop []
-      (let [n (.read in buf)]
+      (let [n (InputStream/.read in buf)]
         (when-not (neg? n)
-          (.write out buf 0 n)
-          (when (> (.size out) max-bytes)
-            (throw (too-large shown-url (.size out) max-bytes)))
+          (ByteArrayOutputStream/.write out buf 0 n)
+          (when (> (ByteArrayOutputStream/.size out) max-bytes)
+            (throw (too-large shown-url (ByteArrayOutputStream/.size out) max-bytes)))
           (when (> (System/currentTimeMillis) deadline)
             (throw (ex-info (format "SHACL document from %s took too long to download" shown-url)
                             {:url shown-url})))
           (recur))))
-    (.toString out "UTF-8")))
+    (ByteArrayOutputStream/.toString out "UTF-8")))
 
 (defn- release!
   "Release the `:as :stream` response `resp` without reading the rest of its
@@ -129,10 +130,10 @@
    100.64.0.0/10 or IPv6 unique-local), link-local or unspecified (0.0.0.0/8)
    address."
   [^InetAddress a]
-  (let [b  (.getAddress a)
+  (let [b  (InetAddress/.getAddress a)
         b0 (bit-and 0xff (aget b 0))]
-    (or (.isLoopbackAddress a) (.isSiteLocalAddress a)
-        (.isLinkLocalAddress a) (.isAnyLocalAddress a)
+    (or (InetAddress/.isLoopbackAddress a) (InetAddress/.isSiteLocalAddress a)
+        (InetAddress/.isLinkLocalAddress a) (InetAddress/.isAnyLocalAddress a)
         (if (instance? Inet4Address a)
           (or (zero? b0)
               (and (= 100 b0) (= 64 (bit-and 0xc0 (aget b 1)))))
@@ -195,8 +196,8 @@
               (nil? location)         (refuse "no Location")
               (nil? next-url)         (refuse "the Location is not a URL")
               (>= hops max-redirects) (refuse (str "more than " max-redirects " redirects"))
-              (not (#{"http" "https"} (str/lower-case (.getProtocol ^URL next-url))))
-              (refuse (str "only http and https targets are followed, not " (.getProtocol ^URL next-url))))
+              (not (#{"http" "https"} (str/lower-case (URL/.getProtocol next-url))))
+              (refuse (str "only http and https targets are followed, not " (URL/.getProtocol next-url))))
             (recur (str next-url) (inc hops))))))))
 
 (defn fetch-shacl
@@ -255,9 +256,9 @@
   (let [model (Rio/parse (StringReader. text) ^String (or base-iri "") RDFFormat/TURTLE
                          ^"[Lorg.eclipse.rdf4j.model.Resource;" no-contexts)]
     (mapv (fn [^Statement stmt]
-            [(term (.getSubject stmt))
-             (term (.getPredicate stmt))
-             (term (.getObject stmt))])
+            [(term (Statement/.getSubject stmt))
+             (term (Statement/.getPredicate stmt))
+             (term (Statement/.getObject stmt))])
           model)))
 
 (defn- iri? [t] (= :iri (:type t)))

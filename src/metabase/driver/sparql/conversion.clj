@@ -105,14 +105,14 @@
              (try (Long/parseLong s)
                   (catch NumberFormatException _ (BigInteger. s))))
            (catch Exception e
-             (log/warn "Failed to convert integer:" value "Error:" (.getMessage e))
+             (log/warn "Failed to convert integer:" value "Error:" (Exception/.getMessage e))
              value))
 
       ;; Handle decimals/floats (both typed-literal and literal)
       (and typed? (contains? xsd-float-datatypes datatype))
       (try (Double/parseDouble value)
            (catch Exception e
-             (log/warn "Failed to convert float:" value "Error:" (.getMessage e))
+             (log/warn "Failed to convert float:" value "Error:" (Exception/.getMessage e))
              value))
 
       ;; Handle booleans (both typed-literal and literal)

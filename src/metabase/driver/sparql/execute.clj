@@ -74,7 +74,7 @@
   (try
     (json/decode+kw (:body response))
     (catch Exception json-e
-      (log/errorf "Error parsing JSON response: %s" (.getMessage json-e))
+      (log/errorf "Error parsing JSON response: %s" (Exception/.getMessage json-e))
       (log/debugf "Full body response: %s" (:body response))
       nil)))
 
@@ -112,8 +112,8 @@
   [endpoint location]
   (when (not-empty location)
     (try
-      (let [target (.resolve (URI. (str endpoint)) (str location))]
-        (uri/redact-userinfo (str (URI. (.getScheme target) (.getAuthority target) (.getPath target) nil nil))))
+      (let [target (URI/.resolve (URI. (str endpoint)) (str location))]
+        (uri/redact-userinfo (str (URI. (URI/.getScheme target) (URI/.getAuthority target) (URI/.getPath target) nil nil))))
       (catch Exception _ nil))))
 
 (defn- ^:private process-response
@@ -169,8 +169,8 @@
       (log/debugf "--------------------------------")
       (process-response response endpoint))
     (catch Exception e
-      (log/errorf "Error executing SPARQL query: %s" (.getMessage e))
-      [false (.getMessage e) :transport])))
+      (log/errorf "Error executing SPARQL query: %s" (Exception/.getMessage e))
+      [false (Exception/.getMessage e) :transport])))
 
 (defn execute-reducible-query
   "Run the SPARQL in `native-query`'s `[:native :query]` and pass its columns

@@ -24,7 +24,7 @@
   them is malformed."
   [query]
   (try
-    (.parseQuery (SPARQLParser.) query nil)
+    (SPARQLParser/.parseQuery (SPARQLParser.) query nil)
     nil
     (catch MalformedQueryException e
       (ex-message e))))
