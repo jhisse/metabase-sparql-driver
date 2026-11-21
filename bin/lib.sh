@@ -1,12 +1,38 @@
-# Shared by bin/smoke-test.sh and bin/demo.sh: the Oxigraph compose stack, the
-# fixture locations, and the helpers that wait for the endpoint and seed it.
-# Source it; it changes into the repo root.
+# Shared by bin/smoke-test.sh and bin/demo.sh: the compose stack of the engine
+# under test, the fixture locations, and the helpers that wait for the endpoint
+# and seed it. Source it; it changes into the repo root.
+#
+# SPARQL_ENGINE (default oxigraph) picks the engine: its compose service and
+# profile (both named after it), ENDPOINT, store_url (its Graph Store Protocol
+# URL for a graph), and optionally a probe override.
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
-COMPOSE="docker compose -f docker-compose.test.yml"
-ENDPOINT="http://localhost:7878/query"
+SPARQL_ENGINE="${SPARQL_ENGINE:-oxigraph}"
+
+urlencode() {
+  python3 -c 'import urllib.parse,sys; print(urllib.parse.quote(sys.argv[1], safe=""))' "$1"
+}
+
+# Succeeds once the endpoint answers ASK{}.
+probe() {
+  [ "$(curl -s -o /dev/null -w '%{http_code}' -X POST \
+    --data-urlencode 'query=ASK{}' "$ENDPOINT" || true)" = "200" ]
+}
+
+case "$SPARQL_ENGINE" in
+  oxigraph)
+    ENDPOINT="http://localhost:7878/query"
+    store_url() { echo "http://localhost:7878/store?graph=$(urlencode "$1")"; }
+    ;;
+  *)
+    echo "FAILED: unknown SPARQL_ENGINE '$SPARQL_ENGINE' (known: oxigraph)" >&2
+    exit 2
+    ;;
+esac
+
+COMPOSE="docker compose -f docker-compose.test.yml --profile $SPARQL_ENGINE"
 FIXTURE="test/resources/fixtures/smoke.ttl"
 SHAPES="test/resources/fixtures/smoke-shapes.ttl"
 
@@ -21,18 +47,13 @@ GRAPH="${SPARQL_TEST_GRAPH:-https://example.org/}"
 # exactly what the driver's `shacl-url` fetches; exported as SPARQL_TEST_SHACL_URL.
 SHAPES_GRAPH="https://example.org/shapes"
 
-store_url() {
-  echo "http://localhost:7878/store?graph=$(python3 -c 'import urllib.parse,sys; print(urllib.parse.quote(sys.argv[1], safe=""))' "$1")"
-}
 STORE="$(store_url "$GRAPH")"
 SHACL_URL="$(store_url "$SHAPES_GRAPH")"
 
-wait_for_oxigraph() {
-  echo -n "==> Waiting for the endpoint to answer ASK{} "
+wait_for_endpoint() {
+  echo -n "==> Waiting for $SPARQL_ENGINE to answer "
   for _ in $(seq 1 60); do
-    code="$(curl -s -o /dev/null -w '%{http_code}' -X POST \
-      --data-urlencode 'query=ASK{}' "$ENDPOINT" || true)"
-    if [ "$code" = "200" ]; then echo " ok"; return; fi
+    if probe; then echo " ok"; return; fi
     echo -n "."
     sleep 1
   done
