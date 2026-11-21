@@ -147,6 +147,18 @@
                 (count ids-from-fields) (count ids-from-order) (count ids-from-filter) (count all-ids))
     all-ids))
 
+(defn- column-label
+  "Return a column's name for an error message: a field's display name (after
+   its join alias), a source column's or custom column's name, else the token."
+  [token]
+  (let [id    (field-token->id token)
+        alias (field-token->join-alias token)
+        nm    (or (when (integer? id)
+                    (let [meta (field-id->metadata id)] (or (:display-name meta) (:name meta))))
+                  id
+                  (expression-token->name token))]
+    (pr-str (if nm (cond->> (str nm) alias (str alias " → ")) token))))
+
 (defn- var-for-token
   "Return the SPARQL variable name (without `?`) for a `[:field id opts]` or
    `[:expression \"name\"]` token, or nil when it cannot be resolved.
@@ -202,8 +214,20 @@
    or its condition is the one shape the driver compiles: `[:= <column> <subject>]`,
    where `<subject>` is the joined table's subject and `<column>` holds its IRI.
    In a base stage `<column>` cannot be the subject; a derived stage reads the
-   joined values off the subject itself."
-  [{:keys [alias condition fk-field-id]} base-stage?]
+   joined values off the subject itself. A join with a saved question, a model
+   or a query with its own clauses is refused: the driver reads the joined
+   columns off the joined entity, so those clauses would be dropped."
+  [{:keys [alias condition fk-field-id] :as join} base-stage?]
+  ;; A sub-query that only names a table compiles: Metabase wraps a joined table
+  ;; that way, with the `:joins` of its remapped FK columns, which the compiler
+  ;; reads through `:source-field`. One with its own clauses would lose them.
+  (when (some #(or (:qp/stage-had-source-card %) (:qp/stage-is-from-source-card %)
+                   (some (fn [k] (let [x (get % k)] (if (coll? x) (seq x) x)))
+                         [:filter :aggregation :breakout :expressions :limit :page :native]))
+              (take-while some? (iterate :source-query join)))
+    (throw (ex-info (format "The SPARQL driver cannot join %s: joining a saved question, a model or a summarized or filtered query is not supported."
+                            (pr-str alias))
+                    {:type driver-api/qp.error-type.unsupported-feature})))
   (when-not fk-field-id
     (let [[op & args]     (cond-> condition
                             (and (= :and (first condition)) (= 2 (count condition))) second)
@@ -902,6 +926,9 @@
         out     (str prefix index)
         arg     (aggregation-arg-token agg)
         arg-var (when arg (token->var arg))
+        _       (when (and arg (not arg-var) (#{:count :distinct :sum :avg :min :max} op))
+                  (throw (ex-info (str "The SPARQL driver cannot aggregate " (column-label arg) ": it is not a column of this query.")
+                                  {:type driver-api/qp.error-type.unsupported-feature :token arg})))
         expr    (case op
                   :count    (cond
                               arg-var    (format "COUNT(?%s)" arg-var)
@@ -944,8 +971,9 @@
 (defn- bucket-breakout
   "Resolve breakout tokens to the variables to project and group by. A token with
    a `:temporal-unit` groups by a new `?<var>_<unit>` bound to its bucket (see
-   [[temporal-bucket-exprs]]). Throws for a unit SPARQL cannot compute (week,
-   day-of-week, …) rather than grouping by the raw value.
+   [[temporal-bucket-exprs]]). Throws for a token that resolves to no variable,
+   which would otherwise drop the grouping, and for a unit SPARQL cannot compute
+   (week, day-of-week, …) rather than grouping by the raw value.
 
    Returns `{:vars […] :binds [\"  BIND(…)\" …] :token->var f :aliases {raw bucket}}`,
    where `f` resolves a breakout token (e.g. in `:order-by`) to its bucket var and
@@ -956,9 +984,10 @@
   ;; and a FK display value inside the same join) resolve to different vars.
   (let [bucket-key (juxt token->var (comp :temporal-unit field-token->opts))
         buckets    (for [tok  breakout
-                         :let [raw  (token->var tok)
-                               unit (:temporal-unit (field-token->opts tok))]
-                         :when raw]
+                         :let [raw  (or (token->var tok)
+                                        (throw (ex-info (str "The SPARQL driver cannot group by " (column-label tok) ": it is not a column of this query.")
+                                                        {:type driver-api/qp.error-type.unsupported-feature :token tok})))
+                               unit (:temporal-unit (field-token->opts tok))]]
                      (if (contains? #{nil :default} unit)
                        {:tok tok :var raw}
                        (let [expr (or (get temporal-bucket-exprs unit)
@@ -1627,8 +1656,19 @@
         ;; The inner stage's `:aliases` add the names Lib uses for columns whose
         ;; var differs: aggregations (`count` → `ag_0`), temporal buckets, and
         ;; deduplicated names (`count_2`); drilling on a value relies on them.
-        field-id->var    (merge (into {} (for [v passthrough-vars] [v v]))
+        by-name          (merge (into {} (for [v passthrough-vars] [v v]))
                                 (:aliases inner))
+        ;; A saved question's column can be referenced by field id; the source
+        ;; metadata names the column that field became.
+        id->name         (let [cols (filter (comp integer? :id) (:source-metadata stage))
+                               uses (frequencies (map :id cols))]
+                           ;; a field behind several columns (a date and its bucket) is ambiguous
+                           (into {} (for [{:keys [id name]} cols :when (= 1 (uses id))] [id name])))
+        field-id->var    (into by-name
+                               (for [[fid nm] id->name
+                                     :let  [v (or (get by-name nm) (some->> nm sanitize-var-name (get by-name)))]
+                                     :when v]
+                                 [fid v]))
         pair->target-var (into {} (for [{:keys [tid alias var]} remap-entries]
                                     [[tid alias] var]))
         token->var       (fn [tok] (var-for-token tok field-id->var pair->target-var))
