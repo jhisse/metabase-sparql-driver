@@ -1039,6 +1039,35 @@
         (is (= {"geboorteplaats" "geboorteplaats" "Plaats__label" "Plaats__label"}
                (select-keys aliases ["geboorteplaats" "Plaats__label"])))))))
 
+(deftest unresolvable-column-test
+  (with-fixture
+    (let [counts {:source-table 100 :aggregation [[:count]] :breakout [[:field 2 nil]]}]
+      (testing "a breakout or an aggregation over a column the stage does not have fails, naming it"
+        (is (thrown-with-msg? clojure.lang.ExceptionInfo #"cannot group by \"nope\": it is not a column"
+                              (@#'mbql/compile-stage {:source-query counts :breakout [[:field "nope" nil]] :aggregation [[:count]]})))
+        (is (thrown-with-msg? clojure.lang.ExceptionInfo #"cannot aggregate \"nope\": it is not a column"
+                              (@#'mbql/compile-stage {:source-query counts :aggregation [[:sum [:field "nope" nil]]]}))))
+      (testing "an unsupported aggregation says so, whatever its column"
+        (is (thrown-with-msg? clojure.lang.ExceptionInfo #"does not support the stddev aggregation"
+                              (@#'mbql/compile-stage {:source-query counts :aggregation [[:stddev [:field "nope" nil]]]})))))))
+
+(deftest derived-stage-field-id-ref-test
+  (with-fixture
+    (let [source  {:source-table 100 :fields [[:field 2 nil] [:field 3 nil]]}
+          meta    [{:id 2 :name "naam"} {:id 3 :name "leeftijd"}]
+          compile #(@#'mbql/compile-stage (assoc % :source-query source :source-metadata meta))]
+      (testing "a source column referenced by field id resolves through the source metadata"
+        (is (str/includes? (:sparql (parsed (compile {:breakout [[:field 2 nil]] :aggregation [[:sum [:field 3 nil]]]})))
+                           "SELECT ?naam (SUM(?leeftijd) AS ?ag_0)")))
+      (testing "a field the source does not return fails"
+        (is (thrown-with-msg? clojure.lang.ExceptionInfo #"cannot group by \"geboorteplaats\""
+                              (compile {:breakout [[:field 4 nil]] :aggregation [[:count]]}))))
+      (testing "a column of a join added on top fails to group"
+        (is (thrown-with-msg? clojure.lang.ExceptionInfo #"cannot group by"
+                              (compile {:joins       [{:alias "C" :condition [:= [:field "naam" nil] [:field 1 {:join-alias "C"}]]}]
+                                        :breakout    [[:field 3 {:join-alias "C"}]]
+                                        :aggregation [[:count]]})))))))
+
 (deftest compile-derived-stage-passthrough-test
   (with-fixture
     (testing "with no outer clauses the inner card columns pass straight through"

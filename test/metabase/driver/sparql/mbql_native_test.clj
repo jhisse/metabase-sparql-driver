@@ -8,7 +8,8 @@
   (:require [clojure.string :as str]
             [clojure.test :refer :all]
             [metabase.driver.sparql.test-util :as tu]
-            [metabase.lib.core :as lib]))
+            [metabase.lib.core :as lib]
+            [metabase.lib.metadata :as lib.metadata]))
 
 (defn- ->sparql
   "Compile `q` to SPARQL, asserting that the result parses."
@@ -202,6 +203,17 @@
                                        (lib/append-stage)
                                        (lib/aggregate (lib/count))))
                          "SELECT (COUNT(*) AS ?ag1_0)")))))
+
+(deftest join-with-saved-question-test
+  (testing "a join with a saved question fails instead of dropping the question's own clauses"
+    (let [q    (tu/person-query)
+          card (lib.metadata/card tu/provider (:id tu/native-card))
+          col  (first (lib/returned-columns (lib/query tu/provider card)))]
+      (is (thrown-with-msg? clojure.lang.ExceptionInfo #"cannot join \"C\": joining a saved question"
+                            (tu/compile-query
+                             (lib/join q (-> (lib/join-clause card [(lib/= (tu/column q tu/rdfs-label)
+                                                                           (lib/with-join-alias col "C"))])
+                                             (lib/with-join-alias "C")))))))))
 
 (deftest temporal-filters-test
   (let [q     (tu/person-query)
