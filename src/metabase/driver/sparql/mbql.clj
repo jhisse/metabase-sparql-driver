@@ -579,6 +579,16 @@
     (emit-optional-group [(triple-pattern node property-uri target-var)
                           (format "FILTER(?%s = ?%s)" node fk-var)])))
 
+(defn- emit-hop-optional
+  "Like [[emit-remap-optional]], one hop further: read `hop-uri` off the node
+   `fk-var` names into `mid-var`, then `property-uri` off that node. The fresh
+   var scans every `<hop>` triple, as there."
+  [fk-var hop-uri mid-var property-uri target-var]
+  (let [node (str fk-var "_node")]
+    (emit-optional-group [(triple-pattern node hop-uri mid-var)
+                          (triple-pattern mid-var property-uri target-var)
+                          (format "FILTER(?%s = ?%s)" node fk-var)])))
+
 (defn- emit-joined-column
   "Render the pattern that binds `target-var` to field `tid` of the entity
    `fk-var` points at: the entity itself when `tid` is its subject, which is no
@@ -1623,7 +1633,8 @@
    (such as drilling on an aggregation value).
 
    The inner stage is compiled as a SPARQL sub-`SELECT`; the derived stage's
-   joined columns are bound after it ([[emit-joined-column]]). The outer stage's own
+   joined columns are bound after it ([[emit-joined-column]]; a FK's display value
+   inside a join one hop further, [[emit-hop-optional]]). The outer stage's own
    `:aggregation`, `:breakout`, `:expressions`, `:filter`, `:order-by`, and
    explicit `:fields` projection are honored, resolved against the variables
    the sub-`SELECT` already projects (no triple patterns are needed at this
@@ -1654,20 +1665,44 @@
                             uses (frequencies (map :id cols))]
                         ;; a field behind several columns (a date and its bucket) is ambiguous
                         (into {} (for [{:keys [id name]} cols :when (= 1 (uses id))] [id name])))
+        ;; Field `tid` of join `alias`, read off the FK the join condition names.
+        ;; The display value of a FK column inside an explicit join sits one hop
+        ;; further, through `sf`, and is keyed with it; an implicit join's own FK
+        ;; is no hop. Returns `{:key :var :optional}`, or nil.
+        joined-column (fn [alias tid sf]
+                        (let [join   (get alias->join alias)
+                              fk-var (some-> join :condition condition->fk-ref (inner-var-for-ref inner id->name))
+                              nm     (when (integer? tid) (:name (field-id->metadata tid)))
+                              hop    (when (and sf fk-var (not (:fk-field-id join)))
+                                       (let [meta (field-id->metadata sf)]
+                                         (when-not (= :type/FK (:semantic-type meta))
+                                           (throw (ex-info (format "The SPARQL driver cannot follow %s: it is not a foreign key."
+                                                                   (or (:display-name meta) (:name meta) sf))
+                                                           {:type driver-api/qp.error-type.unsupported-feature})))
+                                         (:name meta)))]
+                          (when (and fk-var nm)
+                            (let [prop (uri/absolute-uri nm naming)]
+                              (if hop
+                                (let [hop-uri (uri/absolute-uri hop naming)
+                                      mid     (joined-var-name alias (str hop "_subject"))]
+                                  (if (id-field? tid)
+                                    ;; the FK target's subject is the hop's node
+                                    {:key [tid alias sf] :var mid :optional (emit-remap-optional fk-var hop-uri mid)}
+                                    (let [rvar (joined-var-name alias (str hop "__" nm))]
+                                      {:key      [tid alias sf]
+                                       :var      rvar
+                                       :optional (emit-hop-optional fk-var hop-uri mid prop rvar)})))
+                                (let [rvar (joined-var-name alias nm)]
+                                  {:key      [tid alias]
+                                   :var      rvar
+                                   :optional (emit-joined-column tid fk-var prop rvar)}))))))
         remap-entries (for [tok   (:fields stage)
                             :let  [alias (field-token->join-alias tok)]
                             :when alias
-                            :let  [tid    (field-token->id tok)
-                                   join   (get alias->join alias)
-                                   fk-var (some-> join :condition condition->fk-ref (inner-var-for-ref inner id->name))
-                                   nm     (when (integer? tid) (:name (field-id->metadata tid)))
-                                   prop   (when nm (uri/absolute-uri nm naming))
-                                   rvar   (joined-var-name alias (or nm (str "f_" tid)))]
-                            :when (and fk-var prop)]
-                        {:optional (emit-joined-column tid fk-var prop rvar)
-                         :var      rvar
-                         :tid      tid
-                         :alias    alias})
+                            :let  [col (joined-column alias (field-token->id tok)
+                                                      (:source-field (field-token->opts tok)))]
+                            :when col]
+                        col)
         ;; a column listed twice binds its var once: SPARQL refuses a second BIND
         remap-entries (reduce (fn [es e] (cond-> es (not-any? #(= (:var e) (:var %)) es) (conj e)))
                               [] remap-entries)
@@ -1687,8 +1722,7 @@
                                      :let  [v (or (get by-name nm) (some->> nm sanitize-var-name (get by-name)))]
                                      :when v]
                                  [fid v]))
-        pair->target-var (into {} (for [{:keys [tid alias var]} remap-entries]
-                                    [[tid alias] var]))
+        pair->target-var (into {} (map (juxt :key :var)) remap-entries)
         token->var       (fn [tok] (var-for-token tok field-id->var pair->target-var))
         aggregations  (:aggregation stage)
         breakout      (:breakout stage)
@@ -1711,7 +1745,7 @@
                             (when (every? some? vs)
                               (vec (distinct vs)))))
         ;; When Lib's expected columns are known, reconcile the SELECT against them.
-        ;; Remap columns resolve via `pair->target-var` (or an extra pattern, see [[emit-joined-column]]); the rest
+        ;; Remap columns resolve via `pair->target-var` (or the extra pattern `joined-column` picks); the rest
         ;; match inner vars by the source's name for the column (`count` → `ag_0`),
         ;; then by desired alias, then by Lib name, before position, since an FK
         ;; remap reorders the sub-SELECT.
@@ -1722,24 +1756,22 @@
                            (fn [acc col]
                              (let [tid   (:id col)
                                    alias (:lib/join-alias col)
-                                   join  (when alias (get alias->join alias))
-                                   fk-var (some-> join :condition condition->fk-ref (inner-var-for-ref inner id->name))
-                                   nm    (when (integer? tid) (:name (field-id->metadata tid)))
+                                   ;; Lib marks a FK display value inside a join with its FK
+                                   sf    (:lib/original-fk-field-id col)
+                                   jcol  (when alias (joined-column alias tid sf))
                                    expr-nm (or (:lib/expression-name col)
                                                (when (= :source/expressions (:lib/source col)) (:name col)))]
                                (cond
                                  expr-nm
                                  (update acc :vars conj (sanitize-var-name expr-nm))
 
-                                 (and alias (get pair->target-var [tid alias]))
-                                 (update acc :vars conj (get pair->target-var [tid alias]))
+                                 (and jcol (get pair->target-var (:key jcol)))
+                                 (update acc :vars conj (get pair->target-var (:key jcol)))
 
-                                 (and alias join fk-var nm)
-                                 (let [rvar (joined-var-name alias nm)
-                                       prop (uri/absolute-uri nm naming)]
-                                   (cond-> (update acc :vars conj rvar)
-                                     (not-any? #{rvar} (:vars acc))
-                                     (update :optionals conj (emit-joined-column tid fk-var prop rvar))))
+                                 jcol
+                                 (cond-> (update acc :vars conj (:var jcol))
+                                   (not-any? #{(:var jcol)} (:vars acc))
+                                   (update :optionals conj (:optional jcol)))
 
                                  (seq @inner-vars)
                                  (let [unused (set @inner-vars)
