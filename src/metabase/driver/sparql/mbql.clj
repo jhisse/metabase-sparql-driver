@@ -579,6 +579,15 @@
     (emit-optional-group [(triple-pattern node property-uri target-var)
                           (format "FILTER(?%s = ?%s)" node fk-var)])))
 
+(defn- emit-joined-column
+  "Render the pattern that binds `target-var` to field `tid` of the entity
+   `fk-var` points at: the entity itself when `tid` is its subject, which is no
+   RDF property, else the [[emit-remap-optional]] that reads `property-uri`."
+  [tid fk-var property-uri target-var]
+  (if (id-field? tid)
+    (format "  BIND(?%s AS ?%s)" fk-var target-var)
+    (emit-remap-optional fk-var property-uri target-var)))
+
 (defn- joined-var-name
   "Build a SPARQL var name for a joined column: `<alias>__<field-name>`,
    sanitized. `field-name` may be nil; falls back to `f`."
@@ -1614,7 +1623,7 @@
    (such as drilling on an aggregation value).
 
    The inner stage is compiled as a SPARQL sub-`SELECT`; the derived stage's
-   remap joins are emitted as OPTIONALs after it. The outer stage's own
+   joined columns are bound after it ([[emit-joined-column]]). The outer stage's own
    `:aggregation`, `:breakout`, `:expressions`, `:filter`, `:order-by`, and
    explicit `:fields` projection are honored, resolved against the variables
    the sub-`SELECT` already projects (no triple patterns are needed at this
@@ -1655,10 +1664,13 @@
                                    prop   (when nm (uri/absolute-uri nm naming))
                                    rvar   (joined-var-name alias (or nm (str "f_" tid)))]
                             :when (and fk-var prop)]
-                        {:optional (emit-remap-optional fk-var prop rvar)
+                        {:optional (emit-joined-column tid fk-var prop rvar)
                          :var      rvar
                          :tid      tid
                          :alias    alias})
+        ;; a column listed twice binds its var once: SPARQL refuses a second BIND
+        remap-entries (reduce (fn [es e] (cond-> es (not-any? #(= (:var e) (:var %)) es) (conj e)))
+                              [] remap-entries)
         ;; Columns visible to the outer stage: inner sub-SELECT vars + remapped vars.
         passthrough-vars (vec (concat (:vars inner) (map :var remap-entries)))
         ;; The sub-SELECT already projects these by name, so an outer field token
@@ -1699,7 +1711,7 @@
                             (when (every? some? vs)
                               (vec (distinct vs)))))
         ;; When Lib's expected columns are known, reconcile the SELECT against them.
-        ;; Remap columns resolve via `pair->target-var` (or an extra OPTIONAL); the rest
+        ;; Remap columns resolve via `pair->target-var` (or an extra pattern, see [[emit-joined-column]]); the rest
         ;; match inner vars by the source's name for the column (`count` → `ag_0`),
         ;; then by desired alias, then by Lib name, before position, since an FK
         ;; remap reorders the sub-SELECT.
@@ -1725,10 +1737,9 @@
                                  (and alias join fk-var nm)
                                  (let [rvar (joined-var-name alias nm)
                                        prop (uri/absolute-uri nm naming)]
-                                   (-> acc
-                                       (update :vars conj rvar)
-                                       (update :optionals conj
-                                               (emit-remap-optional fk-var prop rvar))))
+                                   (cond-> (update acc :vars conj rvar)
+                                     (not-any? #{rvar} (:vars acc))
+                                     (update :optionals conj (emit-joined-column tid fk-var prop rvar))))
 
                                  (seq @inner-vars)
                                  (let [unused (set @inner-vars)
