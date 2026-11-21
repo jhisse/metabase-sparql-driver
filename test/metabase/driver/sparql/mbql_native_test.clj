@@ -264,7 +264,10 @@
             sparql (->sparql (lib/expression outer "whisper" (lib/lower inner)))]
         (is (str/includes? sparql "BIND(LCASE(STR(?shout)) AS ?whisper)"))
         (is (= ["shout" "whisper"] (take-last 2 (select-vars sparql))))
-        (is (= 9 (count (select-vars sparql))))))))
+        (is (= 9 (count (select-vars sparql))))))
+    (testing "replace with an empty search keeps the text"
+      (is (re-find #"BIND\(STR\(\?\w+\) AS \?same\)"
+                   (->sparql (lib/expression q "same" (lib/replace label "" "x"))))))))
 
 (deftest saved-native-question-as-source-test
   (testing "the saved SPARQL is the sub-SELECT, with its prologue at the top"

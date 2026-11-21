@@ -436,6 +436,9 @@
     (testing "replace escapes quotes, newlines and regex metacharacters in find, and \\ and $ in the replacement"
       (is (= "REPLACE(STR(?a), \"a\\\"\\\\.b\\n\", \"\\\\$1\\\\\\\\\")"
              (f [:replace [:field "a" nil] "a\".b\n" "$1\\"]))))
+    (testing "replace with an empty search returns the text, and a space is still searched"
+      (is (= "STR(?a)" (f [:replace [:field "a" nil] "" "x"])))
+      (is (= "REPLACE(STR(?a), \" \", \"_\")" (f [:replace [:field "a" nil] " " "_"]))))
     (testing "casts use the full xsd IRI constructor"
       (is (= "<http://www.w3.org/2001/XMLSchema#double>(?a)" (f [:float [:field "a" nil]])))
       (is (= (str "<http://www.w3.org/2001/XMLSchema#integer>(ROUND("
