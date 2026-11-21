@@ -16,4 +16,7 @@ RUN make build
 
 FROM metabase/metabase:v0.64.6.2
 
+# Take OS security fixes published after the base image was built.
+RUN apk upgrade --no-cache
+
 COPY --from=builder /app/target/sparql.metabase-driver.jar /plugins/
