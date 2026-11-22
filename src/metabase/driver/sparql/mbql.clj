@@ -1002,7 +1002,7 @@
   "SPARQL expression per breakout `:temporal-unit`, as a format string over the
    value's variable (`%1$s`). Truncations rebuild the value from its lexical form,
    extractions return integers. MONTH()/DAY() on an xsd:date is not in SPARQL 1.1
-   but Oxigraph, Jena and RDF4J accept it."
+   but Oxigraph, Jena, RDF4J and Virtuoso accept it."
   ;; Buckets follow each value's own lexical timezone, not the report
   ;; timezone; convert first if mixed-timezone data needs report-time buckets.
   (let [quarter-index (str xsd-integer "(FLOOR((MONTH(?%1$s)-1)/3))")]

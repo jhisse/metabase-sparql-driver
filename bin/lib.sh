@@ -4,8 +4,10 @@
 #
 # SPARQL_ENGINE (default oxigraph) picks the engine: its compose service and
 # profile (both named after it), ENDPOINT, store_url (its Graph Store Protocol
-# URL for a graph), and optionally overrides of probe (the ready check) and
-# engine_setup (run once probe passes, before seeding; RDF4J creates its repository).
+# URL for a graph), and optionally overrides of probe (the ready check),
+# engine_setup (run once probe passes, before seeding; RDF4J creates its
+# repository), read_url (where the driver reads a graph back, if not store_url)
+# and STORE_AUTH (curl options to write to the Graph Store).
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
@@ -24,6 +26,12 @@ probe() {
 
 # Runs once the endpoint is ready, before seeding.
 engine_setup() { :; }
+
+# Where the driver reads a graph back (the SHACL shapes); the store URL by default.
+read_url() { store_url "$1"; }
+
+# curl options that authenticate writes to the Graph Store; none by default.
+STORE_AUTH=()
 
 case "$SPARQL_ENGINE" in
   oxigraph)
@@ -73,8 +81,16 @@ case "$SPARQL_ENGINE" in
       [ "$code" = 204 ] || rdf4j_failed "creating" "$code"
     }
     ;;
+  virtuoso)
+    ENDPOINT="http://localhost:18890/sparql"
+    # Writes need the dba login (DBA_PASSWORD in docker-compose.test.yml, test only);
+    # reads work without it, which is what the driver's shacl-url gets.
+    store_url() { echo "http://localhost:18890/sparql-graph-crud-auth?graph-uri=$(urlencode "$1")"; }
+    read_url() { echo "http://localhost:18890/sparql-graph-crud?graph-uri=$(urlencode "$1")"; }
+    STORE_AUTH=(--digest -u dba:dba)
+    ;;
   *)
-    echo "FAILED: unknown SPARQL_ENGINE '$SPARQL_ENGINE' (known: oxigraph, fuseki, rdf4j)" >&2
+    echo "FAILED: unknown SPARQL_ENGINE '$SPARQL_ENGINE' (known: oxigraph, fuseki, rdf4j, virtuoso)" >&2
     exit 2
     ;;
 esac
@@ -90,12 +106,14 @@ SHAPES="test/resources/fixtures/smoke-shapes.ttl"
 # Graph Store Protocol target from the same value, so the two never drift.
 GRAPH="${SPARQL_TEST_GRAPH:-https://example.org/}"
 # The SHACL shapes live in a separate named graph, so they never show up in the
-# data graph. Its Graph Store URL returns the shapes as Turtle on GET, which is
-# exactly what the driver's `shacl-url` fetches; exported as SPARQL_TEST_SHACL_URL.
+# data graph. They are written to SHAPES_STORE (store_url) and read back as
+# Turtle from SHACL_URL (read_url, no login needed), which is what the driver's
+# `shacl-url` fetches; exported as SPARQL_TEST_SHACL_URL.
 SHAPES_GRAPH="https://example.org/shapes"
 
 STORE="$(store_url "$GRAPH")"
-SHACL_URL="$(store_url "$SHAPES_GRAPH")"
+SHAPES_STORE="$(store_url "$SHAPES_GRAPH")"
+SHACL_URL="$(read_url "$SHAPES_GRAPH")"
 
 wait_for_endpoint() {
   echo -n "==> Waiting for $SPARQL_ENGINE to answer "
@@ -111,7 +129,8 @@ wait_for_endpoint() {
 
 seed() { # seed <file> <graph> <store-url>
   echo "==> Seeding $1 into graph <$2>"
-  if ! curl -sS -f -X POST -H 'Content-Type: text/turtle' --data-binary "@$1" "$3"; then
+  if ! curl -sS -f ${STORE_AUTH[@]+"${STORE_AUTH[@]}"} -X POST -H 'Content-Type: text/turtle' \
+    --data-binary "@$1" "$3"; then
     echo "FAILED: seeding $1 failed (see response above)" >&2
     $COMPOSE logs >&2 || true
     exit 1
@@ -120,8 +139,8 @@ seed() { # seed <file> <graph> <store-url>
 
 seed_fixtures() {
   # Graph Store POST appends: clear both graphs so a rerun reloads the fixture as is.
-  curl -sS -f -X DELETE "$STORE" >/dev/null 2>&1 || true
-  curl -sS -f -X DELETE "$SHACL_URL" >/dev/null 2>&1 || true
+  curl -sS -f ${STORE_AUTH[@]+"${STORE_AUTH[@]}"} -X DELETE "$STORE" >/dev/null 2>&1 || true
+  curl -sS -f ${STORE_AUTH[@]+"${STORE_AUTH[@]}"} -X DELETE "$SHAPES_STORE" >/dev/null 2>&1 || true
   seed "$FIXTURE" "$GRAPH" "$STORE"
-  seed "$SHAPES" "$SHAPES_GRAPH" "$SHACL_URL"
+  seed "$SHAPES" "$SHAPES_GRAPH" "$SHAPES_STORE"
 }

@@ -1,7 +1,8 @@
 # Ephemeral SPARQL endpoints for the smoke/integration suite, one per engine,
 # each under a profile named after it that bin/lib.sh enables (SPARQL_ENGINE).
-# A manual run enables it too: `--profile oxigraph`, `--profile fuseki` or
-# `--profile rdf4j` (plus `--profile demo` for Metabase, which runs on Oxigraph).
+# A manual run enables it too: `--profile oxigraph`, `--profile fuseki`,
+# `--profile rdf4j` or `--profile virtuoso` (plus `--profile demo` for Metabase,
+# which runs on Oxigraph).
 # Brought up, seeded, and torn down by bin/smoke-test.sh (and by `make smoke`).
 # Not used by the hermetic `make test` run.
 #
@@ -38,6 +39,17 @@ services:
     # Host port 18080: 8080 is often taken on a development machine.
     ports:
       - "127.0.0.1:18080:8080"
+
+  virtuoso:
+    profiles: ["virtuoso"]
+    # OpenLink's own image, pinned by tag and digest.
+    image: openlink/virtuoso-opensource-7:7.2.17@sha256:0dbe1ab4fa0cb7bbafc1f6c0c2b0a5d6f22d918dbd17672f2ddb24580aa6756a
+    environment:
+      # Password of the dba user, which bin/lib.sh uses to write the fixture. Test only.
+      DBA_PASSWORD: dba
+    # Host port 18890: 8890 is the default of any local Virtuoso.
+    ports:
+      - "127.0.0.1:18890:8890"
 
   metabase:
     profiles: ["demo"]
