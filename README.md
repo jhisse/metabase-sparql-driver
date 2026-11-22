@@ -257,8 +257,9 @@ The **Default Graph URI** doubles as the implicit base prefix for the database. 
 | `http://dbpedia.org/ontology/`  | `http://dbpedia.org/ontology/Person`              | `Person`       |
 | `http://dbpedia.org/ontology/`  | `http://dbpedia.org/ontology/birthPlace`          | `birthPlace`   |
 | `http://dbpedia.org/ontology/`  | `http://www.w3.org/1999/02/22-rdf-syntax-ns#type` | *(unchanged — foreign URI)* |
+| `http://dbpedia.org/ontology/`  | `http://dbpedia.org/ontology/subject`             | *(unchanged — `subject` is the key column)* |
 
-This mirrors RDF/Turtle "base IRI" semantics: only URIs *under* the configured base get shortened. Foreign-namespace URIs always keep their full form so you can tell them apart. Enable **Hide URIs outside known namespaces** to drop them from sync entirely. To shorten URIs from other namespaces too, list them under **Namespace Prefixes**.
+This mirrors RDF/Turtle "base IRI" semantics: only URIs *under* the configured base get shortened. Foreign-namespace URIs always keep their full form so you can tell them apart. A property whose short name would be `subject`, in any case, keeps its full URI too, apart from the synthetic `subject` key; on a database synced with an earlier driver version it appears as a new column after a re-sync. Enable **Hide URIs outside known namespaces** to drop them from sync entirely. To shorten URIs from other namespaces too, list them under **Namespace Prefixes**.
 
 ### Language Handling
 

@@ -82,9 +82,9 @@
                    fk-class    (:fk-target-class prop)]
             :when (and display-uri fk-class)]
       (let [src-table-name (uri/shorten-uri (:class-uri shape) naming)
-            src-field-name (uri/shorten-uri (:property-uri prop) naming)
+            src-field-name (uri/shorten-field-name (:property-uri prop) naming)
             tgt-table-name (uri/shorten-uri fk-class naming)
-            tgt-field-name (uri/shorten-uri display-uri naming)
+            tgt-field-name (uri/shorten-field-name display-uri naming)
             src-field      (field-for db-id src-table-name src-field-name)
             tgt-field      (field-for db-id tgt-table-name tgt-field-name)]
         (cond

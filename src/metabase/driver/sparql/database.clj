@@ -49,7 +49,7 @@
    SPARQL and to avoid collisions with shortened property URIs whose local name is
    `id` (a very common case once Default Graph stripping is in effect)."
   []
-  {:name "subject"
+  {:name uri/key-column
    :database-type "uri"
    :base-type :type/Text
    :pk? true
@@ -70,7 +70,7 @@
   ([naming idx field-uri]
    (build-field-from-uri naming idx field-uri false))
   ([naming idx field-uri iri?]
-   {:name (uri/shorten-uri field-uri naming)
+   {:name (uri/shorten-field-name field-uri naming)
     :database-type (if iri? "uri" "string")
     :base-type :type/Text
     :pk? false
@@ -186,7 +186,7 @@
   (let [uri      (:property-uri prop)
         foreign? (uri/foreign-uri? uri naming)]
     (when-not (and foreign? hide-foreign?)
-      (cond-> {:name              (uri/shorten-uri uri naming)
+      (cond-> {:name              (uri/shorten-field-name uri naming)
                :database-type     (cond
                                     (:lang-string? prop) "langString"
                                     ;; IRI-node values (sh:nodeKind sh:IRI or an
@@ -337,10 +337,10 @@
                               (uri/foreign-uri? (:class-uri shape) naming))))]
       {:fk-table-name   (uri/shorten-uri (:class-uri shape) naming)
        :fk-table-schema nil
-       :fk-column-name  (uri/shorten-uri prop-uri naming)
+       :fk-column-name  (uri/shorten-field-name prop-uri naming)
        :pk-table-name   (uri/shorten-uri fk-class naming)
        :pk-table-schema nil
-       :pk-column-name  "subject"})))
+       :pk-column-name  uri/key-column})))
 
 (defn- describe-database-shacl
   "Return one table per shape of the SHACL document of `database`. Throws when

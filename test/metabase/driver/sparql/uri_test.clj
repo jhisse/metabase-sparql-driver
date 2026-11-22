@@ -119,6 +119,13 @@
       (is (= "http://xmlns.com/foaf/0.1/name" (uri/absolute-uri "foaf__name" naming))))
     (testing "the Default Graph still wins first and round-trips"
       (is (= "Person" (uri/shorten-uri "https://example.org/Person" naming)))
+      (testing "a field whose short name would be the key column's, in any case, keeps its IRI"
+        (is (= "https://example.org/subject" (uri/shorten-field-name "https://example.org/subject" naming)))
+        (is (= "https://example.org/Subject" (uri/shorten-field-name "https://example.org/Subject" naming)))
+        (is (= "https://example.org/subject" (uri/shorten-field-name "subject" naming)))
+        (is (= "Person" (uri/shorten-field-name "https://example.org/Person" naming))))
+      (testing "while a class of that name still shortens"
+        (is (= "subject" (uri/shorten-uri "https://example.org/subject" naming))))
       (is (= "https://example.org/Person" (uri/absolute-uri "Person" naming))))
     (testing "an unrelated URI stays full and expands unchanged (it has a scheme)"
       (is (= "http://other.example/x" (uri/shorten-uri "http://other.example/x" naming)))

@@ -78,7 +78,7 @@
    property `<base>/id` becomes a column named `id`. Treating it as the
    subject would silently drop it from the SELECT."
   [field-id]
-  (= "subject" (:name (field-id->metadata field-id))))
+  (= uri/key-column (:name (field-id->metadata field-id))))
 
 (defn- database-naming-context
   "Return the URI-naming context (Default Graph + namespace prefixes) of the
