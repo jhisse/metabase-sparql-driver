@@ -211,7 +211,7 @@ Query-time mapping (every strategy). SHACL sync reads `sh:datatype` instead — 
 | **v0.0.10**          | v0.56.3 — v0.56.x | Requires `describe-database*` (added in 0.56.3). |
 | **v0.0.1 – v0.0.9**  | < v0.56.3         | Uses legacy `describe-database`.                 |
 
-Every pull request runs the integration tests on Oxigraph, Apache Jena Fuseki and Eclipse RDF4J, the versions pinned in `docker-compose.test.yml`.
+Every pull request runs the integration tests on Oxigraph, Apache Jena Fuseki, Eclipse RDF4J and OpenLink Virtuoso, the versions pinned in `docker-compose.test.yml`.
 
 > [!IMPORTANT]
 > `v0.0.20` needs Metabase v0.64 (Java 25) and does not load on v0.61; stay on `v0.0.19` until you upgrade Metabase.
@@ -645,7 +645,7 @@ Run `make check-deps` to check if dependencies are installed.
 - `make docker-build-driver`: build the jar inside Docker, without a local JDK or Clojure
 - `make docker-build`: build a Metabase image with the driver in `/plugins/`, the same image the CI publishes to `ghcr.io`
 - `make test`, `make lint`, `make smoke`, `make e2e`: the checks the CI runs; `make help` lists the rest
-- `make smoke SPARQL_ENGINE=fuseki` (or `rdf4j`): the integration tests on Apache Jena Fuseki (or Eclipse RDF4J) instead of Oxigraph
+- `make smoke SPARQL_ENGINE=fuseki` (or `rdf4j`, `virtuoso`): the integration tests on Apache Jena Fuseki (or Eclipse RDF4J, OpenLink Virtuoso) instead of Oxigraph
 
 ## :test_tube: Try It Locally
 
