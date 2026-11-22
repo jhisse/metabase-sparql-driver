@@ -462,7 +462,7 @@
   (testing "a malformed native query raises an invalid-query error carrying the
             endpoint's message, instead of succeeding with an empty result"
     ;; Premise: the endpoint answers a SPARQL parse error with HTTP 400, which
-    ;; classifies as :query → invalid-query (Oxigraph and Fuseki do). An engine added to
+    ;; classifies as :query → invalid-query (Oxigraph, Fuseki and RDF4J do). An engine added to
     ;; bin/lib.sh that answered 200 + an error JSON would take the success
     ;; branch instead, so check this test when adding one.
     (let [e (is (thrown? clojure.lang.ExceptionInfo
