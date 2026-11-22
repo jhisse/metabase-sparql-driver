@@ -212,7 +212,8 @@
 
 (deftest xsd-base-type-test
   (is (= :type/Integer        (xsd-base-type "http://www.w3.org/2001/XMLSchema#integer")))
-  (is (= :type/Float          (xsd-base-type "http://www.w3.org/2001/XMLSchema#decimal")))
+  (is (= :type/Decimal        (xsd-base-type "http://www.w3.org/2001/XMLSchema#decimal")))
+  (is (= :type/Float          (xsd-base-type "http://www.w3.org/2001/XMLSchema#double")))
   (is (= :type/DateTimeWithTZ (xsd-base-type "http://www.w3.org/2001/XMLSchema#dateTime")))
   (is (= :type/Date           (xsd-base-type "http://www.w3.org/2001/XMLSchema#date")))
   (testing "non-XSD datatypes are not resolved here"

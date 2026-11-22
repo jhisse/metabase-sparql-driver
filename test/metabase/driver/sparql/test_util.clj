@@ -145,7 +145,7 @@
    (col company-table 202 1 rdfs-label :type/Text "string")
    (col company-table 203 2 "foundedOn" :type/Date "string")
    (col company-table 204 3 "employees" :type/Integer "string")
-   (col company-table 205 4 "revenue" :type/Float "string")
+   (col company-table 205 4 "revenue" :type/Decimal "string")
    (col company-table 206 5 "listed" :type/Boolean "string")
    (fk (col company-table 207 6 "headquarters" :type/Text "uri") 301 302)
    (col city-table 301 0 "subject" :type/Text "uri")

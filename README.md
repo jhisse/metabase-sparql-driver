@@ -191,7 +191,8 @@ Query-time mapping (every strategy). SHACL sync reads `sh:datatype` instead — 
 |:-------------------------------------------------------------------|:-------------------|:---------------------------------------------------------------------|
 | `xsd:integer`, `xsd:int`, `xsd:long`, `xsd:short`, `xsd:byte`      | Integer            | `42`, `-100`; values past the 64-bit range are kept whole             |
 | `xsd:nonNegativeInteger`, `xsd:positiveInteger`, `xsd:nonPositiveInteger`, `xsd:negativeInteger`, `xsd:unsigned*` | Integer | `0`, `1`, `255`                               |
-| `xsd:decimal`, `xsd:float`, `xsd:double`                           | Float              | `3.14`, `2.718`                                                       |
+| `xsd:decimal`                                                      | Decimal            | `3.14`, kept exact (BigDecimal)                                       |
+| `xsd:float`, `xsd:double`                                          | Float              | `2.718`; `INF` and `-INF` are the infinities                          |
 | `xsd:boolean`                                                      | Boolean            | `true`, `false`, `1`, `0`; any other value is kept as its string      |
 | `xsd:dateTime`                                                     | DateTime           | `2024-01-15T10:30:00Z`                                                |
 | `xsd:date`                                                         | Date               | `2024-01-15`                                                          |
@@ -410,7 +411,8 @@ The driver re-reads the SHACL on every sync (re-fetching it when it comes from a
 | `sh:property [ sh:path P … ]`                              | One **column** on the parent table. `:name` is the short form of `P` (or the full URI for foreign predicates).               |
 | `sh:datatype xsd:string` *(or normalizedString, token, language, anyURI)* | `:base-type :type/Text`. `xsd:anyURI` also gets `:semantic-type :type/URL`.                                |
 | `sh:datatype xsd:integer` *(and the unsigned/long/short/byte/nonNegative/positive variants)* | `:type/Integer`.                                                                          |
-| `sh:datatype xsd:decimal` / `xsd:float` / `xsd:double`     | `:type/Float`.                                                                                                                |
+| `sh:datatype xsd:decimal`                                  | `:type/Decimal`.                                                                                                              |
+| `sh:datatype xsd:float` / `xsd:double`                     | `:type/Float`.                                                                                                                |
 | `sh:datatype xsd:boolean`                                  | `:type/Boolean`.                                                                                                              |
 | `sh:datatype xsd:date`                                     | `:type/Date`.                                                                                                                 |
 | `sh:datatype xsd:dateTime` / `xsd:dateTimeStamp`           | `:type/DateTimeWithTZ`.                                                                                                       |

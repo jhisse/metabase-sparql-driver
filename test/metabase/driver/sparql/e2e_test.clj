@@ -299,7 +299,8 @@
                   (lib/aggregate (lib/avg age))
                   (lib/aggregate (lib/min age))
                   (lib/aggregate (lib/max age)))]
-      (is (= [[55 27.5 25 30]] (:rows (tu/run-query q))))))
+      ;; SPARQL's AVG of integers is an xsd:decimal, read exactly
+      (is (= [[55 27.5M 25 30]] (:rows (tu/run-query q))))))
   (testing "distinct headquarters against the count of companies (three companies, two cities)"
     (let [q (tu/company-query)
           q (-> q
