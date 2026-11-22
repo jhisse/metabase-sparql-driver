@@ -184,8 +184,12 @@ jobs:
         run: make coverage
 
   smoke:
-    name: Smoke Tests
+    name: Smoke Tests (${{ matrix.engine }})
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        engine: [oxigraph, fuseki]
     timeout-minutes: 20
     needs: lint
     permissions:
@@ -215,13 +219,31 @@ jobs:
             ~/.m2/repository
             ~/.gitlibs
             ~/.deps.clj
-          key: ${{ runner.os }}-clojure-smoke-${{ hashFiles('deps.edn', 'metabase/deps.edn') }}
+          key: ${{ runner.os }}-clojure-smoke-${{ matrix.engine }}-${{ hashFiles('deps.edn', 'metabase/deps.edn') }}
           restore-keys: |
+            ${{ runner.os }}-clojure-smoke-${{ matrix.engine }}-
             ${{ runner.os }}-clojure-smoke-
             ${{ runner.os }}-clojure-
 
       - name: Run Smoke Tests
+        env:
+          SPARQL_ENGINE: ${{ matrix.engine }}
         run: make smoke
+
+  # The merge rule requires a check named "Smoke Tests"; the matrix jobs carry the
+  # engine in their names, so this job reports their combined result under it.
+  smoke-result:
+    name: Smoke Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    needs: smoke
+    if: ${{ !cancelled() }}
+    permissions: {}
+    steps:
+      - name: Check every engine passed
+        env:
+          RESULT: ${{ needs.smoke.result }}
+        run: test "$RESULT" = success
 
   build:
     name: Build Driver

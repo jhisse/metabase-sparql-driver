@@ -1,6 +1,7 @@
 # Ephemeral SPARQL endpoints for the smoke/integration suite, one per engine,
 # each under a profile named after it that bin/lib.sh enables (SPARQL_ENGINE).
-# A manual run enables it too: `--profile oxigraph` (plus `--profile demo` for Metabase).
+# A manual run enables it too: `--profile oxigraph` or `--profile fuseki` (plus
+# `--profile demo` for Metabase, which runs on Oxigraph).
 # Brought up, seeded, and torn down by bin/smoke-test.sh (and by `make smoke`).
 # Not used by the hermetic `make test` run.
 #
@@ -14,6 +15,20 @@ services:
     command: ["serve", "--bind", "0.0.0.0:7878"]
     ports:
       - "127.0.0.1:7878:7878"
+
+  fuseki:
+    profiles: ["fuseki"]
+    # Apache Jena publishes no image; this community one tracks Jena releases.
+    # Pinned by tag and digest, so a re-pushed tag cannot change what CI runs.
+    image: secoresearch/fuseki:6.2.0@sha256:74833bbf3967f41f5f98ddd6b861abf1a426705056da3bbdb516b8a703342aa9
+    # The image's own command (`docker image inspect`: its Cmd, run from
+    # /jena-fuseki) plus an in-memory dataset at /smoke with SPARQL Update and a
+    # read-write Graph Store; recheck it on every image bump. The image also
+    # loads its own /ds, so the test dataset needs another name.
+    command: ["java", "-cp", "*:/javalibs/*", "org.apache.jena.fuseki.main.cmds.FusekiServerCmd",
+              "--mem", "--update", "/smoke"]
+    ports:
+      - "127.0.0.1:3030:3030"
 
   metabase:
     profiles: ["demo"]

@@ -30,7 +30,7 @@
       (ex-message e))))
 
 (def endpoint
-  "Live SPARQL endpoint under test (set by bin/smoke-test.sh)."
+  "Live SPARQL endpoint under test (set by bin/smoke-test.sh; Oxigraph's by default)."
   (or (System/getenv "SPARQL_TEST_ENDPOINT") "http://localhost:7878/query"))
 
 ;; The fixture is loaded into this named graph; the driver also sends it as the
@@ -48,7 +48,8 @@
 (def shacl-db
   "[[db]] synced with the `shacl` strategy from the fixture's shapes
   (test/resources/fixtures/smoke-shapes.ttl), which bin/smoke-test.sh seeds into
-  their own named graph and exports as SPARQL_TEST_SHACL_URL (a Graph Store GET)."
+  their own named graph and exports as SPARQL_TEST_SHACL_URL (a Graph Store GET,
+  `store_url` in bin/lib.sh; Oxigraph's by default)."
   (update db :details assoc
           :metadata-sync-strategy "shacl"
           :shacl-url (or (System/getenv "SPARQL_TEST_SHACL_URL")

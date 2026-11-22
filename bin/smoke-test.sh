@@ -15,8 +15,9 @@ teardown() {
   echo "==> Tearing down $SPARQL_ENGINE"
   $COMPOSE down -v >/dev/null 2>&1 || true
 }
-# `make demo` shares this compose project: reuse its endpoint and leave it running.
-if [ -n "$($COMPOSE ps -q "$SPARQL_ENGINE" 2>/dev/null)" ]; then
+# `make demo` shares this compose project and runs on Oxigraph: reuse its
+# endpoint and leave it running. Any other running engine is a leftover, torn down.
+if [ "$SPARQL_ENGINE" = oxigraph ] && [ -n "$($COMPOSE ps -q oxigraph 2>/dev/null)" ]; then
   echo "==> $SPARQL_ENGINE already running (make demo?): reusing it, no teardown"
 else
   trap teardown EXIT
