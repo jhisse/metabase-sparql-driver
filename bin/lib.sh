@@ -26,8 +26,12 @@ case "$SPARQL_ENGINE" in
     ENDPOINT="http://localhost:7878/query"
     store_url() { echo "http://localhost:7878/store?graph=$(urlencode "$1")"; }
     ;;
+  fuseki)
+    ENDPOINT="http://localhost:3030/smoke/query"
+    store_url() { echo "http://localhost:3030/smoke/data?graph=$(urlencode "$1")"; }
+    ;;
   *)
-    echo "FAILED: unknown SPARQL_ENGINE '$SPARQL_ENGINE' (known: oxigraph)" >&2
+    echo "FAILED: unknown SPARQL_ENGINE '$SPARQL_ENGINE' (known: oxigraph, fuseki)" >&2
     exit 2
     ;;
 esac

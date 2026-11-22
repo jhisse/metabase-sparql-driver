@@ -7,9 +7,13 @@
    endpoint (docker-compose.test.yml), seeds it with test/resources/fixtures/smoke.ttl
    into the named graph <https://example.org/> (and smoke-shapes.ttl into
    <https://example.org/shapes> for the SHACL sync tests), and points `SPARQL_TEST_ENDPOINT`
-   here. Run directly with:
+   here. Run directly against a seeded Oxigraph with:
 
-     SPARQL_TEST_ENDPOINT=http://localhost:7878/query clojure -X:test :includes '[:integration]'"
+     SPARQL_TEST_ENDPOINT=http://localhost:7878/query clojure -X:test :includes '[:integration]'
+
+   On another engine, run `make smoke SPARQL_ENGINE=<name>`, or export the
+   SPARQL_TEST_ENDPOINT, SPARQL_TEST_GRAPH and SPARQL_TEST_SHACL_URL that bin/lib.sh
+   gives it."
   (:require [clojure.test :refer :all]
             [clojure.string :as str]
             [metabase.driver.sparql.connection :as connection]

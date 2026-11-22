@@ -3,7 +3,7 @@
 #
 # bin/lib.sh (make smoke, make demo) seeds this file into its own named graph,
 # <https://example.org/shapes>, and the tests fetch it back as Turtle through
-# the engine's Graph Store Protocol (on Oxigraph, GET /store?graph=…), the driver's `shacl-url`. The shapes stay out of
+# the engine's Graph Store Protocol (`store_url` in bin/lib.sh), the driver's `shacl-url`. The shapes stay out of
 # the data graph, so auto-sync and queries never see them. The FKs declare
 # sban:displayValueProperty so the post-sync hook (dimensions.clj) remaps them to
 # their target's label in a real Metabase (bin/demo.sh, metabase_api_test.clj).
