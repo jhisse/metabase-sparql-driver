@@ -1,7 +1,7 @@
 # Ephemeral SPARQL endpoints for the smoke/integration suite, one per engine,
 # each under a profile named after it that bin/lib.sh enables (SPARQL_ENGINE).
-# A manual run enables it too: `--profile oxigraph` or `--profile fuseki` (plus
-# `--profile demo` for Metabase, which runs on Oxigraph).
+# A manual run enables it too: `--profile oxigraph`, `--profile fuseki` or
+# `--profile rdf4j` (plus `--profile demo` for Metabase, which runs on Oxigraph).
 # Brought up, seeded, and torn down by bin/smoke-test.sh (and by `make smoke`).
 # Not used by the hermetic `make test` run.
 #
@@ -29,6 +29,15 @@ services:
               "--mem", "--update", "/smoke"]
     ports:
       - "127.0.0.1:3030:3030"
+
+  rdf4j:
+    profiles: ["rdf4j"]
+    # Eclipse's own image, pinned by tag and digest. It starts with no repository;
+    # bin/lib.sh creates one from test/resources/fixtures/rdf4j-repository.ttl.
+    image: eclipse/rdf4j-workbench:6.1.0-jetty@sha256:ea05f60f3f0052344aa8823c557e9a55cf2c37e5c2037cd837201f34d4c22473
+    # Host port 18080: 8080 is often taken on a development machine.
+    ports:
+      - "127.0.0.1:18080:8080"
 
   metabase:
     profiles: ["demo"]

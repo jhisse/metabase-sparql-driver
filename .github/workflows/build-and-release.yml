@@ -189,7 +189,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        engine: [oxigraph, fuseki]
+        engine: [oxigraph, fuseki, rdf4j]
     timeout-minutes: 20
     needs: lint
     permissions:

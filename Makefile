@@ -158,7 +158,7 @@ help:
 	@echo "  make format              - Format code using cljfmt"
 	@echo "  make splint              - Run splint static code analysis"
 	@echo "  make test                - Run unit tests (hermetic)"
-	@echo "  make smoke               - Run smoke/integration tests (ephemeral endpoint via Docker; SPARQL_ENGINE=oxigraph|fuseki)"
+	@echo "  make smoke               - Run smoke/integration tests (ephemeral endpoint via Docker; SPARQL_ENGINE=oxigraph|fuseki|rdf4j)"
 	@echo "  make demo                - Start Metabase + driver + seeded Oxigraph (localhost:3000)"
 	@echo "  make demo-down           - Stop the demo environment"
 	@echo "  make e2e                 - Run the Metabase API tests against the demo environment"
