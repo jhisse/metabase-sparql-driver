@@ -1112,7 +1112,7 @@
 
 (deftest compile-derived-stage-remap-test
   (with-fixture
-    (testing "an outer-stage remap reads the label through a fresh var compared with ="
+    (testing "an outer-stage remap reads the label through a fresh var tested with sameTerm"
       ;; A plain OPTIONAL off ?geboorteplaats would bind it, when a row has no FK,
       ;; to every node carrying a label.
       (let [{:keys [sparql]}
@@ -1125,7 +1125,7 @@
                                                          [:field 1 {:join-alias "Plaats"}]]}]})]
         (is (str/includes? sparql
                            (str "OPTIONAL { ?geboorteplaats_node <" base "label> ?Plaats__label . "
-                                "FILTER(?geboorteplaats_node = ?geboorteplaats) }")))))))
+                                "FILTER(sameTerm(?geboorteplaats_node, ?geboorteplaats)) }")))))))
 
 (deftest compile-stage-join-condition-test
   (with-fixture
@@ -1469,7 +1469,8 @@
       (let [card {:source-table 100 :fields [[:field 1 nil] [:field 4 nil]]}
             join {:alias "Plaats" :condition [:= [:field "geboorteplaats" nil] [:field 1 {:join-alias "Plaats"}]]}
             hop  (str "?geboorteplaats_node <" base "provincie> ?Plaats__provincie_subject . "
-                      "?Plaats__provincie_subject <" base "label> ?Plaats__provincie__label .")]
+                      "?Plaats__provincie_subject <" base "label> ?Plaats__provincie__label . "
+                      "FILTER(sameTerm(?geboorteplaats_node, ?geboorteplaats)) }")]
         (testing "a FK column's display value inside a join is read one hop past the joined entity"
           (let [{:keys [sparql vars]} (compile-derived-stage*
                                        {:source-query card

@@ -596,15 +596,16 @@
   "Render the OPTIONAL that reads `property` off `fk-var`, a variable bound by a
    sub-SELECT. `fk-var` is unbound on rows without the FK, and a plain
    `OPTIONAL { ?fk-var <p> ?t }` (or one guarded by `BOUND(?fk-var)`) would then
-   bind it to every node with `<p>`. Matching a fresh var and comparing it with
-   `=` does not: the comparison errors on the unbound row, so the row is kept
-   without a value."
+   bind it to every node with `<p>`. Matching a fresh var and testing it with
+   `sameTerm` does not: the test errors on the unbound row, so the row is kept
+   without a value. `sameTerm`, not `=`: Virtuoso evaluates no `=` against the
+   outer var inside the OPTIONAL, which leaves every row without a value."
   ;; The fresh var scans every `<p>` triple; fine for remaps, revisit
   ;; if a derived stage ever remaps over a very large property.
   [fk-var property-uri target-var]
   (let [node (str fk-var "_node")]
     (emit-optional-group [(triple-pattern node property-uri target-var)
-                          (format "FILTER(?%s = ?%s)" node fk-var)])))
+                          (format "FILTER(sameTerm(?%s, ?%s))" node fk-var)])))
 
 (defn- emit-hop-optional
   "Like [[emit-remap-optional]], one hop further: read `hop-uri` off the node
@@ -614,7 +615,7 @@
   (let [node (str fk-var "_node")]
     (emit-optional-group [(triple-pattern node hop-uri mid-var)
                           (triple-pattern mid-var property-uri target-var)
-                          (format "FILTER(?%s = ?%s)" node fk-var)])))
+                          (format "FILTER(sameTerm(?%s, ?%s))" node fk-var)])))
 
 (defn- emit-joined-column
   "Render the pattern that binds `target-var` to field `tid` of the entity
