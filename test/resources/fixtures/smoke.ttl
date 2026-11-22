@@ -55,9 +55,11 @@ ex:initech a ex:Company ;
     ex:listed true ;
     ex:headquarters ex:shelbyville .
 
+# ex:subject is a property whose short name is the synthetic key's, `subject`.
 ex:springfield a ex:City ;
     rdfs:label "Springfield" ;
-    ex:population 30000 .
+    ex:population 30000 ;
+    ex:subject "Simpsons" .
 
 ex:shelbyville a ex:City ;
     rdfs:label "Shelbyville" ;

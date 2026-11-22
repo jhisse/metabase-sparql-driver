@@ -36,7 +36,7 @@
       (is (= 10 (count (select-vars sparql))))
       (is (str/includes? sparql "?subject a <https://example.org/Person> ."))))
   (testing "a table without FKs projects only its own columns"
-    (is (= ["subject" "http___www_w3_org_2000_01_rdf_schema_label" "population"]
+    (is (= ["subject" "http___www_w3_org_2000_01_rdf_schema_label" "population" "https___example_org_subject"]
            (select-vars (->sparql (tu/city-query)))))))
 
 (deftest fields-projection-follows-lib-test

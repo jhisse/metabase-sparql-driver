@@ -226,6 +226,21 @@
                   prefixes)
             uri)))))
 
+(def key-column
+  "Name of every table's synthetic key column, which holds each row's subject IRI."
+  "subject")
+
+(defn shorten-field-name
+  "Return `uri` shortened as a field name, as [[shorten-uri]] does, but keep the
+   full URI when the short name would be [[key-column]] in any case: Metabase
+   matches field names case-insensitively, so the two would be one field. A
+   `uri` given as a bare name (an explicit schema's `subject`) is expanded."
+  [uri base]
+  (let [short-name (shorten-uri uri base)]
+    (if (and (string? short-name) (= key-column (str/lower-case short-name)))
+      (absolute-uri uri base)
+      short-name)))
+
 (defn local-name
   "Return the local name of `iri`: the part after its last `/` or `#`
    (`https://example.org/Persoon` → `Persoon`), or the URI itself when that

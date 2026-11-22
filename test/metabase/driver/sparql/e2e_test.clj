@@ -278,6 +278,18 @@
         (is (= 2 (count cols)))
         (is (= [] rows))))))
 
+(deftest ^:integration property-named-subject-test
+  (testing "a property whose short name is `subject` keeps its full IRI, apart from the key"
+    (let [fields (:fields (database/describe-table :sparql tu/db {:name "City"}))
+          named  (fn [nm] (filter #(= nm (:name %)) fields))]
+      (is (= ["uri"] (map :database-type (named "subject"))))
+      (is (= 1 (count (named (str tu/ex "subject")))))))
+  (testing "and its values come back under that column"
+    (let [q    (tu/city-query)
+          prop (tu/column q (str tu/ex "subject"))
+          {:keys [rows]} (tu/run-query (lib/with-fields q [(tu/column q tu/rdfs-label) prop]))]
+      (is (= {["Shelbyville" nil] 1 ["Springfield" "Simpsons"] 1} (frequencies rows))))))
+
 (deftest ^:integration aggregations-test
   (testing "sum, average, min and max of age"
     (let [q   (tu/person-query)

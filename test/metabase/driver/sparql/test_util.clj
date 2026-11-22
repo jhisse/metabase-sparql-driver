@@ -150,7 +150,9 @@
    (fk (col company-table 207 6 "headquarters" :type/Text "uri") 301 302)
    (col city-table 301 0 "subject" :type/Text "uri")
    (col city-table 302 1 rdfs-label :type/Text "string")
-   (col city-table 303 2 "population" :type/Integer "string")])
+   (col city-table 303 2 "population" :type/Integer "string")
+   ;; a property named like the key: sync keeps its full IRI as the column name
+   (col city-table 304 3 (str ex "subject") :type/Text "string")])
 
 (def native-card
   "A saved native question over the fixture: a question built on it compiles
