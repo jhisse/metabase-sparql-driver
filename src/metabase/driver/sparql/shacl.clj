@@ -57,7 +57,7 @@
    "unsignedByte"       :type/Integer
    "nonNegativeInteger" :type/Integer
    "positiveInteger"    :type/Integer
-   "decimal"            :type/Float
+   "decimal"            :type/Decimal
    "float"              :type/Float
    "double"             :type/Float
    "date"               :type/Date

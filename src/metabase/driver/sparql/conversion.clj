@@ -8,8 +8,8 @@
   "Base URI of the XSD datatype namespace."
   "http://www.w3.org/2001/XMLSchema#")
 
-;; Single source of truth for the XSD datatype families. The integer, float and
-;; boolean families are shared by BOTH type classification
+;; Single source of truth for the XSD datatype families. The integer, decimal,
+;; float and boolean families are shared by BOTH type classification
 ;; (sparql-type->base-type) and value parsing (convert-value): the mixed-type
 ;; promotion in determine-column-types relies on the two agreeing, since a
 ;; datatype classified numeric but not parsed numeric would put raw string cells
@@ -31,9 +31,12 @@
     (str xsd "unsignedShort")
     (str xsd "unsignedByte")})
 
+(def ^:private xsd-decimal
+  "Exact decimals, parsed to BigDecimal so no digit is lost."
+  (str xsd "decimal"))
+
 (def ^:private xsd-float-datatypes
-  #{(str xsd "decimal")
-    (str xsd "float")
+  #{(str xsd "float")
     (str xsd "double")})
 
 ;; gYear, gYearMonth, gMonthDay, gDay and gMonth are left out: their values
@@ -69,6 +72,7 @@
              (= sparql-type "literal")))
     (cond
       (contains? xsd-integer-datatypes datatype)  :type/Integer
+      (= datatype xsd-decimal)                    :type/Decimal
       (contains? xsd-float-datatypes datatype)    :type/Float
       (= datatype xsd-boolean)                    :type/Boolean
       (contains? xsd-datetime-datatypes datatype) :type/DateTime
@@ -81,8 +85,9 @@
 
 (defn convert-value
   "Return the value of a SPARQL result `binding` parsed by its datatype:
-   integers to Long (BigInteger past Long's range), decimals and floats to
-   Double, booleans to Boolean
+   integers to Long (BigInteger past Long's range), decimals to BigDecimal,
+   floats and doubles to Double (`INF` and `-INF` to the infinities), booleans
+   to Boolean
    (`true`/`1` and `false`/`0`, the lexical forms of `xsd:boolean`, in any
    case).
 
@@ -108,9 +113,19 @@
              (log/warn "Failed to convert integer:" value "Error:" (Exception/.getMessage e))
              value))
 
-      ;; Handle decimals/floats (both typed-literal and literal)
+      ;; Decimals keep every digit: a Double holds only 15-17 significant ones
+      (and typed? (= datatype xsd-decimal))
+      (try (BigDecimal. (str/trim value))
+           (catch Exception e
+             (log/warn "Failed to convert decimal:" value "Error:" (Exception/.getMessage e))
+             value))
+
+      ;; Floats and doubles; XSD writes the infinities INF, +INF and -INF
       (and typed? (contains? xsd-float-datatypes datatype))
-      (try (Double/parseDouble value)
+      (try (case (str/trim value)
+             ("INF" "+INF") Double/POSITIVE_INFINITY
+             "-INF"         Double/NEGATIVE_INFINITY
+             (Double/parseDouble value))
            (catch Exception e
              (log/warn "Failed to convert float:" value "Error:" (Exception/.getMessage e))
              value))
@@ -126,13 +141,19 @@
       ;; Default case - strings and all other types
       :else value)))
 
-(def ^:private mixed-type-resolution
-  "The type a column takes when its observed base types differ, keyed by the
-   exact set of observed types. Only the two-type mixes listed here promote;
-   any other combination (every 3+-type mix included) degrades to Text, the
-   type every cell value renders safely under."
-  {#{:type/Integer :type/Float} :type/Float
-   #{:type/Date :type/DateTime} :type/DateTime})
+(defn- mixed-type-resolution
+  "Return the type a column takes when its observed base `types` differ: the
+   widest one when they are all numeric (Float, else Decimal), DateTime for
+   dates mixed with datetimes, else Text, the type every cell value renders
+   safely under."
+  [types]
+  (cond
+    (every? #{:type/Integer :type/Decimal :type/Float} types)
+    (if (contains? types :type/Float) :type/Float :type/Decimal)
+
+    (= types #{:type/Date :type/DateTime}) :type/DateTime
+
+    :else :type/Text))
 
 (defn determine-column-types
   "Return a map from each variable name in `vars` to the Metabase base type of
@@ -167,7 +188,7 @@
                     final-type   (cond
                                    (empty? column-types)      :type/Text
                                    (= 1 (count column-types)) (first column-types)
-                                   :else (get mixed-type-resolution column-types :type/Text))]
+                                   :else (mixed-type-resolution column-types))]
                 (assoc types var-name final-type)))
             {}
             vars)))

@@ -19,9 +19,10 @@
           (str t " should map to :type/Integer"))))
 
   (testing "floating-point family datatypes"
-    (doseq [t ["decimal" "float" "double"]]
+    (doseq [t ["float" "double"]]
       (is (= :type/Float (conversion/sparql-type->base-type "literal" (str xsd t)))
-          (str t " should map to :type/Float"))))
+          (str t " should map to :type/Float")))
+    (is (= :type/Decimal (conversion/sparql-type->base-type "literal" (str xsd "decimal")))))
 
   (testing "boolean datatype"
     (is (= :type/Boolean (conversion/sparql-type->base-type "typed-literal" (str xsd "boolean")))))
@@ -55,8 +56,13 @@
     (is (= 42 (conversion/convert-value {:value "+42" :type "literal" :datatype (str xsd "integer")}))
         "a leading + is valid xsd:integer"))
 
-  (testing "decimals/doubles are parsed to Double"
-    (is (= 3.5 (conversion/convert-value {:value "3.5" :type "typed-literal" :datatype (str xsd "decimal")}))))
+  (testing "decimals keep every digit; floats and doubles are parsed to Double"
+    (is (= 99999999999999999.99M
+           (conversion/convert-value {:value "99999999999999999.99" :type "typed-literal" :datatype (str xsd "decimal")})))
+    (is (= 3.5 (conversion/convert-value {:value "3.5" :type "typed-literal" :datatype (str xsd "double")}))))
+  (testing "XSD's INF and -INF are the infinities"
+    (doseq [[v expected] {"INF" Double/POSITIVE_INFINITY "+INF" Double/POSITIVE_INFINITY "-INF" Double/NEGATIVE_INFINITY}]
+      (is (= expected (conversion/convert-value {:value v :type "typed-literal" :datatype (str xsd "double")})) v)))
 
   (testing "booleans are parsed"
     (is (true?  (conversion/convert-value {:value "true"  :type "literal" :datatype (str xsd "boolean")})))
@@ -97,7 +103,16 @@
             [{:a {:type "literal" :datatype (str xsd "integer")}}
              {:a {:type "literal" :datatype (str xsd "double")}}]))))
 
-  (testing "a 3-way mix is NOT promoted — exact-2-set semantics, degrades to text"
+  (testing "a mix of numeric types takes the widest: Float, else Decimal"
+    (doseq [[datatypes expected] {["integer" "decimal"]           :type/Decimal
+                                  ["decimal" "double"]            :type/Float
+                                  ["integer" "decimal" "double"]  :type/Float}]
+      (is (= {"a" expected}
+             (conversion/determine-column-types
+              ["a"] (for [d datatypes] {:a {:type "literal" :datatype (str xsd d)}})))
+          (pr-str datatypes))))
+
+  (testing "a 3-way mix with a non-number degrades to text"
     (is (= {"a" :type/Text}
            (conversion/determine-column-types
             ["a"]

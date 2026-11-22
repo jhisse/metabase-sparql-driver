@@ -91,7 +91,7 @@
               tu/rdfs-label  :type/Text
               "foundedOn"    :type/Date
               "employees"    :type/Integer
-              "revenue"      :type/Float
+              "revenue"      :type/Decimal
               "listed"       :type/Boolean
               "headquarters" :type/Text}
              (update-vals by-name :base-type)))
